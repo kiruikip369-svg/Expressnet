@@ -36,7 +36,7 @@
     min-width: 320px;
     background: var(--app-bg);
     color: var(--app-text);
-    font-family: Roboto, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-family: var(--app-font-family, Roboto), ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     font-size: 13px;
     line-height: 1.5;
     -webkit-font-smoothing: antialiased;
@@ -49,6 +49,45 @@
     font: inherit;
   }
 }
+
+/* Shared theme bridge for legacy utility classes used across the pages. */
+.tenant-app,
+.tenant-app * {
+  scrollbar-color: var(--app-border) var(--app-panel-muted);
+}
+
+.tenant-app .bg-white { background-color: var(--app-panel) !important; }
+.tenant-app .bg-slate-50 { background-color: var(--app-panel-muted) !important; }
+.tenant-app .bg-slate-100 { background-color: var(--app-bg) !important; }
+.tenant-app .bg-slate-200 { background-color: var(--app-border) !important; }
+.tenant-app .text-black,
+.tenant-app .text-slate-950,
+.tenant-app .text-slate-900,
+.tenant-app .text-slate-800 { color: var(--app-text) !important; }
+.tenant-app .text-slate-700,
+.tenant-app .text-slate-600,
+.tenant-app .text-slate-500 { color: var(--app-muted) !important; }
+.tenant-app .border-slate-100,
+.tenant-app .border-slate-200,
+.tenant-app .border-slate-300 { border-color: var(--app-border) !important; }
+
+.tenant-app .divide-slate-100 > :not([hidden]) ~ :not([hidden]),
+.tenant-app .divide-slate-200 > :not([hidden]) ~ :not([hidden]) {
+  border-color: var(--app-border) !important;
+}
+
+.tenant-app .hover\\:bg-slate-100:hover { background-color: var(--app-panel-muted) !important; }
+.tenant-app .hover\\:bg-slate-50:hover { background-color: var(--app-panel-muted) !important; }
+
+html[data-theme="dark"] .tenant-app .table-cell { color: var(--app-text); }
+html[data-theme="dark"] .tenant-app input::placeholder,
+html[data-theme="dark"] .tenant-app textarea::placeholder { color: var(--app-muted); }
+
+/* Fixed action columns and table rows must follow the selected theme too. */
+html[data-theme="dark"] .tenant-app td.bg-white,
+html[data-theme="dark"] .tenant-app th.bg-slate-50,
+html[data-theme="dark"] .tenant-app tr.bg-white,
+html[data-theme="dark"] .tenant-app tr.bg-slate-50 { background-color: var(--app-panel) !important; }
 
 @layer components {
   .btn-primary {

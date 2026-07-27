@@ -418,6 +418,12 @@ def tenant_theme_payload(tenant):
         "bank_code": tenant.get("bank_code") or "",
         "bank_name": tenant.get("bank_name") or "",
         "bank_account_number": tenant.get("bank_account_number") or "",
+        "payment_methods": tenant.get("payment_methods") if isinstance(tenant.get("payment_methods"), list) else ["bank"],
+        "daraja_consumer_key": tenant.get("daraja_consumer_key") or "",
+        "daraja_consumer_secret": tenant.get("daraja_consumer_secret") or "",
+        "daraja_shortcode": tenant.get("daraja_shortcode") or "",
+        "daraja_passkey": tenant.get("daraja_passkey") or "",
+        "daraja_environment": tenant.get("daraja_environment") or "sandbox",
         "paystack_subaccount_code": tenant.get("paystack_subaccount_code") or "",
         "paystack_subaccount_status": tenant.get("paystack_subaccount_status") or "not_created",
         "paystack_platform_percentage": tenant.get("paystack_platform_percentage") or os.getenv("PAYSTACK_PLATFORM_PERCENTAGE", "1"),
@@ -643,6 +649,71 @@ def _html_page(title, body, status=200):
     )
 
 
+def _router_is_agent_linked(tenant):
+    return bool((tenant or {}).get("mikrotik_last_seen_at") or (tenant or {}).get("mikrotik_router_snapshot") or (tenant or {}).get("mikrotik_provisioning_status") in {"script_downloaded", "completed"})
+
+
+def _limited_router_status_payload(snapshot, assignments=None, source="provisioning_snapshot", message="Showing the latest configuration reported by the router agent."):
+    payload = {**_empty_router_snapshot(), **(snapshot or {})}
+    def port_rank(item):
+        name = str(item.get("name") or "").lower()
+        if name.startswith("ether"):
+            return (0, name)
+        if name.startswith(("wlan", "wifi")):
+            return (1, name)
+        return (2, name)
+
+    interfaces = sorted(
+        [
+            item
+            for item in list(payload.get("interfaces") or [])
+            if (
+                str(item.get("type") or "").lower() in {"ether", "wlan", "wifi"}
+                or str(item.get("name") or "").lower().startswith(("ether", "wlan", "wifi"))
+            )
+            and "bridge" not in str(item.get("name") or "").lower()
+        ],
+        key=port_rank,
+    )
+    payload["interfaces"] = interfaces[:6]
+    payload["assignments"] = assignments or {}
+    payload["source"] = source
+    payload["message"] = message
+    return payload
+
+
+def _linked_router_from_tenant(tenant):
+    snapshot = (tenant or {}).get("mikrotik_router_snapshot") or {}
+    device = snapshot.get("device") or {}
+    return {
+        "id": "primary",
+        "board_name": device.get("board_name") or (tenant or {}).get("mikrotik_detected_board") or "MikroTik Router",
+        "identity": (tenant or {}).get("mikrotik_detected_identity") or "",
+        "version": device.get("version") or (tenant or {}).get("mikrotik_detected_version") or "",
+        "status": "suspended" if (tenant or {}).get("mikrotik_router_suspended") else "online" if (tenant or {}).get("mikrotik_last_seen_at") else "offline",
+        "provisioning_status": (tenant or {}).get("mikrotik_provisioning_status") or "",
+        "last_seen_at": (tenant or {}).get("mikrotik_last_seen_at") or "",
+        "last_seen_ip": (tenant or {}).get("mikrotik_last_seen_ip") or "",
+        "cpu_load": device.get("cpu_load"),
+        "free_memory": device.get("free_memory"),
+        "interface_count": len((snapshot or {}).get("interfaces") or []),
+    }
+
+
+def _update_linked_router(tenant_id, tenant_data, **updates):
+    router = {**_linked_router_from_tenant(tenant_data), **updates}
+    existing = dict((tenant_data or {}).get("linked_routers") or {})
+    identity = str(router.get("identity") or "").strip().lower()
+    ip = str(router.get("last_seen_ip") or "").strip()
+    key = next((name for name, item in existing.items() if identity and str(item.get("identity") or "").strip().lower() == identity), None)
+    key = key or next((name for name, item in existing.items() if ip and item.get("last_seen_ip") == ip), None)
+    if not key:
+        key = "primary" if not existing else f"router-{len(existing) + 1}"
+    existing[key] = {**existing.get(key, {}), **router, "id": key}
+    ref(f"tenants/{tenant_id}").update({"linked_routers": existing})
+    return existing[key]
+
+
 @csrf_exempt
 @api_view(["GET"])
 def captive_portal_page(request, tenant_id):
@@ -847,6 +918,9 @@ def public_pay(request, tenant_id):
     except PaymentProviderError as exc:
         payment_ref.update({"status": "failed", "failed_at": iso_now(), "callback_result_desc": exc.detail})
         return ok({"success": False, "message": exc.public_message, "paymentId": payment_ref.key}, exc.status_code)
+    except Exception as exc:
+        payment_ref.update({"status": "failed", "failed_at": iso_now(), "callback_result_desc": str(exc)})
+        return ok({"success": False, "message": "Payment gateway is temporarily unavailable. Please try again later.", "paymentId": payment_ref.key}, 503)
     payment_ref.update(
         {
             "paystack_reference": checkout.get("reference"),
@@ -909,7 +983,8 @@ def public_verify(request, tenant_id):
         try:
             verified = verify_paystack_transaction(tenant, reference)
             if verified.get("status") == "success":
-                complete_paystack_payment(verified)
+                if not complete_paystack_payment(verified):
+                    return ok({"success": False, "status": "failed", "message": "The paid amount did not match the package amount."}, 400)
                 payment = ref(f"tenants/{tenant_id}/payments/{payment_id}").get() or payment
             else:
                 return ok({"success": False, "status": "failed", "message": verified.get("gateway_response") or "Payment was not successful"}, 400)
@@ -1182,6 +1257,39 @@ def package_add(request):
 
 
 @csrf_exempt
+@api_view(["GET", "POST"])
+@tenant_required
+def vouchers(request):
+    tenant_id = request.tenant["id"]
+    voucher_path = f"tenants/{tenant_id}/vouchers"
+    if method(request, "GET"):
+        return ok(list_children(voucher_path))
+    data = body(request)
+    package_id = str(data.get("package_id") or "")
+    package = ref(f"tenants/{tenant_id}/packages/{package_id}").get() if package_id else None
+    if not package or package_service_type(package) != "hotspot":
+        return ok({"message": "Select a valid Hotspot package"}, 400)
+    code = secrets.token_hex(4).upper()
+    while find_child_by_field(voucher_path, "code", code):
+        code = secrets.token_hex(4).upper()
+    voucher = {"code": code, "username": code, "password": code, "package": package.get("name"), "package_id": package_id, "price": float(package.get("price") or 0), "status": "active", "service_type": "hotspot", "router_status": "pending", "created_at": iso_now()}
+    try:
+        if not has_mikrotik_credentials(request.tenant):
+            raise ValueError("Configure MikroTik credentials before creating vouchers")
+        create_hotspot_profile(request.tenant, package.get("name"), package.get("speed"))
+        api = router_connect(request.tenant)
+        try:
+            api.path("ip", "hotspot", "user").add(name=code, password=code, profile=package.get("name"), disabled="no", comment="billing-saas-voucher")
+        finally:
+            api.close()
+        voucher["router_status"] = "provisioned"
+    except Exception as exc:
+        return ok({"message": f"Voucher was not created because MikroTik provisioning failed: {exc}"}, 502)
+    saved = ref(voucher_path).push(voucher)
+    return ok({"success": True, "message": "Hotspot voucher created", "voucher": {"id": saved.key, **voucher}}, 201)
+
+
+@csrf_exempt
 @api_view(["GET"])
 @tenant_required
 def router_profiles(request):
@@ -1196,28 +1304,24 @@ def router_profiles(request):
 @tenant_required
 def router_status(request):
     tenant = {**request.tenant, **body(request)} if method(request, "POST") else request.tenant
-    if not has_mikrotik_credentials(tenant):
-        return ok({"message": "Configure MikroTik credentials before pulling router status"}, 400)
     assignments = request.tenant.get("router_port_assignments") or {}
+    snapshot = request.tenant.get("mikrotik_router_snapshot") or {}
+    if not has_mikrotik_credentials(tenant):
+        if snapshot or _router_is_agent_linked(request.tenant):
+            return ok(_limited_router_status_payload(snapshot, assignments, "provisioning_snapshot"))
+        return ok({"message": "Run the MikroTik provisioning command first to link this router."}, 400)
     try:
         status = router_interface_status(tenant)
-        return ok({**status, "assignments": assignments, "source": "routeros_api", "message": "Router configuration loaded from the live RouterOS API."})
+        return ok(_limited_router_status_payload(status, assignments, "routeros_api", "Router configuration loaded from the live RouterOS API."))
     except (TimeoutError, OSError) as exc:
-        snapshot = request.tenant.get("mikrotik_router_snapshot") or {}
         if snapshot:
-            return ok({**snapshot, "assignments": assignments, "source": "provisioning_snapshot", "message": f"Showing the last config pushed by the router via provisioning agent. Live API over VPN is not reachable from the server yet: {exc}"})
+            return ok(_limited_router_status_payload(snapshot, assignments, "provisioning_snapshot", f"Showing the last config pushed by the router via provisioning agent. Live API over VPN is not reachable from the server yet: {exc}"))
         if request.tenant.get("mikrotik_provisioning_status") in {"script_downloaded", "completed"}:
-            return ok({
-                **_empty_router_snapshot(),
-                "assignments": assignments,
-                "source": "provisioning_seen",
-                "message": f"The router reached this app, but live API access is not reachable: {exc}",
-            })
+            return ok(_limited_router_status_payload({}, assignments, "provisioning_seen", f"The router reached this app, but live API access is not reachable: {exc}"))
         return ok({"message": f"Unable to reach the MikroTik API on port {tenant.get('mikrotik_port') or 8728}: {exc}"}, 400)
     except Exception as exc:
-        snapshot = request.tenant.get("mikrotik_router_snapshot") or {}
         if snapshot:
-            return ok({**snapshot, "assignments": assignments, "source": "provisioning_snapshot", "message": f"Showing the last config pushed by the router via provisioning agent. Live API over VPN failed: {exc}"})
+            return ok(_limited_router_status_payload(snapshot, assignments, "provisioning_snapshot", f"Showing the last config pushed by the router via provisioning agent. Live API over VPN failed: {exc}"))
         return ok({"message": f"Unable to pull MikroTik status: {exc}"}, 400)
 
 
@@ -1225,17 +1329,17 @@ def router_status(request):
 @api_view(["POST"])
 @tenant_required
 def router_ports(request):
-    if not has_mikrotik_credentials(request.tenant):
-        return ok({"message": "Configure MikroTik credentials before assigning router ports"}, 400)
+    if not has_mikrotik_credentials(request.tenant) and not _router_is_agent_linked(request.tenant):
+        return ok({"message": "Run the MikroTik provisioning command before assigning router ports"}, 400)
     data = body(request)
     interface_name = str(data.get("interface") or "").strip()
     service_type = str(data.get("service_type") or "").strip().lower()
     profile_name = str(data.get("profile") or "default").strip() or "default"
     if not interface_name:
         return ok({"message": "Router interface is required"}, 400)
-    if service_type not in {"pppoe", "hotspot"}:
-        return ok({"message": "Port service must be either pppoe or hotspot"}, 400)
-    if request.tenant.get("mikrotik_provisioning_status") in {"script_downloaded", "completed"}:
+    if service_type not in {"pppoe", "hotspot", "both"}:
+        return ok({"message": "Port service must be PPPoE, Hotspot, or both"}, 400)
+    if service_type == "both" or (_router_is_agent_linked(request.tenant) and not has_mikrotik_credentials(request.tenant)):
         return _queue_router_port_command(request, interface_name, service_type, profile_name)
     try:
         result = configure_router_port(request.tenant, interface_name, service_type, profile_name, base_url=public_base_url(request).rstrip("/"))
@@ -1263,13 +1367,19 @@ def router_ports(request):
 
 
 def _queue_router_port_command(request, interface_name, service_type, profile_name):
-    if service_type not in {"pppoe", "hotspot"}:
-        return ok({"message": "Port service must be either pppoe or hotspot"}, 400)
+    if service_type not in {"pppoe", "hotspot", "both"}:
+        return ok({"message": "Port service must be PPPoE, Hotspot, or both"}, 400)
 
     tenant_id = request.tenant["id"]
-    portal_url = captive_portal_url({"id": tenant_id, **request.tenant}, public_base_url(request).rstrip("/")) if service_type == "hotspot" else None
+    portal_url = captive_portal_url({"id": tenant_id, **request.tenant}, public_base_url(request).rstrip("/")) if service_type in {"hotspot", "both"} else None
     bridge_name = mikrotik_managed_bridge_name(request.tenant)
-    script = _build_port_command_script(interface_name, service_type, profile_name, portal_url, bridge_name)
+    if service_type == "both":
+        script = (
+            _build_port_command_script(interface_name, "pppoe", profile_name, None, bridge_name)
+            + _build_port_command_script(interface_name, "hotspot", "billing-saas-captive", portal_url, bridge_name)
+        )
+    else:
+        script = _build_port_command_script(interface_name, service_type, profile_name, portal_url, bridge_name)
 
     commands = [c for c in (request.tenant.get("pending_router_commands") or []) if c.get("status") == "pending"][-19:]
     commands.append({
@@ -1302,6 +1412,44 @@ def _queue_router_port_command(request, interface_name, service_type, profile_na
         "message": f"Router isn't directly reachable, so {interface_name} has been queued and will be applied automatically the next time the router checks in (usually within 30s).",
         "assignments": assignments,
     })
+
+
+@csrf_exempt
+@api_view(["POST"])
+@tenant_required
+def router_suspend(request):
+    if not _router_is_agent_linked(request.tenant):
+        return ok({"message": "No linked MikroTik router was found"}, 404)
+    script = (
+        ':do { /ip hotspot disable [find name~"billing"] } on-error={}; '
+        ':do { /interface pppoe-server server disable [find service-name~"billing"] } on-error={}; '
+        ':log warning "Billing SaaS: router services suspended from dashboard";'
+    )
+    _queue_router_command(request, {"type": "suspend_router", "script": script})
+    _update_linked_router(request.tenant["id"], request.tenant, status="suspended", suspended_at=iso_now())
+    ref(f"tenants/{request.tenant['id']}").update({"mikrotik_router_suspended": True})
+    return ok({"success": True, "message": "Router suspension queued. The router will apply it on the next agent check-in."})
+
+
+@csrf_exempt
+@api_view(["DELETE"])
+@tenant_required
+def router_delete(request):
+    updates = {
+        "linked_routers": {},
+        "mikrotik_router_snapshot": {},
+        "mikrotik_provisioning_status": "",
+        "mikrotik_last_seen_at": "",
+        "mikrotik_last_seen_ip": "",
+        "mikrotik_detected_identity": "",
+        "mikrotik_detected_version": "",
+        "mikrotik_detected_board": "",
+        "mikrotik_router_suspended": False,
+        "router_port_assignments": {},
+        "pending_router_commands": [],
+    }
+    ref(f"tenants/{request.tenant['id']}").update(updates)
+    return ok({"success": True, "message": "Linked MikroTik router deleted from this account."})
 
 
 def _customer_secret_script(customer):
@@ -1439,17 +1587,20 @@ def _queue_router_command(request, command_data):
 @api_view(["GET"])
 @tenant_required
 def router_provision_command(request):
+    fresh_router = request.GET.get("fresh") == "1"
     expires_at = utcnow() + timedelta(minutes=15)
     payload = {
         "purpose": "mikrotik_provision",
         "tenant_id": request.tenant["id"],
+        "fresh_router": fresh_router,
         "exp": expires_at,
     }
     token = jwt.encode(payload, _get_jwt_secret("JWT_SECRET"), algorithm="HS256")
-    ref(f"tenants/{request.tenant['id']}").update({
-        "provision_token_expires_at": expires_at.isoformat(),
-        "mikrotik_provisioning_status": "pending",
-    })
+    if not fresh_router:
+        ref(f"tenants/{request.tenant['id']}").update({
+            "provision_token_expires_at": expires_at.isoformat(),
+            "mikrotik_provisioning_status": "pending",
+        })
     # Backfill Postgres tables from Firebase so the RADIUS server can
     # authenticate existing customers created before RADIUS was enabled.
     try:
@@ -1461,7 +1612,10 @@ def router_provision_command(request):
         pass
     # Re-queue all existing customer secrets so the router picks them up
     # after the provisioning script runs (the script purges non-managed secrets).
-    _queue_all_customer_secrets(request)
+    # A newly added router must start with its own provisioning state. Do not
+    # replay the existing router's customer secrets onto it.
+    if not fresh_router:
+        _queue_all_customer_secrets(request)
     script_url = f"{public_base_url(request)}/api/router/provision/{token}"
     callback_url = f"{public_base_url(request)}/api/router/provision/{token}/complete"
     script_host = urlparse(script_url).netloc.split("@")[-1].split(":")[0]
@@ -2012,6 +2166,11 @@ def router_agent_ack(request, token, command_id):
                     "ppp_profile_synced_at": iso_now(),
                     "ppp_profile_error": None,
                 })
+        if (applied_command or {}).get("type") == "suspend_router":
+            ref(f"tenants/{tenant_id}").update({"mikrotik_router_suspended": True})
+            _update_linked_router(tenant_id, {**tenant, "mikrotik_router_suspended": True, "mikrotik_last_seen_at": iso_now()}, status="suspended")
+        elif applied_command:
+            _update_linked_router(tenant_id, {**tenant, "mikrotik_last_seen_at": iso_now()}, status="online")
 
     return ok({"success": True, "acknowledged": updated})
 
@@ -2055,6 +2214,8 @@ def router_provision_complete(request, token):
     if bridge:
         updates["mikrotik_bridge_name"] = bridge
     ref(f"tenants/{tenant_id}").update(updates)
+    tenant_data = ref(f"tenants/{tenant_id}").get() or {}
+    _update_linked_router(tenant_id, {**tenant_data, **updates}, status="online")
 
     # Create RADIUS NAS client record if we have a pending secret and tunnel IP
     try:
@@ -2174,13 +2335,13 @@ def router_provision_snapshot(request, token, section):
 @api_view(["POST"])
 @tenant_required
 def package_sync(request, package_id=None):
-    if not has_mikrotik_credentials(request.tenant):
-        return ok({"message": "Configure MikroTik credentials before syncing package profiles"}, 400)
+    if not has_mikrotik_credentials(request.tenant) and not _router_is_agent_linked(request.tenant):
+        return ok({"message": "Run the MikroTik provisioning command before syncing package profiles"}, 400)
     tenant_id = request.tenant["id"]
     packages_to_sync = list_children(f"tenants/{tenant_id}/packages") if package_id is None else [{"id": package_id, **(ref(f"tenants/{tenant_id}/packages/{package_id}").get() or {})}]
     if package_id and not packages_to_sync[0].get("name"):
         return ok({"message": "Package not found"}, 404)
-    should_queue = request.tenant.get("mikrotik_provisioning_status") in {"script_downloaded", "completed"} or bool(request.tenant.get("mikrotik_last_seen_at"))
+    should_queue = _router_is_agent_linked(request.tenant)
     if should_queue:
         script = "".join(_package_profile_script(pkg) for pkg in packages_to_sync)
         if any(package_service_type(pkg) == "hotspot" for pkg in packages_to_sync):
@@ -2618,11 +2779,23 @@ def settings_business(request):
         "bank_name",
         "bank_account_number",
         "paystack_platform_percentage",
+        "payment_methods",
+        "daraja_consumer_key",
+        "daraja_consumer_secret",
+        "daraja_shortcode",
+        "daraja_passkey",
+        "daraja_environment",
     ]
     updates = {}
     for field in allowed:
         if field in data:
-            updates[field] = bool(data[field]) if field == "dark_mode" else str(data[field]).strip()
+            if field == "dark_mode":
+                updates[field] = bool(data[field])
+            elif field == "payment_methods":
+                requested = data[field] if isinstance(data[field], list) else [data[field]]
+                updates[field] = [str(item).strip().lower() for item in requested if str(item).strip() in {"bank", "paybill", "buygoods", "daraja_paybill", "daraja_buygoods"}]
+            else:
+                updates[field] = str(data[field]).strip()
     if updates.get("theme_mode") not in {None, "light", "dark", "system"}:
         updates["theme_mode"] = "light"
     if "theme_mode" in updates:
@@ -2773,6 +2946,9 @@ def settings_delete_customers(request):
 @tenant_required
 def settings_mikrotik(request):
     if method(request, "GET"):
+        linked_routers = request.tenant.get("linked_routers") or {}
+        if _router_is_agent_linked(request.tenant) and not linked_routers:
+            linked_routers = {"primary": _linked_router_from_tenant(request.tenant)}
         return ok({
             "mikrotik_host": request.tenant.get("mikrotik_host", ""),
             "mikrotik_user": request.tenant.get("mikrotik_user", ""),
@@ -2785,6 +2961,8 @@ def settings_mikrotik(request):
             "mikrotik_detected_identity": request.tenant.get("mikrotik_detected_identity", ""),
             "mikrotik_detected_version": request.tenant.get("mikrotik_detected_version", ""),
             "mikrotik_detected_board": request.tenant.get("mikrotik_detected_board", ""),
+            "linked_routers": linked_routers,
+            "router_port_assignments": request.tenant.get("router_port_assignments") or {},
         })
     data = body(request)
     updates = {}
@@ -2979,13 +3157,23 @@ def complete_paystack_payment(event_data):
     if payment.get("status") == "success":
         return True
 
+    expected_amount = round(float(payment.get("amount") or 0), 2)
+    paid_amount = round(float(event_data.get("amount") or 0) / 100, 2)
+    if expected_amount and paid_amount != expected_amount:
+        ref(f"tenants/{tenant_id}/payments/{payment_id}").update({
+            "status": "failed",
+            "failed_at": iso_now(),
+            "callback_result_desc": "Paid amount does not match the package amount",
+        })
+        return False
+
     customer = event_data.get("customer") or {}
     authorization = event_data.get("authorization") or {}
     payment_code = reference or event_data.get("id")
     phone = metadata.get("phone") or payment.get("phone")
     update = {
         "provider": "paystack",
-        "amount": float(event_data.get("amount") or 0) / 100,
+        "amount": paid_amount,
         "currency": event_data.get("currency") or payment.get("currency"),
         "payment_code": payment_code,
         "paystack_reference": reference,
@@ -3029,8 +3217,11 @@ def paystack_webhook(request):
             return ok({"success": True})
         if reference:
             tenant = {"id": tenant_id, **(ref(f"tenants/{tenant_id}").get() or {})} if tenant_id else {}
-            verified = verify_paystack_transaction(tenant, reference)
-            complete_paystack_payment(verified)
+            try:
+                verified = verify_paystack_transaction(tenant, reference)
+                complete_paystack_payment(verified)
+            except Exception:
+                return ok({"success": False, "message": "Payment verification will be retried"}, 202)
     return ok({"success": True})
 
 
@@ -3044,9 +3235,13 @@ def paystack_callback(request):
     if not tenant_id:
         return ok({"message": "Payment not found"}, 404)
     tenant = {"id": tenant_id, **(ref(f"tenants/{tenant_id}").get() or {})}
-    verified = verify_paystack_transaction(tenant, reference)
+    try:
+        verified = verify_paystack_transaction(tenant, reference)
+    except Exception:
+        return ok({"success": False, "message": "Payment verification is temporarily unavailable. Please refresh shortly."}, 202)
     if verified.get("status") == "success":
-        complete_paystack_payment(verified)
+        if not complete_paystack_payment(verified):
+            return ok({"success": False, "message": "The paid amount did not match the package amount."}, 400)
         if "text/html" in request.headers.get("accept", ""):
             return redirect(f"/portal/{tenant_id}?reference={reference}")
         return ok({"success": True, "message": "Payment verified. You can return to the customer portal.", "paymentId": payment_id})

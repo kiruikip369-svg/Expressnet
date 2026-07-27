@@ -1,4 +1,4 @@
-import { CheckCheck, ChevronDown, Coins, Eye, MoreVertical, Plus, Search, X } from 'lucide-react';
+import { CheckCheck, ChevronDown, Coins, Eye, MoreVertical, Plus, Search, X, Settings2 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import api from '../api/axios';
@@ -56,6 +56,11 @@ export default function Payments() {
   const [tab, setTab] = useState('checked');
   const [modalOpen, setModalOpen] = useState(false);
   const [draft, setDraft] = useState(blankPayment);
+  const [paymentSettings, setPaymentSettings] = useState({ methods: ['bank'], businessNumber: '', bankCode: '', bankName: '', bankAccount: '' });
+  const [selectedMethod, setSelectedMethod] = useState('bank');
+  const [savingMethods, setSavingMethods] = useState(false);
+  const [methodsOpen, setMethodsOpen] = useState(false);
+  const [settlementStatus, setSettlementStatus] = useState('not_created');
 
   async function loadPayments() {
     setLoading(true);
@@ -71,7 +76,28 @@ export default function Payments() {
 
   useEffect(() => {
     loadPayments();
+    api.get('/settings/business').then(({ data }) => {
+      setPaymentSettings({
+      methods: data.payment_methods || ['bank'], businessNumber: data.business_number || '', bankCode: data.bank_code || '', bankName: data.bank_name || '', bankAccount: data.bank_account_number || '', consumerKey: data.daraja_consumer_key || '', consumerSecret: data.daraja_consumer_secret || '', shortcode: data.daraja_shortcode || '', passkey: data.daraja_passkey || '', environment: data.daraja_environment || 'sandbox',
+      });
+      const method = (data.payment_methods || [])[0];
+      setSelectedMethod(['bank', 'paybill', 'buygoods', 'daraja_paybill', 'daraja_buygoods'].includes(method) ? method : 'bank');
+    }).catch(() => {});
+    api.get('/settings/business').then(({ data }) => setSettlementStatus(data.paystack_subaccount_status || 'not_created')).catch(() => {});
   }, []);
+
+  const selectMethod = (method) => { setSelectedMethod(method); setPaymentSettings((current) => ({ ...current, methods: [method] })); };
+  const savePaymentMethods = async () => {
+    setSavingMethods(true);
+    try {
+      const { data } = await api.patch('/settings/business', { payment_methods: paymentSettings.methods, business_number: paymentSettings.businessNumber, bank_code: paymentSettings.bankCode, bank_name: paymentSettings.bankName, bank_account_number: paymentSettings.bankAccount, daraja_consumer_key: paymentSettings.consumerKey, daraja_consumer_secret: paymentSettings.consumerSecret, daraja_shortcode: paymentSettings.shortcode, daraja_passkey: paymentSettings.passkey, daraja_environment: paymentSettings.environment, create_subaccount: true });
+      if (data.config?.paystack_subaccount_status === 'failed' || data.config?.paystack_subaccount_status === 'missing_bank_details') throw new Error(data.config.paystack_subaccount_error || 'Complete valid bank details to receive tenant payments');
+      setSettlementStatus(data.config?.paystack_subaccount_status || 'active');
+      toast.success('Payment methods saved');
+      setMethodsOpen(false);
+    } catch (error) { toast.error(error.response?.data?.message || 'Failed to save payment methods'); }
+    finally { setSavingMethods(false); }
+  };
 
   const successfulPayments = useMemo(() => payments.filter((payment) => payment.status === 'success'), [payments]);
 
@@ -124,10 +150,10 @@ export default function Payments() {
           <h1 className="text-xl font-semibold text-black">Payments</h1>
           <span className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-900 text-[10px]">i</span>
         </div>
-        <button type="button" className="inline-flex h-9 items-center gap-2 rounded-md bg-[#ff9347] px-4 text-xs font-semibold text-black shadow-md hover:bg-[#ff842f]" onClick={openRecordPayment}>
+        <div className="flex gap-2"><button type="button" className="btn-secondary" onClick={() => setMethodsOpen(true)}><Settings2 size={14} />Payment methods</button><button type="button" className="inline-flex h-9 items-center gap-2 rounded-md bg-[#ff9347] px-4 text-xs font-semibold text-black shadow-md hover:bg-[#ff842f]" onClick={openRecordPayment}>
           <Coins size={14} />
           Record Payment
-        </button>
+        </button></div>
       </div>
 
       <section className="grid gap-6 md:grid-cols-2 xl:grid-cols-4">
@@ -136,6 +162,18 @@ export default function Payments() {
         <MetricCard title="Monthly Earnings" value={totals.monthly} helper="Total earnings this month" />
         <MetricCard title="Mobile Money (This Month)" value={totals.monthly} helper="Excluding voucher payments" />
       </section>
+
+      {methodsOpen && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4"><section className="theme-card max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg border p-5 shadow-xl">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div><h2 className="page-title text-base">Payment methods</h2><p className="page-subtitle">Choose how customers can pay into your primary account.</p></div>
+          <button type="button" className="btn-secondary" onClick={() => setMethodsOpen(false)}>Close</button>
+        </div>
+        <select className="form-input mt-4" value={selectedMethod} onChange={(e) => selectMethod(e.target.value)}><option value="paybill">Paybill</option><option value="daraja_paybill">Paybill — Daraja API</option><option value="buygoods">Buy Goods</option><option value="daraja_buygoods">Buy Goods — Daraja API</option><option value="bank">Bank transfer</option></select>
+        {selectedMethod === 'bank' && <div className="mt-4 grid gap-3 sm:grid-cols-3"><input className="form-input" placeholder="Bank code" value={paymentSettings.bankCode} onChange={(e) => setPaymentSettings((c) => ({ ...c, bankCode: e.target.value }))} /><input className="form-input" placeholder="Bank name" value={paymentSettings.bankName} onChange={(e) => setPaymentSettings((c) => ({ ...c, bankName: e.target.value }))} /><input className="form-input" placeholder="Bank account number" value={paymentSettings.bankAccount} onChange={(e) => setPaymentSettings((c) => ({ ...c, bankAccount: e.target.value }))} /></div>}
+        {['paybill', 'buygoods', 'daraja_paybill', 'daraja_buygoods'].includes(selectedMethod) && <div className="mt-4 grid gap-3 sm:grid-cols-2"><input className="form-input" placeholder={selectedMethod.includes('paybill') ? 'Paybill number' : 'Till number'} value={paymentSettings.businessNumber} onChange={(e) => setPaymentSettings((c) => ({ ...c, businessNumber: e.target.value }))} /><input className="form-input" placeholder="Account number" value={paymentSettings.bankAccount} onChange={(e) => setPaymentSettings((c) => ({ ...c, bankAccount: e.target.value }))} />{selectedMethod.startsWith('daraja_') && <><input className="form-input" placeholder="Daraja consumer key" value={paymentSettings.consumerKey} onChange={(e) => setPaymentSettings((c) => ({ ...c, consumerKey: e.target.value }))} /><input className="form-input" type="password" placeholder="Daraja consumer secret" value={paymentSettings.consumerSecret} onChange={(e) => setPaymentSettings((c) => ({ ...c, consumerSecret: e.target.value }))} /><input className="form-input" type="password" placeholder="Daraja passkey" value={paymentSettings.passkey} onChange={(e) => setPaymentSettings((c) => ({ ...c, passkey: e.target.value }))} /><select className="form-input" value={paymentSettings.environment} onChange={(e) => setPaymentSettings((c) => ({ ...c, environment: e.target.value }))}><option value="sandbox">Daraja Sandbox</option><option value="production">Daraja Production</option></select></>}</div>}
+        <div className="mt-5 flex justify-end"><button type="button" className="btn-primary" onClick={savePaymentMethods} disabled={savingMethods}>{savingMethods ? 'Saving...' : 'Save payment methods'}</button></div>
+        <p className={`mt-3 text-xs font-semibold ${settlementStatus === 'active' ? 'text-emerald-600' : 'text-amber-600'}`}>Tenant settlement: {settlementStatus === 'active' ? 'Ready — payments will settle to the configured bank account.' : settlementStatus.replaceAll('_', ' ')}</p>
+      </section></div>}
 
       <section className="border-b border-slate-200">
         <div className="flex gap-6">

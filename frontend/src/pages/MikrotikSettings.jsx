@@ -1,4 +1,4 @@
-import { HelpCircle, Link as LinkIcon, MoreVertical, RefreshCw, Search, Wifi, WifiOff } from 'lucide-react';
+import { Edit, HelpCircle, Link as LinkIcon, MoreHorizontal, RefreshCw, Search, Trash2, Wifi, WifiOff, XCircle } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import { useNavigate } from 'react-router-dom';
@@ -9,26 +9,26 @@ export default function MikrotikSettings() {
   const [config, setConfig] = useState(null);
   const [routerStatus, setRouterStatus] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [diagnosing, setDiagnosing] = useState(false);
+  const [workingId, setWorkingId] = useState('');
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
-
-  const configured = Boolean(config?.mikrotik_host && config?.mikrotik_user && config?.has_mikrotik_password);
+  const [openActionId, setOpenActionId] = useState('');
+  const [actionPosition, setActionPosition] = useState(null);
 
   const rows = useMemo(() => {
-    if (!configured) return [];
-    return [
-      {
-        id: 'primary',
-        boardName: routerStatus?.device?.board_name || config.mikrotik_host || 'MikroTik Router',
-        provisioning: 'Completed',
-        cpu: routerStatus?.device?.cpu_load,
-        memory: routerStatus?.device?.free_memory,
-        status: routerStatus ? 'online' : 'offline',
-        remoteWinbox: `${config.mikrotik_host}:8291`,
-      },
-    ];
-  }, [config, configured, routerStatus]);
+    const linked = config?.linked_routers || {};
+    return Object.entries(linked).map(([id, item]) => ({
+      id,
+      boardName: routerStatus?.device?.board_name || item.board_name || item.identity || 'MikroTik Router',
+      provisioning: item.provisioning_status || config?.mikrotik_provisioning_status || 'pending',
+      cpu: routerStatus?.device?.cpu_load ?? item.cpu_load,
+      memory: routerStatus?.device?.free_memory ?? item.free_memory,
+      status: item.status || (item.last_seen_at ? 'online' : 'offline'),
+      remoteWinbox: item.last_seen_ip || config?.mikrotik_host || '-',
+      ports: routerStatus?.interfaces?.length ?? item.interface_count,
+      version: routerStatus?.device?.version || item.version,
+    }));
+  }, [config, routerStatus]);
 
   const counts = useMemo(() => ({
     all: rows.length,
@@ -49,6 +49,14 @@ export default function MikrotikSettings() {
     try {
       const { data } = await api.get('/settings/mikrotik');
       setConfig(data);
+      if (Object.keys(data.linked_routers || {}).length > 0 || data.mikrotik_last_seen_at) {
+        try {
+          const status = await api.get('/router/status');
+          setRouterStatus(status.data);
+        } catch {
+          setRouterStatus(null);
+        }
+      }
     } catch (error) {
       toast.error(error.response?.data?.message || 'Failed to load MikroTik routers');
     } finally {
@@ -60,22 +68,55 @@ export default function MikrotikSettings() {
     loadConfig();
   }, []);
 
-  const diagnose = async () => {
-    if (!configured) {
-      navigate('/mikrotik/link');
-      return;
-    }
-    setDiagnosing(true);
+  const editRouter = async (routerId) => {
+    setOpenActionId('');
+    setWorkingId(`edit:${routerId}`);
     try {
       const { data } = await api.get('/router/status');
       setRouterStatus(data);
-      toast.success('Router status updated');
+      toast.success('Router configuration pulled');
+      navigate('/mikrotik/link?edit=1');
     } catch (error) {
       setRouterStatus(null);
-      toast.error(error.response?.data?.message || 'Router is offline');
+      toast.error(error.response?.data?.message || 'Failed to pull router configuration');
     } finally {
-      setDiagnosing(false);
+      setWorkingId('');
     }
+  };
+
+  const suspendRouter = async (routerId) => {
+    setOpenActionId('');
+    setWorkingId(`suspend:${routerId}`);
+    try {
+      const { data } = await api.post('/router/suspend');
+      toast.success(data.message || 'Router suspension queued');
+      await loadConfig();
+    } catch (error) {
+      toast.error(error.response?.data?.message || 'Failed to suspend router');
+    } finally {
+      setWorkingId('');
+    }
+  };
+
+  const deleteRouter = async (routerId) => {
+    if (!window.confirm('Delete this linked MikroTik router from the account?')) return;
+    setOpenActionId('');
+    setWorkingId(`delete:${routerId}`);
+    try {
+      const { data } = await api.delete('/router/delete');
+      toast.success(data.message || 'Router deleted');
+      setRouterStatus(null);
+      await loadConfig();
+    } catch (error) {
+      toast.error(error.response?.data?.message || 'Failed to delete router');
+    } finally {
+      setWorkingId('');
+    }
+  };
+
+  const reprovisionRouter = () => {
+    setOpenActionId('');
+    navigate('/mikrotik/link?reprovision=1');
   };
 
   if (loading) return <p className="text-sm font-medium text-slate-600">Loading MikroTik routers...</p>;
@@ -86,14 +127,14 @@ export default function MikrotikSettings() {
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <h1 className="page-title">MikroTik Routers</h1>
-            <p className="page-subtitle">Manage your MikroTik routers on this page</p>
+            <p className="page-subtitle">Routers are linked by running the provisioning command. No API host, username, or password is required.</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <button type="button" className="btn-secondary border-slate-300 text-blue-600" onClick={() => toast('Tutorial content will open here when added.')}>
               <HelpCircle size={16} />
               Tutorial
             </button>
-            <button type="button" className="btn-primary bg-orange-500 text-slate-950 hover:bg-orange-400" onClick={() => navigate('/mikrotik/link')}>
+            <button type="button" className="btn-primary bg-orange-500 text-slate-950 hover:bg-orange-400" onClick={() => navigate('/mikrotik/link?add=1')}>
               <LinkIcon size={16} />
               Link a MikroTik
             </button>
@@ -142,14 +183,15 @@ export default function MikrotikSettings() {
                   <th className="px-4 py-3">CPU</th>
                   <th className="px-4 py-3">Memory</th>
                   <th className="px-4 py-3">Status</th>
-                  <th className="px-4 py-3">Remote Winbox</th>
+                  <th className="px-4 py-3">Router IP</th>
+                  <th className="px-4 py-3">Ports</th>
                   <th className="px-4 py-3 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {filteredRows.length === 0 ? (
                   <tr>
-                    <td className="table-cell text-slate-500" colSpan="7">No MikroTik routers linked yet.</td>
+                    <td className="table-cell text-slate-500" colSpan="8">No MikroTik routers linked yet.</td>
                   </tr>
                 ) : filteredRows.map((router) => (
                   <tr key={router.id}>
@@ -163,16 +205,49 @@ export default function MikrotikSettings() {
                       </span>
                     </td>
                     <td className="table-cell text-green-700">{router.remoteWinbox}</td>
+                    <td className="table-cell">{router.ports ?? '-'}</td>
                     <td className="table-cell">
-                      <div className="flex justify-end gap-2">
-                        <button type="button" className="btn-secondary border-orange-200 text-orange-600" onClick={diagnose} disabled={diagnosing}>
-                          <RefreshCw size={15} className={diagnosing ? 'animate-spin' : ''} />
-                          Diagnose
+                      <div className="relative flex justify-end">
+                        <button
+                          type="button"
+                          className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600 transition hover:border-orange-200 hover:text-orange-600 disabled:cursor-not-allowed disabled:opacity-50"
+                          onClick={(event) => {
+                            if (openActionId === router.id) {
+                              setOpenActionId('');
+                              setActionPosition(null);
+                              return;
+                            }
+                            const rect = event.currentTarget.getBoundingClientRect();
+                            setOpenActionId(router.id);
+                            setActionPosition({ top: rect.bottom + 4, left: rect.right - 176 });
+                          }}
+                          disabled={Boolean(workingId)}
+                          aria-label={`Open actions for ${router.boardName}`}
+                          aria-expanded={openActionId === router.id}
+                        >
+                          <MoreHorizontal size={18} />
                         </button>
-                        <button type="button" className="btn-primary bg-orange-500 text-slate-950 hover:bg-orange-400" onClick={() => navigate('/mikrotik/link')}>
-                          <MoreVertical size={15} />
-                          Actions
-                        </button>
+
+                        {openActionId === router.id && (
+                          <div style={{ top: actionPosition?.top, left: actionPosition?.left }} className="fixed z-[9999] w-44 rounded-md border border-slate-200 bg-white py-1 text-left shadow-lg">
+                            <button type="button" className="flex w-full items-center gap-2 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-orange-50 hover:text-orange-700" onClick={() => editRouter(router.id)}>
+                              <Edit size={14} />
+                              Edit
+                            </button>
+                            <button type="button" className="flex w-full items-center gap-2 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50" onClick={() => suspendRouter(router.id)}>
+                              <XCircle size={14} />
+                              Suspend
+                            </button>
+                            <button type="button" className="flex w-full items-center gap-2 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50" onClick={reprovisionRouter}>
+                              <RefreshCw size={14} />
+                              Reprovision
+                            </button>
+                            <button type="button" className="flex w-full items-center gap-2 px-3 py-2 text-xs font-semibold text-red-600 hover:bg-red-50" onClick={() => deleteRouter(router.id)}>
+                              <Trash2 size={14} />
+                              Delete
+                            </button>
+                          </div>
+                        )}
                       </div>
                     </td>
                   </tr>

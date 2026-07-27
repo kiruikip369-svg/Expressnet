@@ -1,4 +1,5 @@
 import { createContext, useContext, useMemo, useState } from 'react';
+import { clearTenantTheme, storeTenantSettings } from '../utils/theme';
 
 const AuthContext = createContext(null);
 
@@ -48,6 +49,7 @@ export function AuthProvider({ children }) {
     localStorage.setItem(TOKEN_KEY, nextToken);
     if (tenantInfo) {
       localStorage.setItem(TENANT_KEY, JSON.stringify(tenantInfo));
+      storeTenantSettings(tenantInfo);
     }
 
     setToken(nextToken);
@@ -57,6 +59,7 @@ export function AuthProvider({ children }) {
   const logout = () => {
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(TENANT_KEY);
+    clearTenantTheme();
     setToken(null);
     setTenant(null);
   };

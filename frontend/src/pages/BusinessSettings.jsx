@@ -19,6 +19,7 @@ import {
 import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import api from '../api/axios';
+import { DEFAULT_TENANT_THEME, getStoredTenantSettings, storeTenantSettings } from '../utils/theme';
 
 const tabs = [
   { key: 'general', label: 'General Settings', icon: Radio },
@@ -32,10 +33,10 @@ const tabs = [
 
 const initialSettings = {
   companyName: 'EXPRESS PLOT WIFI',
-  themeColor: '#fa8200',
-  themeMode: 'light',
+  themeColor: DEFAULT_TENANT_THEME.themeColor,
+  themeMode: DEFAULT_TENANT_THEME.themeMode,
   darkMode: false,
-  font: 'Work Sans',
+  font: DEFAULT_TENANT_THEME.font,
   supportPhone: '+254716632851',
   supportEmail: '',
   requireTerms: false,
@@ -64,27 +65,6 @@ const initialSettings = {
 };
 
 const colorPresets = ['#fa8200', '#2563eb', '#16a34a', '#dc2626', '#7c3aed', '#0891b2', '#111827', '#f59e0b'];
-
-function softenHex(hex) {
-  if (!/^#[0-9a-f]{6}$/i.test(hex)) return '#223456';
-  const value = hex.slice(1);
-  const parts = [0, 2, 4].map((start) => parseInt(value.slice(start, start + 2), 16));
-  const softened = parts.map((part) => Math.max(0, Math.min(255, Math.round(part * 0.85 + 32))));
-  return `#${softened.map((part) => part.toString(16).padStart(2, '0')).join('')}`;
-}
-
-function resolveThemeMode(mode) {
-  if (mode === 'system') {
-    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-  }
-  return mode === 'dark' ? 'dark' : 'light';
-}
-
-function applyTheme(color, mode = 'light') {
-  document.documentElement.style.setProperty('--dashboard-color', color);
-  document.documentElement.style.setProperty('--dashboard-color-soft', softenHex(color));
-  document.documentElement.dataset.theme = resolveThemeMode(mode);
-}
 
 function fromApi(data) {
   return {
@@ -185,11 +165,7 @@ function Toggle({ checked, label, onChange }) {
 export default function BusinessSettings() {
   const [activeTab, setActiveTab] = useState('general');
   const [settings, setSettings] = useState(() => {
-    try {
-      return { ...initialSettings, ...(JSON.parse(localStorage.getItem('tenant_settings') || '{}')) };
-    } catch {
-      return initialSettings;
-    }
+    return { ...initialSettings, ...getStoredTenantSettings() };
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -220,9 +196,7 @@ export default function BusinessSettings() {
   }, []);
 
   useEffect(() => {
-    applyTheme(settings.themeColor, settings.themeMode);
-    localStorage.setItem('tenant_settings', JSON.stringify(settings));
-    window.dispatchEvent(new Event('storage'));
+    storeTenantSettings(settings);
   }, [settings]);
 
   const update = (event) => {
@@ -413,45 +387,6 @@ export default function BusinessSettings() {
               </Field>
             </SettingsShell>
           </>
-        )}
-
-        {activeTab === 'payments' && (
-          <SettingsShell title="Payment Gateway Settings" description="Payment gateway settings clients can use to pay for your internet services.">
-            <div className="flex justify-end">
-              <button type="button" className="text-xs font-semibold text-[var(--dashboard-color)]">Request Payment Gateway</button>
-            </div>
-            <Field label="Payment Gateway">
-              <Select name="paymentGateway" value={settings.paymentGateway} onChange={update}>
-                <option>Bank Account</option>
-                <option>Paystack</option>
-                <option>M-Pesa Paybill</option>
-              </Select>
-            </Field>
-            <div>
-              <p className="theme-text text-xs font-semibold">Currency</p>
-              <p className="theme-text mt-2 text-xs font-semibold">Your currency will be set to KES (Ksh) based on your country (KE).</p>
-            </div>
-            <div className="grid gap-5 lg:grid-cols-2">
-              <Field label="Business / Paybill Number" required>
-                <Input name="businessNumber" value={settings.businessNumber} onChange={update} />
-              </Field>
-              <Field label="Bank Code" required hint="Use the Paystack bank code for the tenant settlement bank.">
-                <Input name="bankCode" value={settings.bankCode} onChange={update} />
-              </Field>
-              <Field label="Bank Account Number" required>
-                <Input name="bankAccount" value={settings.bankAccount} onChange={update} />
-              </Field>
-              <Field label="Bank Name">
-                <Input name="bankName" value={settings.bankName} onChange={update} />
-              </Field>
-            </div>
-            <div className="theme-card-muted rounded-md border p-3 text-xs">
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                <span>Paystack subaccount: <span className="font-semibold text-[var(--dashboard-color)]">{settings.subaccountCode || settings.subaccountStatus}</span></span>
-                <button type="submit" className="rounded-md bg-[var(--dashboard-color)] px-3 py-2 text-xs font-semibold text-white">Retry / Save settlement</button>
-              </div>
-            </div>
-          </SettingsShell>
         )}
 
         {activeTab === 'pppoe' && (

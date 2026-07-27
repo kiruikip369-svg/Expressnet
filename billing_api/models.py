@@ -165,6 +165,26 @@ class InternetPackage(ExtraFieldsModel):
         return data
 
 
+class Voucher(ExtraFieldsModel):
+    tenant = models.ForeignKey(Tenant, related_name="vouchers", on_delete=models.CASCADE)
+    code = models.CharField(max_length=80, unique=True)
+    username = models.CharField(max_length=80, blank=True, default="")
+    password = models.CharField(max_length=80, blank=True, default="")
+    package = models.CharField(max_length=255, blank=True, default="")
+    package_id = models.CharField(max_length=80, blank=True, default="")
+    price = models.FloatField(default=0)
+    status = models.CharField(max_length=40, default="active")
+    service_type = models.CharField(max_length=30, default="hotspot")
+    router_status = models.CharField(max_length=40, default="pending")
+    router_error = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def as_dict(self, include_id=True, exclude=None):
+        data = super().as_dict(include_id, exclude)
+        data.pop("tenant", None)
+        return data
+
+
 class Customer(ExtraFieldsModel):
     tenant = models.ForeignKey(Tenant, related_name="customers", on_delete=models.CASCADE)
     name = models.CharField(max_length=255, blank=True, default="")

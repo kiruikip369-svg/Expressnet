@@ -13,7 +13,7 @@ function packageType(pkg) {
 }
 
 function pathServiceType() {
-  if (window.location.pathname.startsWith('/pppoe/')) return 'pppoe';
+  if (window.location.pathname.startsWith('/pppoe/') || window.location.pathname.startsWith('/pppoe-renew/')) return 'pppoe';
   if (window.location.pathname.startsWith('/hotspot/')) return 'hotspot';
   return '';
 }
@@ -236,7 +236,7 @@ export default function CustomerPortal() {
             </div>
             <div>
               <p className="text-xs font-bold uppercase tracking-widest text-blue-200">Internet Packages</p>
-              <h1 className="text-2xl font-bold sm:text-3xl">{tenant?.business_name || 'Hotspot Portal'}</h1>
+            <h1 className="text-2xl font-bold sm:text-3xl">{window.location.pathname.startsWith('/pppoe-renew/') ? 'PPPoE Renewal Portal' : (tenant?.business_name || 'Hotspot Portal')}</h1>
             </div>
           </div>
         </div>

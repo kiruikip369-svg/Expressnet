@@ -24,7 +24,7 @@ const sections = [
     title: 'Users',
     links: [
       { to: '/customers', label: 'Users', icon: Users },
-      { to: '/pppoe-customers', label: 'PPPoE Customers', icon: CreditCard },
+      { to: '/pppoe-customers', label: 'Customers', icon: CreditCard },
       { to: '/tickets', label: 'Tickets', icon: Ticket },
     ],
   },

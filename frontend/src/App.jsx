@@ -16,6 +16,7 @@ import AdminTenants from './pages/admin/AdminTenants';
 import AdminUsers from './pages/admin/AdminUsers';
 import BusinessSettings from './pages/BusinessSettings';
 import Customers from './pages/Customers';
+import Users from './pages/users';
 import CustomerPortal from './pages/CustomerPortal';
 import Dashboard from './pages/Dashboard';
 import Emails from './pages/Emails';
@@ -35,29 +36,7 @@ import Register from './pages/Register';
 import Reports from './pages/Reports';
 import Vouchers from './pages/Vouchers';
 import { ADMIN_DASHBOARD_PATH, ADMIN_LOGIN_PATH, ADMIN_PATH, adminPath } from './config/adminPaths';
-
-function softenColor(color) {
-  const parts = [0, 2, 4].map((start) => parseInt(color.slice(1).slice(start, start + 2), 16));
-  return `#${parts.map((part) => Math.round(part * 0.85 + 32).toString(16).padStart(2, '0')).join('')}`;
-}
-
-function applyTenantTheme() {
-  try {
-    const settings = JSON.parse(localStorage.getItem('tenant_settings') || '{}');
-    const color = settings.themeColor;
-    if (/^#[0-9a-f]{6}$/i.test(color || '')) {
-      document.documentElement.style.setProperty('--dashboard-color', color);
-      document.documentElement.style.setProperty('--dashboard-color-soft', softenColor(color));
-    }
-    const mode = settings.themeMode || (settings.darkMode ? 'dark' : 'light');
-    const resolved = mode === 'system'
-      ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
-      : mode;
-    document.documentElement.dataset.theme = resolved === 'dark' ? 'dark' : 'light';
-  } catch {
-    document.documentElement.dataset.theme = 'light';
-  }
-}
+import { TENANT_THEME_EVENT, applyTenantTheme } from './utils/theme';
 
 function DashboardLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -68,23 +47,26 @@ function DashboardLayout() {
     const listener = () => applyTenantTheme();
     media.addEventListener('change', listener);
     window.addEventListener('storage', listener);
+    window.addEventListener(TENANT_THEME_EVENT, listener);
     return () => {
       media.removeEventListener('change', listener);
       window.removeEventListener('storage', listener);
+      window.removeEventListener(TENANT_THEME_EVENT, listener);
     };
   }, []);
 
   return (
-    <div className="theme-page min-h-screen w-full">
+    <div className="tenant-app theme-page min-h-screen w-full">
       <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
       <div className="min-h-screen w-full min-w-0 lg:ml-[240px] lg:w-[calc(100%-240px)]">
         <Navbar onMenuClick={() => setSidebarOpen(true)} />
         <main className="mx-auto w-full max-w-[1200px] px-4 py-4 sm:px-8 sm:py-5">
           <Routes>
             <Route path="/dashboard" element={<Dashboard />} />
-            <Route path="/customers" element={<Customers />} />
+            <Route path="/customers" element={<Users />} />
             <Route path="/pppoe-customers" element={<Customers initialFilter="pppoe" serviceLocked="pppoe" title="PPPoE Customers" />} />
             <Route path="/active-users" element={<Navigate to="/customers" replace />} />
+            
             <Route path="/tickets" element={<IspOperations module="tickets" />} />
             <Route path="/packages" element={<Packages />} />
             <Route path="/payments" element={<Payments />} />
@@ -120,6 +102,7 @@ export default function App() {
       <Route path="/customer/:tenantId" element={<CustomerPortal />} />
       <Route path="/hotspot/:tenantId" element={<CustomerPortal />} />
       <Route path="/pppoe/:tenantId" element={<CustomerPortal />} />
+      <Route path="/pppoe-renew/:tenantId" element={<CustomerPortal />} />
       <Route path="/tv/:tenantId" element={<CustomerPortal />} />
       <Route path={`${ADMIN_PATH}/login`} element={<AdminLogin />} />
       <Route element={<AdminProtectedRoute />}>

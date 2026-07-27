@@ -16,7 +16,7 @@ import requests
 from django.conf import settings
 from firebase_admin import credentials, db as firebase_db
 
-from .models import AdminAuditLog, AdminUser, Customer, InternetPackage, Payment, SiteSettings, Tenant, Ticket
+from .models import AdminAuditLog, AdminUser, Customer, InternetPackage, Payment, SiteSettings, Tenant, Ticket, Voucher
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -148,6 +148,8 @@ class OrmRef:
             return self._payment(parts[1], parts[3])
         if len(parts) == 4 and parts[0] == "tenants" and parts[2] == "tickets":
             return self._ticket(parts[1], parts[3])
+        if len(parts) == 4 and parts[0] == "tenants" and parts[2] == "vouchers":
+            return Voucher.objects.get(tenant_id=parts[1], pk=parts[3])
         if len(parts) == 2 and parts[0] == "admins":
             return AdminUser.objects.get(pk=parts[1])
         if parts == ["site_settings"]:
@@ -175,6 +177,8 @@ class OrmRef:
                 return model_dict(self._payment(parts[1], parts[3]), include_id=False)
             if len(parts) == 3 and parts[0] == "tenants" and parts[2] == "tickets":
                 return {str(item.pk): model_dict(item, include_id=False) for item in Ticket.objects.filter(tenant_id=parts[1])}
+            if len(parts) == 3 and parts[0] == "tenants" and parts[2] == "vouchers":
+                return {str(item.pk): model_dict(item, include_id=False) for item in Voucher.objects.filter(tenant_id=parts[1])}
             if len(parts) == 4 and parts[0] == "tenants" and parts[2] == "tickets":
                 return model_dict(self._ticket(parts[1], parts[3]), include_id=False)
             if parts == ["admins"]:
@@ -186,7 +190,7 @@ class OrmRef:
                 return model_dict(settings, include_id=False) if settings else {}
             if parts == ["admin_audit_logs"]:
                 return {str(item.pk): item.as_dict(include_id=False) for item in AdminAuditLog.objects.all()}
-        except (Tenant.DoesNotExist, InternetPackage.DoesNotExist, Customer.DoesNotExist, Payment.DoesNotExist, Ticket.DoesNotExist, AdminUser.DoesNotExist):
+        except (Tenant.DoesNotExist, InternetPackage.DoesNotExist, Customer.DoesNotExist, Payment.DoesNotExist, Ticket.DoesNotExist, Voucher.DoesNotExist, AdminUser.DoesNotExist):
             return None
         raise KeyError(f"Unsupported relational ref path: {'/'.join(parts)}")
 
@@ -202,6 +206,8 @@ class OrmRef:
             instance = Payment(tenant_id=parts[1])
         elif len(parts) == 3 and parts[0] == "tenants" and parts[2] == "tickets":
             instance = Ticket(tenant_id=parts[1])
+        elif len(parts) == 3 and parts[0] == "tenants" and parts[2] == "vouchers":
+            instance = Voucher(tenant_id=parts[1])
         elif parts == ["admins"]:
             instance = AdminUser()
         elif parts == ["admin_audit_logs"]:
