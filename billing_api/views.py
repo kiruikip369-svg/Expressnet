@@ -999,6 +999,21 @@ def public_redeem(request, tenant_id):
 
 
 @csrf_exempt
+@api_view(["POST"])
+def public_voucher_login(request, tenant_id):
+    data = body(request)
+    username = str(data.get("username") or "").strip()
+    password = str(data.get("password") or "").strip()
+    if not username or not password:
+        return ok({"message": "Username and password are required"}, 400)
+    voucher = next((item for item in list_children(f"tenants/{tenant_id}/vouchers") if str(item.get("username") or "").lower() == username.lower()), None)
+    if not voucher or str(voucher.get("password") or "") != password or voucher.get("status") != "active":
+        return ok({"message": "Invalid or inactive voucher credentials"}, 401)
+    tenant = ref(f"tenants/{tenant_id}").get() or {}
+    return ok({"success": True, "username": voucher.get("username"), "password": voucher.get("password"), "router_ip": data.get("router_ip") or tenant.get("mikrotik_last_seen_ip") or "", "package_name": voucher.get("package"), "router_status": voucher.get("router_status")})
+
+
+@csrf_exempt
 @api_view(["GET"])
 def public_verify(request, tenant_id):
     reference = request.GET.get("reference") or request.GET.get("trxref")
@@ -1302,7 +1317,7 @@ def vouchers(request):
     while find_child_by_field(voucher_path, "code", code):
         code = secrets.token_hex(4).upper()
     voucher = {"code": code, "username": code, "password": code, "package": package.get("name"), "package_id": package_id, "price": float(package.get("price") or 0), "status": "active", "service_type": "hotspot", "router_status": "pending", "created_at": iso_now()}
-    if not has_mikrotik_credentials(request.tenant):
+    if not has_mikrotik_credentials(request.tenant) and not _router_is_agent_linked(request.tenant):
         return ok({"message": "Configure MikroTik credentials before creating vouchers"}, 400)
     try:
         create_hotspot_profile(request.tenant, package.get("name"), package.get("speed"))

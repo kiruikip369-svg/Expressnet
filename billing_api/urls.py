@@ -41,6 +41,7 @@ urlpatterns = [
     path("public/<str:tenant_id>/packages", views.public_packages),
     path("public/<str:tenant_id>/pay", views.public_pay),
     path("public/<str:tenant_id>/redeem", views.public_redeem),
+    path("public/<str:tenant_id>/voucher-login", views.public_voucher_login),
     path("public/<str:tenant_id>/verify", views.public_verify),
     path("captive/<str:tenant_id>", views.captive_portal_page),
     path("captive/<str:tenant_id>/hotspot-file/<str:page>", views.captive_hotspot_file),

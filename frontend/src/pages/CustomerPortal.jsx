@@ -28,6 +28,9 @@ export default function CustomerPortal() {
   const [macAddress, setMacAddress] = useState('');
   const [selectedPackage, setSelectedPackage] = useState(null);
   const [receiptCode, setReceiptCode] = useState('');
+  const [voucherUsername, setVoucherUsername] = useState('');
+  const [voucherPassword, setVoucherPassword] = useState('');
+  const [voucherAccess, setVoucherAccess] = useState(null);
   const [recoveredAccess, setRecoveredAccess] = useState(null);
   const [loading, setLoading] = useState(true);
   const [paying, setPaying] = useState(false);
@@ -207,6 +210,18 @@ export default function CustomerPortal() {
     }
   };
 
+  const loginVoucher = async (event) => {
+    event.preventDefault();
+    setRecovering(true);
+    try {
+      const { data } = await publicApi.post(`/public/${tenantId}/voucher-login`, { username: voucherUsername, password: voucherPassword, router_ip: routerContext.ip });
+      setVoucherAccess(data);
+      if (data.router_ip) window.location.href = `http://${data.router_ip}/login?username=${encodeURIComponent(data.username)}&password=${encodeURIComponent(data.password)}`;
+      else toast.success('Voucher accepted. Connect through the Hotspot login page.');
+    } catch (err) { toast.error(err.response?.data?.message || 'Voucher login failed'); }
+    finally { setRecovering(false); }
+  };
+
   if (loading) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-slate-100 px-4">
@@ -269,7 +284,7 @@ export default function CustomerPortal() {
             )}
           </div>
         )}
-        <div className="mb-6 grid gap-4 lg:grid-cols-[1fr_1.2fr]">
+          <div className="mb-6 grid gap-4 lg:grid-cols-[1fr_1.2fr]">
           <div className="rounded-lg bg-white p-4 shadow-soft ring-1 ring-slate-200">
             <div className="flex items-center gap-2">
               <CreditCard size={18} className="text-blue-600" />
@@ -277,6 +292,17 @@ export default function CustomerPortal() {
             </div>
             <p className="mt-2 text-sm text-slate-500">Choose a package below, then pay securely through Paystack checkout.</p>
           </div>
+
+          <section className="mb-6 rounded-lg bg-white p-4 shadow-soft ring-1 ring-slate-200">
+            <h2 className="font-bold text-slate-900">Use a voucher</h2>
+            <p className="mt-1 text-sm text-slate-500">Enter the username and password printed on your voucher.</p>
+            <form className="mt-3 grid gap-3 sm:grid-cols-[1fr_1fr_auto]" onSubmit={loginVoucher}>
+              <input className="form-input" placeholder="Voucher username" value={voucherUsername} onChange={(event) => setVoucherUsername(event.target.value)} />
+              <input className="form-input" type="password" placeholder="Voucher password" value={voucherPassword} onChange={(event) => setVoucherPassword(event.target.value)} />
+              <button type="submit" className="btn-primary" disabled={recovering}>Login</button>
+            </form>
+            {voucherAccess && <p className="mt-3 text-sm font-semibold text-emerald-700">Voucher accepted for {voucherAccess.package_name}.</p>}
+          </section>
 
           <form className="rounded-lg bg-white p-4 shadow-soft ring-1 ring-slate-200" onSubmit={recover}>
             <label className="form-label" htmlFor="receiptCode">Already paid? Enter payment reference</label>
