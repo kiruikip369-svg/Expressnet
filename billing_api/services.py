@@ -597,14 +597,13 @@ def daraja_is_configured(tenant):
 
 def tenant_uses_daraja(tenant):
     tenant = tenant or {}
-    provider = str(tenant.get("payment_provider") or "").strip().lower()
     methods = tenant.get("payment_methods") if isinstance(tenant.get("payment_methods"), list) else []
-    # Tenant credentials are the authorization to process that tenant's
-    # M-Pesa payments; no separate provider flag is required.
-    # A tenant that has supplied complete Daraja credentials is explicitly
-    # asking us to process M-Pesa payments, even if an older settings record
-    # has not yet persisted payment_methods.
-    return daraja_is_configured(tenant) and (provider == "mpesa" or any(str(item).startswith("daraja_") for item in methods) or bool(tenant.get("daraja_till_number")))
+    # Daraja is opt-in per tenant payment method. Paystack remains the
+    # platform default, regardless of credentials stored on the tenant.
+    return daraja_is_configured(tenant) and any(
+        str(item).strip().lower() in {"daraja_paybill", "daraja_buygoods"}
+        for item in methods
+    )
 
 
 def daraja_base_url(tenant):
@@ -651,7 +650,14 @@ def get_daraja_access_token(tenant):
             f"Daraja OAuth failed {response.status_code}: {response.text[:500]}",
             503,
         ) from exc
-    token = response.json().get("access_token")
+    try:
+        token = response.json().get("access_token")
+    except ValueError as exc:
+        raise PaymentProviderError(
+            "M-Pesa is temporarily unavailable. Please try again shortly.",
+            f"Daraja OAuth returned invalid JSON: {response.text[:500]}",
+            503,
+        ) from exc
     if not token:
         raise PaymentProviderError("M-Pesa is temporarily unavailable. Please try again shortly.", "Daraja OAuth returned no access_token", 503)
     return token

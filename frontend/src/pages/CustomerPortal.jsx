@@ -28,8 +28,9 @@ export default function CustomerPortal() {
   const [macAddress, setMacAddress] = useState('');
   const [selectedPackage, setSelectedPackage] = useState(null);
   const [receiptCode, setReceiptCode] = useState('');
-  const [voucherUsername, setVoucherUsername] = useState('');
-  const [voucherPassword, setVoucherPassword] = useState('');
+  const [voucherCode, setVoucherCode] = useState('');
+  const [accessUsername, setAccessUsername] = useState('');
+  const [accessPassword, setAccessPassword] = useState('');
   const [voucherAccess, setVoucherAccess] = useState(null);
   const [recoveredAccess, setRecoveredAccess] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -39,6 +40,7 @@ export default function CustomerPortal() {
   const [verification, setVerification] = useState(null);
   const [error, setError] = useState('');
   const [routerContext, setRouterContext] = useState({ ip: '', mac: '' });
+  const [paymentMethod, setPaymentMethod] = useState('');
 
   useEffect(() => {
     const routeServiceType = pathServiceType();
@@ -51,6 +53,8 @@ export default function CustomerPortal() {
           publicApi.get(packageUrl),
         ]);
         setTenant(tenantRes.data);
+        const methods = Array.isArray(tenantRes.data?.payment_methods) ? tenantRes.data.payment_methods : [];
+        setPaymentMethod(methods.find((item) => ['daraja_paybill', 'daraja_buygoods'].includes(item)) || '');
         setPackages(Array.isArray(packagesRes.data) ? packagesRes.data : []);
       } catch (err) {
         setError(err.response?.data?.message || 'Unable to load packages');
@@ -170,6 +174,7 @@ export default function CustomerPortal() {
         mac: routerContext.mac,
         router_ip: routerContext.ip,
         router_mac: routerContext.mac,
+        payment_method: paymentMethod,
       });
       toast.success(data.message || 'Redirecting to Paystack');
       if (data.authorizationUrl) {
@@ -214,11 +219,23 @@ export default function CustomerPortal() {
     event.preventDefault();
     setRecovering(true);
     try {
-      const { data } = await publicApi.post(`/public/${tenantId}/voucher-login`, { username: voucherUsername, password: voucherPassword, router_ip: routerContext.ip });
+      const { data } = await publicApi.post(`/public/${tenantId}/voucher-login`, { code: voucherCode, router_ip: routerContext.ip });
       setVoucherAccess(data);
       if (data.router_ip) window.location.href = `http://${data.router_ip}/login?username=${encodeURIComponent(data.username)}&password=${encodeURIComponent(data.password)}`;
       else toast.success('Voucher accepted. Connect through the Hotspot login page.');
     } catch (err) { toast.error(err.response?.data?.message || 'Voucher login failed'); }
+    finally { setRecovering(false); }
+  };
+
+  const loginAccess = async (event) => {
+    event.preventDefault();
+    setRecovering(true);
+    try {
+      const { data } = await publicApi.post(`/public/${tenantId}/voucher-login`, { username: accessUsername, password: accessPassword, router_ip: routerContext.ip });
+      setVoucherAccess(data);
+      if (data.router_ip) window.location.href = `http://${data.router_ip}/login?username=${encodeURIComponent(data.username)}&password=${encodeURIComponent(data.password)}`;
+      else toast.success('Credentials accepted. Connect through the Hotspot login page.');
+    } catch (err) { toast.error(err.response?.data?.message || 'Sign-in failed'); }
     finally { setRecovering(false); }
   };
 
@@ -295,11 +312,16 @@ export default function CustomerPortal() {
 
           <section className="mb-6 rounded-lg bg-white p-4 shadow-soft ring-1 ring-slate-200">
             <h2 className="font-bold text-slate-900">Use a voucher</h2>
-            <p className="mt-1 text-sm text-slate-500">Enter the username and password printed on your voucher.</p>
-            <form className="mt-3 grid gap-3 sm:grid-cols-[1fr_1fr_auto]" onSubmit={loginVoucher}>
-              <input className="form-input" placeholder="Voucher username" value={voucherUsername} onChange={(event) => setVoucherUsername(event.target.value)} />
-              <input className="form-input" type="password" placeholder="Voucher password" value={voucherPassword} onChange={(event) => setVoucherPassword(event.target.value)} />
+            <p className="mt-1 text-sm text-slate-500">Enter the voucher code provided by your provider.</p>
+            <form className="mt-3 flex gap-3" onSubmit={loginVoucher}>
+              <input className="form-input" placeholder="Voucher code" value={voucherCode} onChange={(event) => setVoucherCode(event.target.value)} />
               <button type="submit" className="btn-primary" disabled={recovering}>Login</button>
+            </form>
+            <p className="mt-4 text-sm text-slate-500">Already bought a package? Use the username and password sent to you.</p>
+            <form className="mt-2 grid gap-3 sm:grid-cols-[1fr_1fr_auto]" onSubmit={loginAccess}>
+              <input className="form-input" placeholder="Username" value={accessUsername} onChange={(event) => setAccessUsername(event.target.value)} />
+              <input className="form-input" type="password" placeholder="Password" value={accessPassword} onChange={(event) => setAccessPassword(event.target.value)} />
+              <button type="submit" className="btn-secondary" disabled={recovering}>Sign in</button>
             </form>
             {voucherAccess && <p className="mt-3 text-sm font-semibold text-emerald-700">Voucher accepted for {voucherAccess.package_name}.</p>}
           </section>

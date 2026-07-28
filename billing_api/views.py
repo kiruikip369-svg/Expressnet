@@ -813,12 +813,18 @@ def captive_portal_page(request, tenant_id):
     voucher_html = f"""
       <div class="card">
         <strong>Use a voucher</strong>
-        <p class="muted">Enter the voucher username and password provided by your provider.</p>
+        <p class="muted">Enter the voucher code provided by your provider.</p>
         <form method="post" action="/api/public/{html.escape(str(tenant_id))}/voucher-login">
           {hidden}
-          <input name="username" required placeholder="Voucher username">
-          <input name="password" required type="password" placeholder="Voucher password">
+          <input name="code" required placeholder="Voucher code">
           <button type="submit">Login with voucher</button>
+        </form>
+        <p class="muted">Already bought a package? Sign in with the username and password sent to you.</p>
+        <form method="post" action="/api/public/{html.escape(str(tenant_id))}/voucher-login">
+          {hidden}
+          <input name="username" required placeholder="Username">
+          <input name="password" required type="password" placeholder="Password">
+          <button type="submit">Sign in</button>
         </form>
       </div>
     """
@@ -928,6 +934,8 @@ def public_pay(request, tenant_id):
         mac_address = normalize_mac(data.get("mac_address"))
         if not mac_address:
             return ok({"message": "Enter a valid TV MAC address"}, 400)
+    configured_methods = tenant.get("payment_methods") if isinstance(tenant.get("payment_methods"), list) else []
+    uses_daraja = tenant_uses_daraja(tenant)
     payment_ref = ref(f"tenants/{tenant_id}/payments").push(
         {
             "customer_id": customer.get("id") if customer else None,
@@ -946,12 +954,11 @@ def public_pay(request, tenant_id):
             "router_ip": router_ip,
             "router_mac": router_mac,
             "source": "customer_portal",
-            "provider": "mpesa" if tenant_uses_daraja(tenant) else "paystack",
+            "provider": "mpesa" if uses_daraja else "paystack",
         }
     )
     try:
-        if tenant_uses_daraja(tenant):
-            configured_methods = tenant.get("payment_methods") if isinstance(tenant.get("payment_methods"), list) else []
+        if uses_daraja:
             daraja_method = str(data.get("payment_method") or next((item for item in configured_methods if str(item).startswith("daraja_")), "")).strip().lower()
             if daraja_method not in {"daraja_paybill", "daraja_buygoods"}:
                 daraja_method = "daraja_buygoods" if tenant.get("daraja_till_number") else "daraja_paybill"
@@ -1055,12 +1062,13 @@ def public_redeem(request, tenant_id):
 @api_view(["POST"])
 def public_voucher_login(request, tenant_id):
     data = body(request)
+    code = str(data.get("code") or "").strip()
     username = str(data.get("username") or "").strip()
     password = str(data.get("password") or "").strip()
-    if not username or not password:
-        return ok({"message": "Username and password are required"}, 400)
-    voucher = next((item for item in list_children(f"tenants/{tenant_id}/vouchers") if str(item.get("username") or "").lower() == username.lower()), None)
-    if not voucher or str(voucher.get("password") or "") != password or voucher.get("status") != "active":
+    if not code and (not username or not password):
+        return ok({"message": "Voucher code is required"}, 400)
+    voucher = next((item for item in list_children(f"tenants/{tenant_id}/vouchers") if str(item.get("code") or "").lower() == (code or username).lower()), None)
+    if not voucher or voucher.get("status") != "active" or (not code and str(voucher.get("password") or "") != password):
         return ok({"message": "Invalid or inactive voucher credentials"}, 401)
     tenant = ref(f"tenants/{tenant_id}").get() or {}
     return ok({"success": True, "username": voucher.get("username"), "password": voucher.get("password"), "router_ip": data.get("router_ip") or tenant.get("mikrotik_last_seen_ip") or "", "package_name": voucher.get("package"), "router_status": voucher.get("router_status")})
