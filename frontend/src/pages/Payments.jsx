@@ -91,7 +91,7 @@ export default function Payments() {
     setSavingMethods(true);
     try {
       const { data } = await api.patch('/settings/business', { payment_methods: paymentSettings.methods, business_number: paymentSettings.businessNumber, bank_code: paymentSettings.bankCode, bank_name: paymentSettings.bankName, bank_account_number: paymentSettings.bankAccount, daraja_consumer_key: paymentSettings.consumerKey, daraja_consumer_secret: paymentSettings.consumerSecret, daraja_shortcode: paymentSettings.shortcode, daraja_till_number: paymentSettings.tillNumber, daraja_shortcode_type: paymentSettings.shortcodeType, daraja_passkey: paymentSettings.passkey, daraja_environment: paymentSettings.environment, create_subaccount: paymentSettings.methods.includes('bank') && Boolean(paymentSettings.bankCode && paymentSettings.bankAccount) });
-      if (data.config?.paystack_subaccount_status === 'failed' || data.config?.paystack_subaccount_status === 'missing_bank_details') throw new Error(data.config.paystack_subaccount_error || 'Complete valid bank details to receive tenant payments');
+      if (paymentSettings.methods.includes('bank') && data.config?.paystack_subaccount_status === 'failed') throw new Error(data.config.paystack_subaccount_error || 'Paystack settlement account could not be created');
       setSettlementStatus(data.config?.paystack_subaccount_status || 'active');
       toast.success('Payment methods saved');
       setMethodsOpen(false);
