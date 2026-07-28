@@ -1397,13 +1397,19 @@ def router_status(request):
     assignments = request.tenant.get("router_port_assignments") or {}
     snapshot = request.tenant.get("mikrotik_router_snapshot") or {}
     if not has_mikrotik_credentials(tenant):
+        if _router_is_agent_linked(request.tenant) and snapshot:
+            return ok(_limited_router_status_payload(snapshot, assignments, "agent_report", "Showing the latest live configuration reported by the linked MikroTik agent."))
         return ok({"message": "Live MikroTik status requires reachable RouterOS API credentials. Stored provisioning data is not being shown as live status."}, 503)
     try:
         status = router_interface_status(tenant)
         return ok(_limited_router_status_payload(status, assignments, "routeros_api", "Router configuration loaded from the live RouterOS API."))
     except (TimeoutError, OSError) as exc:
+        if _router_is_agent_linked(request.tenant) and snapshot:
+            return ok(_limited_router_status_payload(snapshot, assignments, "agent_report", f"Showing the latest live configuration reported by the linked MikroTik agent. Direct RouterOS API is unavailable: {exc}"))
         return ok({"message": f"Unable to pull live MikroTik status on port {tenant.get('mikrotik_port') or 8728}: {exc}"}, 503)
     except Exception as exc:
+        if _router_is_agent_linked(request.tenant) and snapshot:
+            return ok(_limited_router_status_payload(snapshot, assignments, "agent_report", f"Showing the latest live configuration reported by the linked MikroTik agent. Direct RouterOS API failed: {exc}"))
         return ok({"message": f"Unable to pull live MikroTik status: {exc}"}, 503)
 
 
