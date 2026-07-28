@@ -94,5 +94,6 @@ urlpatterns = [
     path("tickets/<str:ticket_id>", views.tickets),
     path("paystack/webhook", views.paystack_webhook),
     path("paystack/callback", views.paystack_callback),
+    path("daraja/callback/<str:tenant_id>/<str:payment_id>/<str:token>", views.daraja_callback),
     path(f"{settings.ADMIN_API_PATH}/", include(admin_urlpatterns)),
 ]

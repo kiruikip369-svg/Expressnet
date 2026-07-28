@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import hmac
 import json
@@ -536,6 +537,166 @@ def verify_paystack_signature(raw_body, signature, secret):
         return False
     digest = hmac.new(str(secret).encode(), raw_body, hashlib.sha512).hexdigest()
     return hmac.compare_digest(digest, str(signature))
+
+
+# ---------------------------------------------------------------------------
+# Daraja (Safaricom M-Pesa) — for tenants who have applied for / been
+# approved for their own Daraja API access, rather than the shared
+# RoamTech-based SMS/notification path used elsewhere.
+#
+# A tenant is considered "Daraja-enabled" once they have all four
+# credentials configured (consumer key/secret, shortcode, passkey) AND have
+# explicitly selected mpesa as their payment_provider — mirroring how a
+# Paystack subaccount_code gates that provider. There's no separate
+# approval queue in this codebase yet; this is the natural equivalent.
+# ---------------------------------------------------------------------------
+
+def daraja_is_configured(tenant):
+    tenant = tenant or {}
+    return all(
+        str(tenant.get(field) or "").strip()
+        for field in ("daraja_consumer_key", "daraja_consumer_secret", "daraja_shortcode", "daraja_passkey")
+    )
+
+
+def tenant_uses_daraja(tenant):
+    tenant = tenant or {}
+    provider = str(tenant.get("payment_provider") or "").strip().lower()
+    return provider == "mpesa" and daraja_is_configured(tenant)
+
+
+def daraja_base_url(tenant):
+    environment = str((tenant or {}).get("daraja_environment") or "sandbox").strip().lower()
+    return "https://api.safaricom.co.ke" if environment == "production" else "https://sandbox.safaricom.co.ke"
+
+
+def get_daraja_credentials(tenant):
+    tenant = tenant or {}
+    consumer_key = str(tenant.get("daraja_consumer_key") or "").strip()
+    consumer_secret = str(tenant.get("daraja_consumer_secret") or "").strip()
+    shortcode = str(tenant.get("daraja_shortcode") or "").strip()
+    passkey = str(tenant.get("daraja_passkey") or "").strip()
+    if not all([consumer_key, consumer_secret, shortcode, passkey]):
+        raise PaymentProviderError(
+            "M-Pesa is not set up for this business yet. Please contact support.",
+            "Tenant is missing one or more Daraja credentials",
+            503,
+        )
+    return {
+        "consumer_key": consumer_key,
+        "consumer_secret": consumer_secret,
+        "shortcode": shortcode,
+        "passkey": passkey,
+    }
+
+
+def get_daraja_access_token(tenant):
+    creds = get_daraja_credentials(tenant)
+    response = requests.get(
+        f"{daraja_base_url(tenant)}/oauth/v1/generate?grant_type=client_credentials",
+        auth=(creds["consumer_key"], creds["consumer_secret"]),
+        timeout=30,
+    )
+    try:
+        response.raise_for_status()
+    except requests.HTTPError as exc:
+        raise PaymentProviderError(
+            "M-Pesa is temporarily unavailable. Please try again shortly.",
+            f"Daraja OAuth failed {response.status_code}: {response.text[:500]}",
+            503,
+        ) from exc
+    token = response.json().get("access_token")
+    if not token:
+        raise PaymentProviderError("M-Pesa is temporarily unavailable. Please try again shortly.", "Daraja OAuth returned no access_token", 503)
+    return token
+
+
+def daraja_timestamp_and_password(shortcode, passkey):
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    password = base64.b64encode(f"{shortcode}{passkey}{timestamp}".encode()).decode()
+    return timestamp, password
+
+
+def make_daraja_callback_token(tenant_id, payment_id):
+    """Daraja has no request-signing mechanism like Paystack's webhook
+    signature, so the callback URL itself carries an unguessable,
+    per-payment token (HMAC over tenant_id+payment_id with SECRET_KEY) —
+    anyone hitting the callback endpoint without the right token can't
+    complete an arbitrary payment."""
+    digest = hmac.new(settings.SECRET_KEY.encode(), f"{tenant_id}:{payment_id}".encode(), hashlib.sha256).hexdigest()
+    return digest[:32]
+
+
+def verify_daraja_callback_token(tenant_id, payment_id, token):
+    expected = make_daraja_callback_token(tenant_id, payment_id)
+    return hmac.compare_digest(expected, str(token or ""))
+
+
+def daraja_phone_format(phone):
+    digits = "".join(ch for ch in str(phone or "") if ch.isdigit())
+    if digits.startswith("0") and len(digits) == 10:
+        digits = "254" + digits[1:]
+    elif digits.startswith("7") and len(digits) == 9:
+        digits = "254" + digits
+    return digits
+
+
+def initiate_daraja_payment(tenant, payment_id, amount, phone, description=None, metadata=None):
+    creds = get_daraja_credentials(tenant)
+    tenant_id = (tenant or {}).get("id")
+    formatted_phone = daraja_phone_format(phone)
+    if not formatted_phone or not formatted_phone.startswith("254") or len(formatted_phone) != 12:
+        raise PaymentProviderError("Enter a valid M-Pesa phone number (07XXXXXXXX or 2547XXXXXXXX).", "Invalid phone for Daraja STK push", 400)
+
+    base_url = get_public_base_url()
+    if not base_url:
+        raise RuntimeError("PUBLIC_APP_URL or PAYSTACK_CALLBACK_BASE_URL is required for the Daraja callback URL")
+
+    token = get_daraja_access_token(tenant)
+    timestamp, password = daraja_timestamp_and_password(creds["shortcode"], creds["passkey"])
+    callback_token = make_daraja_callback_token(tenant_id, payment_id)
+
+    payload = {
+        "BusinessShortCode": creds["shortcode"],
+        "Password": password,
+        "Timestamp": timestamp,
+        "TransactionType": "CustomerPayBillOnline",
+        "Amount": max(1, int(round(float(amount or 0)))),
+        "PartyA": formatted_phone,
+        "PartyB": creds["shortcode"],
+        "PhoneNumber": formatted_phone,
+        "CallBackURL": f"{base_url}/api/daraja/callback/{tenant_id}/{payment_id}/{callback_token}",
+        "AccountReference": str((tenant or {}).get("business_name") or tenant_id)[:12],
+        "TransactionDesc": (description or "Internet package")[:13],
+    }
+
+    response = requests.post(
+        f"{daraja_base_url(tenant)}/mpesa/stkpush/v1/processrequest",
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        json=payload,
+        timeout=30,
+    )
+    try:
+        response.raise_for_status()
+    except requests.HTTPError as exc:
+        raise PaymentProviderError(
+            "Could not start the M-Pesa payment. Please try again.",
+            f"Daraja STK push failed {response.status_code}: {response.text[:500]}",
+            502,
+        ) from exc
+    data = response.json()
+    if str(data.get("ResponseCode")) != "0":
+        raise PaymentProviderError(
+            "Could not start the M-Pesa payment. Please try again.",
+            data.get("ResponseDescription") or data.get("errorMessage") or "Daraja rejected the STK push request",
+            502,
+        )
+    return {
+        "checkout_request_id": data.get("CheckoutRequestID"),
+        "merchant_request_id": data.get("MerchantRequestID"),
+        "phone": formatted_phone,
+        "customer_message": data.get("CustomerMessage"),
+    }
 
 
 def has_mikrotik_credentials(tenant):

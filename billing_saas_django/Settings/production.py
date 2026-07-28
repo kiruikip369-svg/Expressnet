@@ -7,6 +7,10 @@ from .base import *
 
 DEBUG = False
 RATE_LIMIT_ENABLED = env_bool("RATE_LIMIT_ENABLED", True)
+
+if not os.getenv("DJANGO_SECRET_KEY"):
+    raise RuntimeError("DJANGO_SECRET_KEY is required in production — refusing to start with the dev fallback key.")
+
 RAILWAY_ALLOWED_HOSTS = [
     "web-production-b9d86.up.railway.app",
     ".railway.app",

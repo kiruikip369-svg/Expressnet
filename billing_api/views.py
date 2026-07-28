@@ -35,6 +35,10 @@ from .services import (
     create_ppp_profile,
     configure_router_port,
     create_paystack_subaccount,
+    tenant_uses_daraja,
+    initiate_daraja_payment,
+    make_daraja_callback_token,
+    verify_daraja_callback_token,
     _build_port_command_script,
     delete_router_customer,
     captive_portal_url,
@@ -894,10 +898,35 @@ def public_pay(request, tenant_id):
             "router_ip": router_ip,
             "router_mac": router_mac,
             "source": "customer_portal",
-            "provider": "paystack",
+            "provider": "mpesa" if tenant_uses_daraja(tenant) else "paystack",
         }
     )
     try:
+        if tenant_uses_daraja(tenant):
+            checkout = initiate_daraja_payment(
+                tenant,
+                payment_ref.key,
+                pkg.get("price"),
+                phone,
+                description=f"{pkg.get('name')} internet package",
+                metadata={
+                    "package_id": data["package_id"],
+                    "package_name": pkg.get("name"),
+                    "service_type": service_type,
+                    "username": customer.get("username") if customer else None,
+                    "mac_address": mac_address,
+                    "router_ip": router_ip,
+                    "router_mac": router_mac,
+                },
+            )
+            payment_ref.update({"daraja_checkout_request_id": checkout.get("checkout_request_id"), "daraja_merchant_request_id": checkout.get("merchant_request_id")})
+            return ok({
+                "success": True,
+                "message": checkout.get("customer_message") or "Check your phone and enter your M-Pesa PIN to complete payment.",
+                "paymentId": payment_ref.key,
+                "provider": "mpesa",
+                "checkoutRequestId": checkout.get("checkout_request_id"),
+            }, 201)
         checkout = initiate_paystack_payment(
             tenant,
             payment_ref.key,
@@ -1273,9 +1302,9 @@ def vouchers(request):
     while find_child_by_field(voucher_path, "code", code):
         code = secrets.token_hex(4).upper()
     voucher = {"code": code, "username": code, "password": code, "package": package.get("name"), "package_id": package_id, "price": float(package.get("price") or 0), "status": "active", "service_type": "hotspot", "router_status": "pending", "created_at": iso_now()}
+    if not has_mikrotik_credentials(request.tenant):
+        return ok({"message": "Configure MikroTik credentials before creating vouchers"}, 400)
     try:
-        if not has_mikrotik_credentials(request.tenant):
-            raise ValueError("Configure MikroTik credentials before creating vouchers")
         create_hotspot_profile(request.tenant, package.get("name"), package.get("speed"))
         api = router_connect(request.tenant)
         try:
@@ -1284,9 +1313,20 @@ def vouchers(request):
             api.close()
         voucher["router_status"] = "provisioned"
     except Exception as exc:
-        return ok({"message": f"Voucher was not created because MikroTik provisioning failed: {exc}"}, 502)
+        # Live push failed (e.g. WireGuard tunnel temporarily down) — still
+        # save the voucher and queue the router-side creation for the
+        # agent's next ~30s poll, instead of losing the voucher entirely.
+        voucher["router_status"] = "queued"
+        voucher["router_error"] = str(exc)
+        script = (
+            f':if ([:len [/ip hotspot user find name="{_rsc_escape(code)}"]] = 0) do={{'
+            f' /ip hotspot user add name="{_rsc_escape(code)}" password="{_rsc_escape(code)}" '
+            f'profile="{_rsc_escape(package.get("name") or "")}" disabled=no comment="billing-saas-voucher" }};'
+        )
+        _queue_router_command(request, {"type": "sync_voucher", "script": script})
     saved = ref(voucher_path).push(voucher)
-    return ok({"success": True, "message": "Hotspot voucher created", "voucher": {"id": saved.key, **voucher}}, 201)
+    message = "Hotspot voucher created" if voucher["router_status"] == "provisioned" else "Voucher created and queued — it will be active on the router within about 30 seconds."
+    return ok({"success": True, "message": message, "voucher": {"id": saved.key, **voucher}}, 201)
 
 
 @csrf_exempt
@@ -2780,6 +2820,7 @@ def settings_business(request):
         "bank_account_number",
         "paystack_platform_percentage",
         "payment_methods",
+        "payment_provider",
         "daraja_consumer_key",
         "daraja_consumer_secret",
         "daraja_shortcode",
@@ -2794,6 +2835,9 @@ def settings_business(request):
             elif field == "payment_methods":
                 requested = data[field] if isinstance(data[field], list) else [data[field]]
                 updates[field] = [str(item).strip().lower() for item in requested if str(item).strip() in {"bank", "paybill", "buygoods", "daraja_paybill", "daraja_buygoods"}]
+            elif field == "payment_provider":
+                candidate = str(data[field]).strip().lower()
+                updates[field] = candidate if candidate in {"paystack", "mpesa"} else "paystack"
             else:
                 updates[field] = str(data[field]).strip()
     if updates.get("theme_mode") not in {None, "light", "dark", "system"}:
@@ -3247,6 +3291,77 @@ def paystack_callback(request):
         return ok({"success": True, "message": "Payment verified. You can return to the customer portal.", "paymentId": payment_id})
     ref(f"tenants/{tenant_id}/payments/{payment_id}").update({"status": "failed", "callback_result_desc": verified.get("gateway_response") or "Paystack verification did not succeed", "failed_at": iso_now()})
     return ok({"success": False, "message": "Payment was not successful"}, 400)
+
+
+def complete_daraja_payment(tenant_id, payment_id, callback_metadata, amount, receipt, paid_at, phone):
+    payment = ref(f"tenants/{tenant_id}/payments/{payment_id}").get()
+    if not payment:
+        return False
+    if payment.get("status") == "success":
+        return True
+
+    expected_amount = round(float(payment.get("amount") or 0), 2)
+    paid_amount = round(float(amount or 0), 2)
+    if expected_amount and paid_amount != expected_amount:
+        ref(f"tenants/{tenant_id}/payments/{payment_id}").update({
+            "status": "failed",
+            "failed_at": iso_now(),
+            "callback_result_desc": "Paid amount does not match the package amount",
+        })
+        return False
+
+    update = {
+        "provider": "mpesa",
+        "amount": paid_amount,
+        "payment_code": receipt,
+        "daraja_receipt_number": receipt,
+        "daraja_paid_at": paid_at,
+        "phone": phone or payment.get("phone"),
+        "status": "success",
+        "paid_at": iso_now(),
+        "callback_result_code": "success",
+        "callback_result_desc": "M-Pesa payment successful",
+    }
+    ref(f"tenants/{tenant_id}/payments/{payment_id}").update(update)
+    tenant_data = ref(f"tenants/{tenant_id}").get() or {}
+    activate_paid_access({"id": tenant_id, **tenant_data}, payment_id, {**payment, **callback_metadata}, phone or payment.get("phone"), receipt)
+    return True
+
+
+@csrf_exempt
+@api_view(["POST"])
+def daraja_callback(request, tenant_id, payment_id, token):
+    # Daraja has no request-signing mechanism — the per-payment token
+    # embedded in the callback URL at STK push time is what stops this
+    # endpoint from being used to spoof completion of an arbitrary payment.
+    if not verify_daraja_callback_token(tenant_id, payment_id, token):
+        return ok({"success": False, "message": "Invalid callback token"}, 401)
+
+    event = body(request)
+    stk_callback = (((event or {}).get("Body") or {}).get("stkCallback")) or {}
+    result_code = stk_callback.get("ResultCode")
+    result_desc = stk_callback.get("ResultDesc") or ""
+
+    if str(result_code) != "0":
+        ref(f"tenants/{tenant_id}/payments/{payment_id}").update({
+            "status": "failed",
+            "failed_at": iso_now(),
+            "callback_result_code": result_code,
+            "callback_result_desc": result_desc or "M-Pesa payment was cancelled or failed",
+        })
+        # Always 200 back to Safaricom — they retry on non-2xx, we don't
+        # want retries for a customer-cancelled payment.
+        return ok({"success": True})
+
+    items = ((stk_callback.get("CallbackMetadata") or {}).get("Item")) or []
+    values = {item.get("Name"): item.get("Value") for item in items if isinstance(item, dict)}
+    amount = values.get("Amount")
+    receipt = values.get("MpesaReceiptNumber")
+    paid_at = values.get("TransactionDate")
+    phone = values.get("PhoneNumber")
+
+    complete_daraja_payment(tenant_id, payment_id, {}, amount, receipt, paid_at, phone)
+    return ok({"success": True})
 
 
 @csrf_exempt

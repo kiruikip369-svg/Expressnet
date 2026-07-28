@@ -35,6 +35,7 @@ class SimpleRateLimitMiddleware:
             ("POST", f"/{api_base}/auth/login"): (5, 15 * 60),
             ("POST", f"/{api_base}/auth/register"): (5, 15 * 60),
             ("POST", f"/{api_base}/{admin_base}/auth/login"): (5, 15 * 60),
+            ("POST", f"/{api_base}/vouchers"): (30, 60 * 60),
         }
 
     def __call__(self, request):
@@ -45,6 +46,8 @@ class SimpleRateLimitMiddleware:
         rule = self.rules().get((request.method.upper(), request.path.rstrip("/")))
         if request.method.upper() == "POST" and request.path.startswith(f"/{api_base}/public/") and request.path.rstrip("/").endswith("/pay"):
             rule = (10, 10 * 60)
+        if request.method.upper() == "POST" and request.path.startswith(f"/{api_base}/daraja/callback/"):
+            rule = (20, 60)
         if rule:
             limit, window = rule
             ip = request.META.get("HTTP_X_FORWARDED_FOR", request.META.get("REMOTE_ADDR", "")).split(",")[0].strip()
