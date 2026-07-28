@@ -783,11 +783,14 @@ def captive_portal_page(request, tenant_id):
         if request.GET.get(key)
     )
     if packages:
+        configured_methods = tenant.get("payment_methods") if isinstance(tenant.get("payment_methods"), list) else []
+        selected_daraja_method = next((str(item).strip().lower() for item in configured_methods if str(item).strip().lower() in {"daraja_paybill", "daraja_buygoods"}), "")
         package_html = "".join(
             f"""
             <form class="card pkg" method="post" action="/api/captive/{html.escape(str(tenant_id))}/pay">
               <input type="hidden" name="package_id" value="{html.escape(str(pkg.get('id')))}">
               <input type="hidden" name="service_type" value="{html.escape(str(pkg.get('service_type') or 'hotspot'))}">
+              {f"<input type='hidden' name='payment_method' value='{html.escape(selected_daraja_method)}'>" if selected_daraja_method else ''}
               {hidden}
               <div>
                 <strong>{html.escape(str(pkg.get('name') or 'Package'))}</strong>
@@ -807,6 +810,18 @@ def captive_portal_page(request, tenant_id):
         else:
             package_html = "<div class='alert'>No packages are configured yet. Please contact the provider.</div>"
 
+    voucher_html = f"""
+      <div class="card">
+        <strong>Use a voucher</strong>
+        <p class="muted">Enter the voucher username and password provided by your provider.</p>
+        <form method="post" action="/api/public/{html.escape(str(tenant_id))}/voucher-login">
+          {hidden}
+          <input name="username" required placeholder="Voucher username">
+          <input name="password" required type="password" placeholder="Voucher password">
+          <button type="submit">Login with voucher</button>
+        </form>
+      </div>
+    """
     body_html = f"""
       <header><h1>{html.escape(str(tenant.get('business_name') or 'Internet packages'))}</h1><p>Choose a package and pay to access the internet.</p></header>
       <main>
@@ -815,6 +830,7 @@ def captive_portal_page(request, tenant_id):
           <p class="muted">You are connected to the billing network. Internet access is enabled after successful payment.</p>
         </div>
         {payment_notice}
+        {voucher_html}
         {package_html}
       </main>
     """
@@ -936,7 +952,9 @@ def public_pay(request, tenant_id):
     try:
         if tenant_uses_daraja(tenant):
             configured_methods = tenant.get("payment_methods") if isinstance(tenant.get("payment_methods"), list) else []
-            daraja_method = str(data.get("payment_method") or next((item for item in configured_methods if str(item).startswith("daraja_")), "daraja_paybill")).strip().lower()
+            daraja_method = str(data.get("payment_method") or next((item for item in configured_methods if str(item).startswith("daraja_")), "")).strip().lower()
+            if daraja_method not in {"daraja_paybill", "daraja_buygoods"}:
+                daraja_method = "daraja_buygoods" if tenant.get("daraja_till_number") else "daraja_paybill"
             checkout = initiate_daraja_payment(
                 tenant,
                 payment_ref.key,

@@ -601,7 +601,10 @@ def tenant_uses_daraja(tenant):
     methods = tenant.get("payment_methods") if isinstance(tenant.get("payment_methods"), list) else []
     # Tenant credentials are the authorization to process that tenant's
     # M-Pesa payments; no separate provider flag is required.
-    return daraja_is_configured(tenant) and (provider == "mpesa" or any(str(item).startswith("daraja_") for item in methods))
+    # A tenant that has supplied complete Daraja credentials is explicitly
+    # asking us to process M-Pesa payments, even if an older settings record
+    # has not yet persisted payment_methods.
+    return daraja_is_configured(tenant) and (provider == "mpesa" or any(str(item).startswith("daraja_") for item in methods) or bool(tenant.get("daraja_till_number")))
 
 
 def daraja_base_url(tenant):
@@ -728,7 +731,20 @@ def initiate_daraja_payment(tenant, payment_id, amount, phone, description=None,
             f"Daraja STK push failed {response.status_code}: {response.text[:500]}",
             502,
         ) from exc
-    data = response.json()
+    try:
+        data = response.json()
+    except ValueError as exc:
+        raise PaymentProviderError(
+            "Could not start the M-Pesa payment. Please try again.",
+            f"Daraja returned invalid JSON: {response.text[:500]}",
+            502,
+        ) from exc
+    if str(data.get("ResponseCode") or "0") not in {"0", "00"} and not data.get("CheckoutRequestID"):
+        raise PaymentProviderError(
+            str(data.get("ResponseDescription") or data.get("errorMessage") or "Daraja rejected the payment request."),
+            f"Daraja rejected STK push: {data}",
+            502,
+        )
     if str(data.get("ResponseCode")) != "0":
         raise PaymentProviderError(
             "Could not start the M-Pesa payment. Please try again.",
