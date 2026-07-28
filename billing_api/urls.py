@@ -39,6 +39,7 @@ urlpatterns = [
     path("public/stats", views.public_stats),
     path("public/<str:tenant_id>", views.public_tenant),
     path("public/<str:tenant_id>/packages", views.public_packages),
+    path("public/<str:tenant_id>/pppoe-profile", views.public_pppoe_profile),
     path("public/<str:tenant_id>/pay", views.public_pay),
     path("public/<str:tenant_id>/redeem", views.public_redeem),
     path("public/<str:tenant_id>/voucher-login", views.public_voucher_login),

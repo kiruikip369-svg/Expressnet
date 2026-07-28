@@ -6,6 +6,7 @@ import os
 import socket
 import ssl
 import uuid
+import base64
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlparse, urlsplit, urlunsplit
@@ -518,6 +519,41 @@ def initiate_paystack_payment(tenant, payment_id, amount, email=None, phone=None
     return result
 
 
+def initiate_daraja_stk(tenant, payment_id, amount, phone, payment_method="daraja_paybill", description=None):
+    """Start a Daraja STK push for a tenant Paybill or Buy Goods account."""
+    consumer_key = str(tenant.get("daraja_consumer_key") or "").strip()
+    consumer_secret = str(tenant.get("daraja_consumer_secret") or "").strip()
+    passkey = str(tenant.get("daraja_passkey") or "").strip()
+    shortcode = str(tenant.get("daraja_shortcode") or "").strip()
+    till = str(tenant.get("daraja_till_number") or "").strip()
+    if not all([consumer_key, consumer_secret, passkey, shortcode]):
+        raise PaymentProviderError("Daraja credentials are incomplete. Add all required M-Pesa API credentials.", "Missing Daraja credentials", 400)
+    if payment_method == "daraja_buygoods":
+        shortcode = till or shortcode
+        transaction_type = "CustomerBuyGoodsOnline"
+    else:
+        transaction_type = "CustomerPayBillOnline"
+    if not shortcode:
+        raise PaymentProviderError("The Daraja shortcode or Buy Goods till number is required.", "Missing Daraja shortcode", 400)
+    environment = str(tenant.get("daraja_environment") or "sandbox").lower()
+    base = "https://api.safaricom.co.ke" if environment == "production" else "https://sandbox.safaricom.co.ke"
+    token_response = requests.get(f"{base}/oauth/v1/generate?grant_type=client_credentials", auth=(consumer_key, consumer_secret), timeout=30)
+    token_response.raise_for_status()
+    token = token_response.json().get("access_token")
+    if not token:
+        raise PaymentProviderError("Daraja did not return an access token.", "Missing Daraja access token", 502)
+    timestamp = datetime.now(timezone.utc).astimezone().strftime("%Y%m%d%H%M%S")
+    password = base64.b64encode(f"{shortcode}{passkey}{timestamp}".encode()).decode()
+    callback = f"{get_public_base_url()}/api/daraja/callback"
+    payload = {"BusinessShortCode": shortcode, "Password": password, "Timestamp": timestamp, "TransactionType": transaction_type, "Amount": max(1, int(round(float(amount or 0)))), "PartyA": normalize_phone(phone), "PartyB": shortcode, "PhoneNumber": normalize_phone(phone), "CallBackURL": callback, "AccountReference": str(payment_id), "TransactionDesc": description or "Internet package"}
+    response = requests.post(f"{base}/mpesa/stkpush/v1/processrequest", headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"}, json=payload, timeout=30)
+    response.raise_for_status()
+    result = response.json()
+    if str(result.get("ResponseCode")) != "0":
+        raise PaymentProviderError(result.get("ResponseDescription") or "Daraja rejected the payment request.", json.dumps(result), 502)
+    return result
+
+
 def verify_paystack_transaction(tenant, reference):
     secret = get_platform_paystack_secret()
     response = requests.get(
@@ -562,7 +598,10 @@ def daraja_is_configured(tenant):
 def tenant_uses_daraja(tenant):
     tenant = tenant or {}
     provider = str(tenant.get("payment_provider") or "").strip().lower()
-    return provider == "mpesa" and daraja_is_configured(tenant)
+    methods = tenant.get("payment_methods") if isinstance(tenant.get("payment_methods"), list) else []
+    # Tenant credentials are the authorization to process that tenant's
+    # M-Pesa payments; no separate provider flag is required.
+    return daraja_is_configured(tenant) and (provider == "mpesa" or any(str(item).startswith("daraja_") for item in methods))
 
 
 def daraja_base_url(tenant):
@@ -576,6 +615,8 @@ def get_daraja_credentials(tenant):
     consumer_secret = str(tenant.get("daraja_consumer_secret") or "").strip()
     shortcode = str(tenant.get("daraja_shortcode") or "").strip()
     passkey = str(tenant.get("daraja_passkey") or "").strip()
+    till_number = str(tenant.get("daraja_till_number") or "").strip()
+    shortcode_type = str(tenant.get("daraja_shortcode_type") or "CustomerBuyGoodsOnline").strip()
     if not all([consumer_key, consumer_secret, shortcode, passkey]):
         raise PaymentProviderError(
             "M-Pesa is not set up for this business yet. Please contact support.",
@@ -587,6 +628,8 @@ def get_daraja_credentials(tenant):
         "consumer_secret": consumer_secret,
         "shortcode": shortcode,
         "passkey": passkey,
+        "till_number": till_number,
+        "shortcode_type": shortcode_type,
     }
 
 
@@ -641,7 +684,7 @@ def daraja_phone_format(phone):
     return digits
 
 
-def initiate_daraja_payment(tenant, payment_id, amount, phone, description=None, metadata=None):
+def initiate_daraja_payment(tenant, payment_id, amount, phone, description=None, metadata=None, payment_method="daraja_paybill"):
     creds = get_daraja_credentials(tenant)
     tenant_id = (tenant or {}).get("id")
     formatted_phone = daraja_phone_format(phone)
@@ -653,17 +696,18 @@ def initiate_daraja_payment(tenant, payment_id, amount, phone, description=None,
         raise RuntimeError("PUBLIC_APP_URL or PAYSTACK_CALLBACK_BASE_URL is required for the Daraja callback URL")
 
     token = get_daraja_access_token(tenant)
-    timestamp, password = daraja_timestamp_and_password(creds["shortcode"], creds["passkey"])
+    business_shortcode = creds["till_number"] if payment_method == "daraja_buygoods" and creds["till_number"] else creds["shortcode"]
+    timestamp, password = daraja_timestamp_and_password(business_shortcode, creds["passkey"])
     callback_token = make_daraja_callback_token(tenant_id, payment_id)
 
     payload = {
-        "BusinessShortCode": creds["shortcode"],
+        "BusinessShortCode": business_shortcode,
         "Password": password,
         "Timestamp": timestamp,
-        "TransactionType": "CustomerPayBillOnline",
+        "TransactionType": "CustomerBuyGoodsOnline" if payment_method == "daraja_buygoods" else "CustomerPayBillOnline",
         "Amount": max(1, int(round(float(amount or 0)))),
         "PartyA": formatted_phone,
-        "PartyB": creds["shortcode"],
+        "PartyB": business_shortcode,
         "PhoneNumber": formatted_phone,
         "CallBackURL": f"{base_url}/api/daraja/callback/{tenant_id}/{payment_id}/{callback_token}",
         "AccountReference": str((tenant or {}).get("business_name") or tenant_id)[:12],

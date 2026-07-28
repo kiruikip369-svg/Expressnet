@@ -52,6 +52,7 @@ from .services import (
     hotspot_redirect_html,
     routeros_hotspot_fetch_script,
     initiate_paystack_payment,
+    initiate_daraja_stk,
     iso_now,
     firebase_backup_configured,
     list_children,
@@ -427,6 +428,8 @@ def tenant_theme_payload(tenant):
         "daraja_consumer_secret": tenant.get("daraja_consumer_secret") or "",
         "daraja_shortcode": tenant.get("daraja_shortcode") or "",
         "daraja_passkey": tenant.get("daraja_passkey") or "",
+        "daraja_till_number": tenant.get("daraja_till_number") or "",
+        "daraja_shortcode_type": tenant.get("daraja_shortcode_type") or "CustomerBuyGoodsOnline",
         "daraja_environment": tenant.get("daraja_environment") or "sandbox",
         "paystack_subaccount_code": tenant.get("paystack_subaccount_code") or "",
         "paystack_subaccount_status": tenant.get("paystack_subaccount_status") or "not_created",
@@ -600,6 +603,29 @@ def public_packages(request, tenant_id):
     requested_service = str(request.GET.get("service_type") or "").strip().lower()
     packages = _public_packages_for_tenant(tenant_id, requested_service)
     return ok(sorted(packages, key=lambda item: float(item.get("price") or 0)))
+
+
+@csrf_exempt
+@api_view(["GET"])
+def public_pppoe_profile(request, tenant_id):
+    username = str(request.GET.get("username") or "").strip()
+    if not username:
+        return ok({"message": "PPPoE username is required"}, 400)
+    tenant = ref(f"tenants/{tenant_id}").get()
+    customer = next((item for item in list_children(f"tenants/{tenant_id}/customers") if str(item.get("username") or "").lower() == username.lower()), None)
+    if not tenant or not customer or str(customer.get("service_type") or "pppoe").lower() != "pppoe":
+        return ok({"message": "PPPoE customer profile not found"}, 404)
+    usage_bytes = 0
+    active_sessions = 0
+    try:
+        from .models import RadiusSession as RadiusSessionModel
+        from django.db.models import Sum
+        sessions = RadiusSessionModel.objects.filter(tenant_id=tenant_id, customer__username__iexact=username)
+        usage_bytes = int(sessions.aggregate(total=Sum("input_octets") + Sum("output_octets")).get("total") or 0)
+        active_sessions = sessions.filter(stopped_at__isnull=True).count()
+    except Exception:
+        pass
+    return ok({"tenant": {"id": tenant_id, "business_name": tenant.get("business_name"), "logo_url": tenant.get("logo_url") or ""}, "customer": {"name": customer.get("name"), "username": customer.get("username"), "phone": customer.get("phone"), "package": customer.get("package"), "status": customer.get("status"), "expiry_date": customer.get("expiry_date")}, "usage": {"bytes": usage_bytes, "megabytes": round(usage_bytes / 1048576, 2), "active_sessions": active_sessions}})
 
 
 def _public_package_payload(pkg):
@@ -792,7 +818,10 @@ def captive_portal_page(request, tenant_id):
         {package_html}
       </main>
     """
-    return _html_page(f"{tenant.get('business_name') or 'Hotspot'} packages", body_html)
+    response = _html_page(f"{tenant.get('business_name') or 'Hotspot'} packages", body_html)
+    response["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response["Pragma"] = "no-cache"
+    return response
 
 
 @csrf_exempt
@@ -816,7 +845,10 @@ def captive_hotspot_file(request, tenant_id, page):
     content = files.get(str(page or "").strip().lower())
     if not content:
         return HttpResponse("Not found", status=404, content_type="text/plain")
-    return HttpResponse(content, content_type="text/html")
+    response = HttpResponse(content, content_type="text/html")
+    response["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response["Pragma"] = "no-cache"
+    return response
 
 
 @csrf_exempt
@@ -903,6 +935,8 @@ def public_pay(request, tenant_id):
     )
     try:
         if tenant_uses_daraja(tenant):
+            configured_methods = tenant.get("payment_methods") if isinstance(tenant.get("payment_methods"), list) else []
+            daraja_method = str(data.get("payment_method") or next((item for item in configured_methods if str(item).startswith("daraja_")), "daraja_paybill")).strip().lower()
             checkout = initiate_daraja_payment(
                 tenant,
                 payment_ref.key,
@@ -918,6 +952,7 @@ def public_pay(request, tenant_id):
                     "router_ip": router_ip,
                     "router_mac": router_mac,
                 },
+                payment_method=daraja_method,
             )
             payment_ref.update({"daraja_checkout_request_id": checkout.get("checkout_request_id"), "daraja_merchant_request_id": checkout.get("merchant_request_id")})
             return ok({
@@ -1362,22 +1397,14 @@ def router_status(request):
     assignments = request.tenant.get("router_port_assignments") or {}
     snapshot = request.tenant.get("mikrotik_router_snapshot") or {}
     if not has_mikrotik_credentials(tenant):
-        if snapshot or _router_is_agent_linked(request.tenant):
-            return ok(_limited_router_status_payload(snapshot, assignments, "provisioning_snapshot"))
-        return ok({"message": "Run the MikroTik provisioning command first to link this router."}, 400)
+        return ok({"message": "Live MikroTik status requires reachable RouterOS API credentials. Stored provisioning data is not being shown as live status."}, 503)
     try:
         status = router_interface_status(tenant)
         return ok(_limited_router_status_payload(status, assignments, "routeros_api", "Router configuration loaded from the live RouterOS API."))
     except (TimeoutError, OSError) as exc:
-        if snapshot:
-            return ok(_limited_router_status_payload(snapshot, assignments, "provisioning_snapshot", f"Showing the last config pushed by the router via provisioning agent. Live API over VPN is not reachable from the server yet: {exc}"))
-        if request.tenant.get("mikrotik_provisioning_status") in {"script_downloaded", "completed"}:
-            return ok(_limited_router_status_payload({}, assignments, "provisioning_seen", f"The router reached this app, but live API access is not reachable: {exc}"))
-        return ok({"message": f"Unable to reach the MikroTik API on port {tenant.get('mikrotik_port') or 8728}: {exc}"}, 400)
+        return ok({"message": f"Unable to pull live MikroTik status on port {tenant.get('mikrotik_port') or 8728}: {exc}"}, 503)
     except Exception as exc:
-        if snapshot:
-            return ok(_limited_router_status_payload(snapshot, assignments, "provisioning_snapshot", f"Showing the last config pushed by the router via provisioning agent. Live API over VPN failed: {exc}"))
-        return ok({"message": f"Unable to pull MikroTik status: {exc}"}, 400)
+        return ok({"message": f"Unable to pull live MikroTik status: {exc}"}, 503)
 
 
 @csrf_exempt
@@ -2841,6 +2868,8 @@ def settings_business(request):
         "daraja_shortcode",
         "daraja_passkey",
         "daraja_environment",
+        "daraja_till_number",
+        "daraja_shortcode_type",
     ]
     updates = {}
     for field in allowed:
@@ -2864,11 +2893,7 @@ def settings_business(request):
     updates["business_settings_updated_at"] = iso_now()
 
     merged = {**request.tenant, **updates}
-    if data.get("create_subaccount") or (
-        merged.get("bank_code")
-        and merged.get("bank_account_number")
-        and not merged.get("paystack_subaccount_code")
-    ):
+    if data.get("create_subaccount"):
         try:
             updates.update(create_or_update_tenant_subaccount(tenant_id, merged, merged))
         except PaymentProviderError as exc:
