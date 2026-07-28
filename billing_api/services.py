@@ -1257,6 +1257,11 @@ def walled_garden_hosts(tenant, portal_host=None):
 
     # Always include these
     hosts = [portal_host] if portal_host else []
+    # Some hosted portals redirect through a subdomain/CDN hostname during
+    # TLS or platform routing. Keep the configured host and its subdomains
+    # reachable before Hotspot authentication.
+    if portal_host and not portal_host.startswith("*."):
+        hosts.append(f"*.{portal_host}")
     hosts.append("challenges.cloudflare.com")
 
     gateway_hosts = {
