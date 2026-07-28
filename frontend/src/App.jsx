@@ -32,6 +32,7 @@ import NotFound from './pages/NotFound';
 import Packages from './pages/Packages';
 import Payments from './pages/Payments';
 import Profile from './pages/Profile';
+import PppoeProfile from './pages/PppoeProfile';
 import Register from './pages/Register';
 import Reports from './pages/Reports';
 import Vouchers from './pages/Vouchers';
@@ -103,6 +104,8 @@ export default function App() {
       <Route path="/hotspot/:tenantId" element={<CustomerPortal />} />
       <Route path="/pppoe/:tenantId" element={<CustomerPortal />} />
       <Route path="/pppoe-renew/:tenantId" element={<CustomerPortal />} />
+      <Route path="/pppoe-profile/:tenantId" element={<PppoeProfile />} />
+      <Route path="/pppoe-expired/:tenantId" element={<PppoeProfile />} />
       <Route path="/tv/:tenantId" element={<CustomerPortal />} />
       <Route path={`${ADMIN_PATH}/login`} element={<AdminLogin />} />
       <Route element={<AdminProtectedRoute />}>
