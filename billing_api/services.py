@@ -1091,7 +1091,7 @@ def hotspot_portal_target(portal_url, extra_param):
 
 
 def hotspot_login_redirect_html(portal_url):
-    target = hotspot_portal_target(portal_url, "ip=$(ip)&mac=$(mac)&error=$(error)")
+    target = hotspot_portal_target(portal_url, "ip=$(ip)&mac=$(mac)&router_ip=$(server-address)&error=$(error)")
     return (
         "<!doctype html><html><head>"
         "<meta charset='utf-8'>"

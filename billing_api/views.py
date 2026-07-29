@@ -779,7 +779,7 @@ def captive_portal_page(request, tenant_id):
     packages = sorted(_captive_packages(tenant_id), key=lambda item: float(item.get("price") or 0))
     hidden = "".join(
         f"<input type='hidden' name='{html.escape(key)}' value='{html.escape(str(request.GET.get(key) or ''))}'>"
-        for key in ["ip", "mac", "error"]
+        for key in ["ip", "mac", "router_ip", "error"]
         if request.GET.get(key)
     )
     if packages:
@@ -822,8 +822,10 @@ def captive_portal_page(request, tenant_id):
         <p class="muted">Already bought a package? Sign in with the username and password sent to you.</p>
         <form method="post" action="/api/public/{html.escape(str(tenant_id))}/voucher-login">
           {hidden}
+          <div style="display:flex;flex-direction;row; align-items:center;justify-content:center;justify-content:space-between;">
           <input name="username" required placeholder="Username">
           <input name="password" required type="password" placeholder="Password">
+          </div>
           <button type="submit">Sign in</button>
         </form>
       </div>
@@ -877,7 +879,10 @@ def captive_hotspot_file(request, tenant_id, page):
 @api_view(["POST"])
 def captive_portal_pay(request, tenant_id):
     data = body(request)
-    response = public_pay(request, tenant_id)
+    try:
+        response = public_pay(request, tenant_id)
+    except Exception as exc:
+        return _html_page("Payment unavailable", "<main><div class='alert'>Payment could not be started. Please try again or contact the provider.</div></main>", 503)
     payload = getattr(response, "data", {}) or {}
     if response.status_code >= 400:
         return _html_page("Payment unavailable", f"<main><div class='alert'>{html.escape(str(payload.get('message') or payload.get('error') or 'Could not start payment'))}</div><p><a href='/api/captive/{html.escape(str(tenant_id))}'>Back to packages</a></p></main>", response.status_code)
@@ -889,7 +894,7 @@ def captive_portal_pay(request, tenant_id):
 
 @csrf_exempt
 @api_view(["POST"])
-def public_pay(request, tenant_id):
+def _public_pay_impl(request, tenant_id):
     data = body(request)
     if not data.get("package_id") or not data.get("phone"):
         return ok({"message": "Package and phone number are required"}, 400)
@@ -1025,6 +1030,18 @@ def public_pay(request, tenant_id):
 
 @csrf_exempt
 @api_view(["POST"])
+def public_pay(request, tenant_id):
+    """Keep every public checkout failure as a useful API response."""
+    try:
+        return _public_pay_impl(request, tenant_id)
+    except PaymentProviderError as exc:
+        return ok({"success": False, "message": exc.public_message}, exc.status_code)
+    except Exception:
+        return ok({"success": False, "message": "Payment gateway is temporarily unavailable. Please try again later."}, 503)
+
+
+@csrf_exempt
+@api_view(["POST"])
 def public_redeem(request, tenant_id):
     receipt_code = body(request).get("receipt_code") or body(request).get("payment_code")
     if not receipt_code:
@@ -1071,7 +1088,20 @@ def public_voucher_login(request, tenant_id):
     if not voucher or voucher.get("status") != "active" or (not code and str(voucher.get("password") or "") != password):
         return ok({"message": "Invalid or inactive voucher credentials"}, 401)
     tenant = ref(f"tenants/{tenant_id}").get() or {}
-    return ok({"success": True, "username": voucher.get("username"), "password": voucher.get("password"), "router_ip": data.get("router_ip") or tenant.get("mikrotik_last_seen_ip") or "", "package_name": voucher.get("package"), "router_status": voucher.get("router_status")})
+    result = {"success": True, "username": voucher.get("username"), "password": voucher.get("password"), "router_ip": data.get("router_ip") or tenant.get("mikrotik_last_seen_ip") or "", "package_name": voucher.get("package"), "router_status": voucher.get("router_status")}
+    # Captive requests are browser form posts from MikroTik. Return a page
+    # that submits the actual credentials to the router, rather than JSON.
+    # MikroTik submits application/x-www-form-urlencoded and often sends
+    # Accept: */*. Do not return JSON for that captive-browser request.
+    accepts_html = str(request.content_type or "").lower() != "application/json" and not request.headers.get("X-Requested-With")
+    if accepts_html:
+        router_ip = html.escape(str(result.get("router_ip") or ""), quote=True)
+        username_value = html.escape(str(result.get("username") or ""), quote=True)
+        password_value = html.escape(str(result.get("password") or ""), quote=True)
+        if not router_ip:
+            return _html_page("Voucher accepted", "<main><div class='card'>Voucher accepted. Please open the router login page to connect.</div></main>")
+        return _html_page("Connecting", f"<main><div class='card'>Voucher accepted. Connecting you to the internet...</div><form id='login' method='post' action='http://{router_ip}/login'><input type='hidden' name='username' value='{username_value}'><input type='hidden' name='password' value='{password_value}'></form><script>document.getElementById('login').submit();</script></main>")
+    return ok(result)
 
 
 @csrf_exempt
