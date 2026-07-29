@@ -1380,8 +1380,8 @@ def ensure_hotspot_captive_portal(tenant, base_url=None):
         try:
             hotspot_servers = api.path("ip", "hotspot").select()
             for server in hotspot_servers:
-                if server.get(".id") and str(server.get("disabled") or "no").lower() != "yes":
-                    api.path("ip", "hotspot").update(**{".id": server[".id"], "profile": profile_name})
+                if server.get(".id"):
+                    api.path("ip", "hotspot").update(**{".id": server[".id"], "profile": profile_name, "disabled": "no"})
         except Exception:
             pass
         return {"profile": profile_name, "portal_url": portal_url, "portal_host": portal_host, "login_page": login_page}
