@@ -430,7 +430,7 @@ def tenant_theme_payload(tenant):
         "daraja_passkey": tenant.get("daraja_passkey") or "",
         "daraja_till_number": tenant.get("daraja_till_number") or "",
         "daraja_shortcode_type": tenant.get("daraja_shortcode_type") or "CustomerBuyGoodsOnline",
-        "daraja_environment": tenant.get("daraja_environment") or "sandbox",
+        "daraja_environment": tenant.get("daraja_environment") or "production",
         "paystack_subaccount_code": tenant.get("paystack_subaccount_code") or "",
         "paystack_subaccount_status": tenant.get("paystack_subaccount_status") or "not_created",
         "paystack_platform_percentage": tenant.get("paystack_platform_percentage") or os.getenv("PAYSTACK_PLATFORM_PERCENTAGE", "1"),
@@ -1413,9 +1413,13 @@ def vouchers(request):
     code = secrets.token_hex(4).upper()
     while find_child_by_field(voucher_path, "code", code):
         code = secrets.token_hex(4).upper()
-    voucher = {"code": code, "username": code, "password": code, "package": package.get("name"), "package_id": package_id, "price": float(package.get("price") or 0), "status": "active", "service_type": "hotspot", "router_status": "pending", "created_at": iso_now()}
+    voucher_username = f"vch-{secrets.token_hex(4).lower()}"
+    voucher_password = secrets.token_urlsafe(8)
+    voucher = {"code": code, "username": voucher_username, "password": voucher_password, "package": package.get("name"), "package_id": package_id, "price": float(package.get("price") or 0), "status": "active", "service_type": "hotspot", "router_status": "pending", "created_at": iso_now()}
     if not has_mikrotik_credentials(request.tenant) and not _router_is_agent_linked(request.tenant):
         return ok({"message": "Configure MikroTik credentials before creating vouchers"}, 400)
+    saved = ref(voucher_path).push(voucher)
+    voucher_id = saved.key
     try:
         api = router_connect(request.tenant)
         try:
@@ -1427,14 +1431,15 @@ def vouchers(request):
                 # itself from reaching the router.
                 profile_name = "default"
             users = api.path("ip", "hotspot", "user")
-            existing = next((item for item in users.get() if str(item.get("name") or "") == code), None)
+            existing = next((item for item in users.get() if str(item.get("name") or "") == voucher_username), None)
             if existing and existing.get(".id"):
-                users.update(**{".id": existing[".id"], "name": code, "password": code, "profile": profile_name, "disabled": "no", "comment": "billing-saas-voucher"})
+                users.update(**{".id": existing[".id"], "name": voucher_username, "password": voucher_password, "profile": profile_name, "disabled": "no", "comment": f"billing-saas-voucher:{code}"})
             else:
-                users.add(name=code, password=code, profile=profile_name, disabled="no", comment="billing-saas-voucher")
+                users.add(name=voucher_username, password=voucher_password, profile=profile_name, disabled="no", comment=f"billing-saas-voucher:{code}")
         finally:
             api.close()
         voucher["router_status"] = "provisioned"
+        ref(f"{voucher_path}/{voucher_id}").update({"router_status": voucher["router_status"], "router_synced_at": iso_now(), "router_error": None})
     except Exception as exc:
         # Live push failed (e.g. WireGuard tunnel temporarily down) — still
         # save the voucher and queue the router-side creation for the
@@ -1444,16 +1449,16 @@ def vouchers(request):
         profile_name = _rsc_escape(package.get("name") or "default")
         script = (
             f':do {{ :if ([:len [/ip hotspot user profile find name="{profile_name}"]] = 0) do={{ /ip hotspot user profile add name="{profile_name}" }} }} on-error={{}};'
-            f':if ([:len [/ip hotspot user find name="{_rsc_escape(code)}"]] = 0) do={{'
-            f' /ip hotspot user add name="{_rsc_escape(code)}" password="{_rsc_escape(code)}" '
-            f'profile="{profile_name}" disabled=no comment="billing-saas-voucher" }} else={{'
-            f' /ip hotspot user set [find name="{_rsc_escape(code)}"] password="{_rsc_escape(code)}" profile="{profile_name}" disabled=no comment="billing-saas-voucher" }};'
+            f':if ([:len [/ip hotspot user find name="{_rsc_escape(voucher_username)}"]] = 0) do={{'
+            f' /ip hotspot user add name="{_rsc_escape(voucher_username)}" password="{_rsc_escape(voucher_password)}" '
+            f'profile="{profile_name}" disabled=no comment="billing-saas-voucher:{_rsc_escape(code)}" }} else={{'
+            f' /ip hotspot user set [find name="{_rsc_escape(voucher_username)}"] password="{_rsc_escape(voucher_password)}" profile="{profile_name}" disabled=no comment="billing-saas-voucher:{_rsc_escape(code)}" }};'
         )
         try:
             _queue_router_command(request, {"type": "sync_voucher", "script": script})
         except Exception as queue_exc:
             voucher["router_error"] = f"{voucher['router_error']}; queue failed: {queue_exc}"
-    saved = ref(voucher_path).push(voucher)
+        ref(f"{voucher_path}/{voucher_id}").update({"router_status": voucher["router_status"], "router_error": voucher.get("router_error")})
     message = "Hotspot voucher created" if voucher["router_status"] == "provisioned" else "Voucher created and queued — it will be active on the router within about 30 seconds."
     return ok({"success": True, "message": message, "voucher": {"id": saved.key, **voucher}}, 201)
 

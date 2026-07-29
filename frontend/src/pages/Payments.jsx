@@ -78,7 +78,7 @@ export default function Payments() {
     loadPayments();
     api.get('/settings/business').then(({ data }) => {
       setPaymentSettings({
-      methods: data.payment_methods || ['bank'], businessNumber: data.business_number || '', bankCode: data.bank_code || '', bankName: data.bank_name || '', bankAccount: data.bank_account_number || '', consumerKey: data.daraja_consumer_key || '', consumerSecret: data.daraja_consumer_secret || '', shortcode: data.daraja_shortcode || '', tillNumber: data.daraja_till_number || '', shortcodeType: data.daraja_shortcode_type || 'CustomerBuyGoodsOnline', passkey: data.daraja_passkey || '', environment: data.daraja_environment || 'sandbox',
+      methods: data.payment_methods || ['bank'], businessNumber: data.business_number || '', bankCode: data.bank_code || '', bankName: data.bank_name || '', bankAccount: data.bank_account_number || '', consumerKey: data.daraja_consumer_key || '', consumerSecret: data.daraja_consumer_secret || '', shortcode: data.daraja_shortcode || '', tillNumber: data.daraja_till_number || '', shortcodeType: data.daraja_shortcode_type || 'CustomerBuyGoodsOnline', passkey: data.daraja_passkey || '', environment: data.daraja_environment || 'production',
       });
       const method = (data.payment_methods || [])[0];
       setSelectedMethod(['bank', 'paybill', 'buygoods', 'daraja_paybill', 'daraja_buygoods'].includes(method) ? method : 'bank');

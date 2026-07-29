@@ -605,7 +605,7 @@ def tenant_uses_daraja(tenant):
 
 
 def daraja_base_url(tenant):
-    environment = str((tenant or {}).get("daraja_environment") or "sandbox").strip().lower()
+    environment = str((tenant or {}).get("daraja_environment") or "production").strip().lower()
     return "https://api.safaricom.co.ke" if environment == "production" else "https://sandbox.safaricom.co.ke"
 
 
@@ -634,7 +634,7 @@ def get_daraja_credentials(tenant, payment_method="daraja_paybill"):
     }
 
 
-def get_daraja_access_token(tenant):
+def get_daraja_access_token(tenant, payment_method="daraja_paybill"):
     creds = get_daraja_credentials(tenant, payment_method)
     response = requests.get(
         f"{daraja_base_url(tenant)}/oauth/v1/generate?grant_type=client_credentials",
@@ -693,7 +693,7 @@ def daraja_phone_format(phone):
 
 
 def initiate_daraja_payment(tenant, payment_id, amount, phone, description=None, metadata=None, payment_method="daraja_paybill"):
-    creds = get_daraja_credentials(tenant)
+    creds = get_daraja_credentials(tenant, payment_method)
     tenant_id = (tenant or {}).get("id")
     formatted_phone = daraja_phone_format(phone)
     if not formatted_phone or not formatted_phone.startswith("254") or len(formatted_phone) != 12:
@@ -703,7 +703,7 @@ def initiate_daraja_payment(tenant, payment_id, amount, phone, description=None,
     if not base_url:
         raise RuntimeError("PUBLIC_APP_URL or PAYSTACK_CALLBACK_BASE_URL is required for the Daraja callback URL")
 
-    token = get_daraja_access_token(tenant)
+    token = get_daraja_access_token(tenant, payment_method)
     business_shortcode = creds["till_number"] if payment_method == "daraja_buygoods" and creds["till_number"] else creds["shortcode"]
     timestamp, password = daraja_timestamp_and_password(business_shortcode, creds["passkey"])
     callback_token = make_daraja_callback_token(tenant_id, payment_id)
