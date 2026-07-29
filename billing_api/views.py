@@ -660,16 +660,22 @@ def _html_page(title, body, status=200):
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{html.escape(title)}</title>
   <style>
-    body{{margin:0;font-family:Arial,sans-serif;background:#f3f6fb;color:#0f172a}}
-    header{{background:#183b60;color:white;padding:24px 18px}}
-    main{{max-width:860px;margin:0 auto;padding:18px}}
-    .card{{background:white;border:1px solid #dbe4f0;border-radius:8px;padding:16px;margin:12px 0;box-shadow:0 2px 10px rgba(15,23,42,.06)}}
+    *{{box-sizing:border-box}}
+    body{{margin:0;font-family:Arial,sans-serif;background:#f3f6fb;color:#0f172a;line-height:1.45;overflow-x:hidden}}
+    header{{background:#183b60;color:white;padding:clamp(18px,5vw,32px) clamp(16px,5vw,28px)}}
+    header h1{{margin:0 0 6px;font-size:clamp(22px,6vw,34px);overflow-wrap:anywhere}}
+    main{{width:100%;max-width:860px;margin:0 auto;padding:clamp(12px,4vw,24px)}}
+    .card{{background:white;border:1px solid #dbe4f0;border-radius:10px;padding:clamp(13px,4vw,20px);margin:12px 0;box-shadow:0 2px 10px rgba(15,23,42,.06);min-width:0}}
     .pkg{{display:grid;gap:10px;grid-template-columns:1fr;align-items:end}}
-    @media(min-width:720px){{.pkg{{grid-template-columns:1.2fr .7fr .8fr auto}}}}
-    input,button{{font:inherit;border-radius:6px;border:1px solid #cbd5e1;padding:10px 12px}}
+    .pkg > *{{min-width:0}}
+    form{{width:100%}}
+    input,button{{width:100%;min-height:44px;font:inherit;border-radius:7px;border:1px solid #cbd5e1;padding:10px 12px}}
     button{{background:#f97316;color:white;border-color:#f97316;font-weight:700;cursor:pointer}}
     .muted{{color:#64748b;font-size:14px}} .price{{font-weight:800;color:#0f172a}}
     .alert{{background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;border-radius:8px;padding:12px;margin:12px 0}}
+    @media(min-width:560px){{.pkg{{grid-template-columns:1fr 1fr}} .pkg button{{grid-column:1/-1}}}}
+    @media(min-width:720px){{.pkg{{grid-template-columns:1.2fr .7fr .8fr auto}} .pkg button{{grid-column:auto;width:auto}}}}
+    @media(max-width:559px){{.card form{{display:grid;grid-template-columns:1fr;gap:10px}} .card form div{{display:grid!important;grid-template-columns:1fr!important;gap:10px!important}}}}
   </style>
 </head>
 <body>{body}</body>
@@ -822,7 +828,7 @@ def captive_portal_page(request, tenant_id):
         <p class="muted">Already bought a package? Sign in with the username and password sent to you.</p>
         <form method="post" action="/api/public/{html.escape(str(tenant_id))}/voucher-login">
           {hidden}
-          <div style="display:flex;flex-direction;row; align-items:center;justify-content:center;justify-content:space-between;">
+          <div style="display:flex;flex-direction;row; align-items:center;justify-content:center;justify-content:space-around;">
           <input name="username" required placeholder="Username">
           <input name="password" required type="password" placeholder="Password">
           </div>
@@ -1411,10 +1417,21 @@ def vouchers(request):
     if not has_mikrotik_credentials(request.tenant) and not _router_is_agent_linked(request.tenant):
         return ok({"message": "Configure MikroTik credentials before creating vouchers"}, 400)
     try:
-        create_hotspot_profile(request.tenant, package.get("name"), package.get("speed"))
         api = router_connect(request.tenant)
         try:
-            api.path("ip", "hotspot", "user").add(name=code, password=code, profile=package.get("name"), disabled="no", comment="billing-saas-voucher")
+            profile_name = str(package.get("name") or "default")
+            try:
+                create_hotspot_profile(request.tenant, profile_name, package.get("speed"))
+            except Exception:
+                # A missing/invalid profile must not prevent the credential
+                # itself from reaching the router.
+                profile_name = "default"
+            users = api.path("ip", "hotspot", "user")
+            existing = next((item for item in users.get() if str(item.get("name") or "") == code), None)
+            if existing and existing.get(".id"):
+                users.update(**{".id": existing[".id"], "name": code, "password": code, "profile": profile_name, "disabled": "no", "comment": "billing-saas-voucher"})
+            else:
+                users.add(name=code, password=code, profile=profile_name, disabled="no", comment="billing-saas-voucher")
         finally:
             api.close()
         voucher["router_status"] = "provisioned"
@@ -1424,12 +1441,18 @@ def vouchers(request):
         # agent's next ~30s poll, instead of losing the voucher entirely.
         voucher["router_status"] = "queued"
         voucher["router_error"] = str(exc)
+        profile_name = _rsc_escape(package.get("name") or "default")
         script = (
+            f':do {{ :if ([:len [/ip hotspot user profile find name="{profile_name}"]] = 0) do={{ /ip hotspot user profile add name="{profile_name}" }} }} on-error={{}};'
             f':if ([:len [/ip hotspot user find name="{_rsc_escape(code)}"]] = 0) do={{'
             f' /ip hotspot user add name="{_rsc_escape(code)}" password="{_rsc_escape(code)}" '
-            f'profile="{_rsc_escape(package.get("name") or "")}" disabled=no comment="billing-saas-voucher" }};'
+            f'profile="{profile_name}" disabled=no comment="billing-saas-voucher" }} else={{'
+            f' /ip hotspot user set [find name="{_rsc_escape(code)}"] password="{_rsc_escape(code)}" profile="{profile_name}" disabled=no comment="billing-saas-voucher" }};'
         )
-        _queue_router_command(request, {"type": "sync_voucher", "script": script})
+        try:
+            _queue_router_command(request, {"type": "sync_voucher", "script": script})
+        except Exception as queue_exc:
+            voucher["router_error"] = f"{voucher['router_error']}; queue failed: {queue_exc}"
     saved = ref(voucher_path).push(voucher)
     message = "Hotspot voucher created" if voucher["router_status"] == "provisioned" else "Voucher created and queued — it will be active on the router within about 30 seconds."
     return ok({"success": True, "message": message, "voucher": {"id": saved.key, **voucher}}, 201)

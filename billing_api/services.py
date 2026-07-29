@@ -587,12 +587,12 @@ def verify_paystack_signature(raw_body, signature, secret):
 # approval queue in this codebase yet; this is the natural equivalent.
 # ---------------------------------------------------------------------------
 
-def daraja_is_configured(tenant):
+def daraja_is_configured(tenant, payment_method=None):
     tenant = tenant or {}
-    return all(
-        str(tenant.get(field) or "").strip()
-        for field in ("daraja_consumer_key", "daraja_consumer_secret", "daraja_shortcode", "daraja_passkey")
-    )
+    common = all(str(tenant.get(field) or "").strip() for field in ("daraja_consumer_key", "daraja_consumer_secret", "daraja_passkey"))
+    if payment_method == "daraja_buygoods":
+        return common and bool(str(tenant.get("daraja_till_number") or tenant.get("daraja_shortcode") or "").strip())
+    return common and bool(str(tenant.get("daraja_shortcode") or "").strip())
 
 
 def tenant_uses_daraja(tenant):
@@ -600,10 +600,8 @@ def tenant_uses_daraja(tenant):
     methods = tenant.get("payment_methods") if isinstance(tenant.get("payment_methods"), list) else []
     # Daraja is opt-in per tenant payment method. Paystack remains the
     # platform default, regardless of credentials stored on the tenant.
-    return daraja_is_configured(tenant) and any(
-        str(item).strip().lower() in {"daraja_paybill", "daraja_buygoods"}
-        for item in methods
-    )
+    selected = next((str(item).strip().lower() for item in methods if str(item).strip().lower() in {"daraja_paybill", "daraja_buygoods"}), "")
+    return bool(selected) and daraja_is_configured(tenant, selected)
 
 
 def daraja_base_url(tenant):
@@ -611,7 +609,7 @@ def daraja_base_url(tenant):
     return "https://api.safaricom.co.ke" if environment == "production" else "https://sandbox.safaricom.co.ke"
 
 
-def get_daraja_credentials(tenant):
+def get_daraja_credentials(tenant, payment_method="daraja_paybill"):
     tenant = tenant or {}
     consumer_key = str(tenant.get("daraja_consumer_key") or "").strip()
     consumer_secret = str(tenant.get("daraja_consumer_secret") or "").strip()
@@ -619,7 +617,8 @@ def get_daraja_credentials(tenant):
     passkey = str(tenant.get("daraja_passkey") or "").strip()
     till_number = str(tenant.get("daraja_till_number") or "").strip()
     shortcode_type = str(tenant.get("daraja_shortcode_type") or "CustomerBuyGoodsOnline").strip()
-    if not all([consumer_key, consumer_secret, shortcode, passkey]):
+    business_number = till_number if payment_method == "daraja_buygoods" else shortcode
+    if not all([consumer_key, consumer_secret, business_number, passkey]):
         raise PaymentProviderError(
             "M-Pesa is not set up for this business yet. Please contact support.",
             "Tenant is missing one or more Daraja credentials",
@@ -636,7 +635,7 @@ def get_daraja_credentials(tenant):
 
 
 def get_daraja_access_token(tenant):
-    creds = get_daraja_credentials(tenant)
+    creds = get_daraja_credentials(tenant, payment_method)
     response = requests.get(
         f"{daraja_base_url(tenant)}/oauth/v1/generate?grant_type=client_credentials",
         auth=(creds["consumer_key"], creds["consumer_secret"]),
