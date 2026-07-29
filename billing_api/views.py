@@ -1421,6 +1421,7 @@ def vouchers(request):
     saved = ref(voucher_path).push(voucher)
     voucher_id = saved.key
     try:
+        ensure_hotspot_captive_portal({"id": tenant_id, **request.tenant}, public_base_url(request).rstrip("/"))
         api = router_connect(request.tenant)
         try:
             profile_name = str(package.get("name") or "default")

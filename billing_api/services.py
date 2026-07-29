@@ -1375,6 +1375,15 @@ def ensure_hotspot_captive_portal(tenant, base_url=None):
             login_page = ensure_hotspot_login_redirect(api, portal_url)
         except Exception:
             login_page = None
+        # A profile alone is not enough: the active Hotspot server must use
+        # it or RouterOS will keep serving its default login/no-internet page.
+        try:
+            hotspot_servers = api.path("ip", "hotspot").select()
+            for server in hotspot_servers:
+                if server.get(".id") and str(server.get("disabled") or "no").lower() != "yes":
+                    api.path("ip", "hotspot").update(**{".id": server[".id"], "profile": profile_name})
+        except Exception:
+            pass
         return {"profile": profile_name, "portal_url": portal_url, "portal_host": portal_host, "login_page": login_page}
     finally:
         api.close()
