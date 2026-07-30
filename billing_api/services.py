@@ -2,6 +2,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
 import socket
 import ssl
@@ -22,6 +23,7 @@ from .models import AdminAuditLog, AdminUser, Customer, InternetPackage, Payment
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+logger = logging.getLogger(__name__)
 
 
 class PaymentProviderError(RuntimeError):
@@ -619,6 +621,21 @@ def get_daraja_credentials(tenant, payment_method="daraja_paybill"):
     shortcode_type = str(tenant.get("daraja_shortcode_type") or "CustomerBuyGoodsOnline").strip()
     business_number = till_number if payment_method == "daraja_buygoods" else shortcode
     if not all([consumer_key, consumer_secret, business_number, passkey]):
+        logger.warning(
+            "Daraja credentials incomplete for tenant=%s method=%s missing=%s",
+            tenant.get("id"),
+            payment_method,
+            [
+                name
+                for name, value in {
+                    "consumer_key": consumer_key,
+                    "consumer_secret": consumer_secret,
+                    "business_number": business_number,
+                    "passkey": passkey,
+                }.items()
+                if not value
+            ],
+        )
         raise PaymentProviderError(
             "M-Pesa is not set up for this business yet. Please contact support.",
             "Tenant is missing one or more Daraja credentials",
@@ -644,6 +661,13 @@ def get_daraja_access_token(tenant, payment_method="daraja_paybill"):
     try:
         response.raise_for_status()
     except requests.HTTPError as exc:
+        logger.warning(
+            "Daraja OAuth failed for tenant=%s method=%s status=%s response=%s",
+            (tenant or {}).get("id"),
+            payment_method,
+            response.status_code,
+            response.text[:500],
+        )
         raise PaymentProviderError(
             "M-Pesa is temporarily unavailable. Please try again shortly.",
             f"Daraja OAuth failed {response.status_code}: {response.text[:500]}",
@@ -652,12 +676,20 @@ def get_daraja_access_token(tenant, payment_method="daraja_paybill"):
     try:
         token = response.json().get("access_token")
     except ValueError as exc:
+        logger.warning(
+            "Daraja OAuth returned invalid JSON for tenant=%s method=%s status=%s response=%s",
+            (tenant or {}).get("id"),
+            payment_method,
+            response.status_code,
+            response.text[:500],
+        )
         raise PaymentProviderError(
             "M-Pesa is temporarily unavailable. Please try again shortly.",
             f"Daraja OAuth returned invalid JSON: {response.text[:500]}",
             503,
         ) from exc
     if not token:
+        logger.warning("Daraja OAuth returned no access token for tenant=%s method=%s", (tenant or {}).get("id"), payment_method)
         raise PaymentProviderError("M-Pesa is temporarily unavailable. Please try again shortly.", "Daraja OAuth returned no access_token", 503)
     return token
 
@@ -697,10 +729,12 @@ def initiate_daraja_payment(tenant, payment_id, amount, phone, description=None,
     tenant_id = (tenant or {}).get("id")
     formatted_phone = daraja_phone_format(phone)
     if not formatted_phone or not formatted_phone.startswith("254") or len(formatted_phone) != 12:
+        logger.info("Daraja STK rejected invalid phone for tenant=%s payment=%s method=%s phone=%s", tenant_id, payment_id, payment_method, phone)
         raise PaymentProviderError("Enter a valid M-Pesa phone number (07XXXXXXXX or 2547XXXXXXXX).", "Invalid phone for Daraja STK push", 400)
 
     base_url = get_public_base_url()
     if not base_url:
+        logger.error("Daraja callback base URL missing for tenant=%s payment=%s", tenant_id, payment_id)
         raise RuntimeError("PUBLIC_APP_URL or PAYSTACK_CALLBACK_BASE_URL is required for the Daraja callback URL")
 
     token = get_daraja_access_token(tenant, payment_method)
@@ -708,6 +742,7 @@ def initiate_daraja_payment(tenant, payment_id, amount, phone, description=None,
     timestamp, password = daraja_timestamp_and_password(business_shortcode, creds["passkey"])
     callback_token = make_daraja_callback_token(tenant_id, payment_id)
 
+    party_b = creds["till_number"] if payment_method == "daraja_buygoods" and creds["till_number"] else business_shortcode
     payload = {
         "BusinessShortCode": business_shortcode,
         "Password": password,
@@ -715,7 +750,7 @@ def initiate_daraja_payment(tenant, payment_id, amount, phone, description=None,
         "TransactionType": "CustomerBuyGoodsOnline" if payment_method == "daraja_buygoods" else "CustomerPayBillOnline",
         "Amount": max(1, int(round(float(amount or 0)))),
         "PartyA": formatted_phone,
-        "PartyB": business_shortcode,
+        "PartyB": party_b,
         "PhoneNumber": formatted_phone,
         "CallBackURL": f"{base_url}/api/daraja/callback/{tenant_id}/{payment_id}/{callback_token}",
         "AccountReference": str((tenant or {}).get("business_name") or tenant_id)[:12],
@@ -731,6 +766,14 @@ def initiate_daraja_payment(tenant, payment_id, amount, phone, description=None,
     try:
         response.raise_for_status()
     except requests.HTTPError as exc:
+        logger.warning(
+            "Daraja STK push failed for tenant=%s payment=%s method=%s status=%s response=%s",
+            tenant_id,
+            payment_id,
+            payment_method,
+            response.status_code,
+            response.text[:500],
+        )
         raise PaymentProviderError(
             "Could not start the M-Pesa payment. Please try again.",
             f"Daraja STK push failed {response.status_code}: {response.text[:500]}",
@@ -739,23 +782,41 @@ def initiate_daraja_payment(tenant, payment_id, amount, phone, description=None,
     try:
         data = response.json()
     except ValueError as exc:
+        logger.warning(
+            "Daraja STK returned invalid JSON for tenant=%s payment=%s method=%s status=%s response=%s",
+            tenant_id,
+            payment_id,
+            payment_method,
+            response.status_code,
+            response.text[:500],
+        )
         raise PaymentProviderError(
             "Could not start the M-Pesa payment. Please try again.",
             f"Daraja returned invalid JSON: {response.text[:500]}",
             502,
         ) from exc
     if str(data.get("ResponseCode") or "0") not in {"0", "00"} and not data.get("CheckoutRequestID"):
+        logger.warning("Daraja rejected STK push for tenant=%s payment=%s method=%s response=%s", tenant_id, payment_id, payment_method, data)
         raise PaymentProviderError(
             str(data.get("ResponseDescription") or data.get("errorMessage") or "Daraja rejected the payment request."),
             f"Daraja rejected STK push: {data}",
             502,
         )
     if str(data.get("ResponseCode")) != "0":
+        logger.warning("Daraja STK non-success response for tenant=%s payment=%s method=%s response=%s", tenant_id, payment_id, payment_method, data)
         raise PaymentProviderError(
             "Could not start the M-Pesa payment. Please try again.",
             data.get("ResponseDescription") or data.get("errorMessage") or "Daraja rejected the STK push request",
             502,
         )
+    logger.info(
+        "Daraja STK push started for tenant=%s payment=%s method=%s checkout=%s merchant=%s",
+        tenant_id,
+        payment_id,
+        payment_method,
+        data.get("CheckoutRequestID"),
+        data.get("MerchantRequestID"),
+    )
     return {
         "checkout_request_id": data.get("CheckoutRequestID"),
         "merchant_request_id": data.get("MerchantRequestID"),
@@ -778,6 +839,30 @@ def normalize_rate_limit(speed):
     unit = "".join(ch for ch in value if ch.isalpha()).lower() or "m"
     router_unit = "G" if unit.startswith("g") else "K" if unit.startswith("k") else "M"
     return f"{amount}{router_unit}/{amount}{router_unit}" if amount else value.replace(" ", "")
+
+
+def routeros_duration(value):
+    """Format seconds/timedelta as a RouterOS duration such as 6h or 30d."""
+    if value in {None, ""}:
+        return None
+    try:
+        total_seconds = int(value.total_seconds()) if hasattr(value, "total_seconds") else int(float(value))
+    except (TypeError, ValueError):
+        return None
+    total_seconds = max(1, total_seconds)
+    days, remainder = divmod(total_seconds, 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    parts = []
+    if days:
+        parts.append(f"{days}d")
+    if hours:
+        parts.append(f"{hours}h")
+    if minutes:
+        parts.append(f"{minutes}m")
+    if seconds or not parts:
+        parts.append(f"{seconds}s")
+    return "".join(parts)
 
 
 class RouterOSAPIError(RuntimeError):
@@ -999,7 +1084,7 @@ def find_router_item(api, path, name):
     return None
 
 
-def upsert_router_profile(tenant, path, name, speed):
+def upsert_router_profile(tenant, path, name, speed, session_timeout=None):
     if not has_mikrotik_credentials(tenant):
         return None
     api = router_connect(tenant)
@@ -1010,6 +1095,9 @@ def upsert_router_profile(tenant, path, name, speed):
         rate_limit = normalize_rate_limit(speed)
         if rate_limit:
             fields["rate-limit"] = rate_limit
+        timeout = routeros_duration(session_timeout)
+        if timeout and path in {("ppp", "profile"), ("ip", "hotspot", "user", "profile")}:
+            fields["session-timeout"] = timeout
         if existing and existing.get(".id"):
             router_path.update(**{".id": existing[".id"], **fields})
             return existing[".id"]
@@ -1018,12 +1106,12 @@ def upsert_router_profile(tenant, path, name, speed):
         api.close()
 
 
-def create_ppp_profile(tenant, name, speed):
-    return upsert_router_profile(tenant, ("ppp", "profile"), name, speed)
+def create_ppp_profile(tenant, name, speed, session_timeout=None):
+    return upsert_router_profile(tenant, ("ppp", "profile"), name, speed, session_timeout)
 
 
-def create_hotspot_profile(tenant, name, speed):
-    return upsert_router_profile(tenant, ("ip", "hotspot", "user", "profile"), name, speed)
+def create_hotspot_profile(tenant, name, speed, session_timeout=None):
+    return upsert_router_profile(tenant, ("ip", "hotspot", "user", "profile"), name, speed, session_timeout)
 
 
 def package_service_type(package):
@@ -1352,6 +1440,7 @@ def ensure_hotspot_captive_portal(tenant, base_url=None):
                 "name": profile_name,
                 "login-by": "http-pap,http-chap",
                 "use-radius": "no",
+                "radius-accounting": "no",
                 "html-directory": "hotspot",
                 "comment": f"billing-saas captive portal: {portal_url}",
             },
@@ -1603,8 +1692,8 @@ def _build_port_command_script(interface_name, service_type, profile_name, porta
     hotspot_setup = ""
     if portal_url:
         hotspot_setup = (
-            f':do {{ /ip hotspot profile add name="billing-saas-captive" login-by=http-pap,http-chap use-radius=yes radius-accounting=yes radius-interim-update=5m html-directory=hotspot comment="billing-saas captive portal: {portal_comment}" }} '
-            f'on-error={{ /ip hotspot profile set [find name="billing-saas-captive"] login-by=http-pap,http-chap use-radius=yes radius-accounting=yes radius-interim-update=5m html-directory=hotspot comment="billing-saas captive portal: {portal_comment}" }}; '
+            f':do {{ /ip hotspot profile add name="billing-saas-captive" login-by=http-pap,http-chap use-radius=no radius-accounting=no html-directory=hotspot comment="billing-saas captive portal: {portal_comment}" }} '
+            f'on-error={{ /ip hotspot profile set [find name="billing-saas-captive"] login-by=http-pap,http-chap use-radius=no radius-accounting=no html-directory=hotspot comment="billing-saas captive portal: {portal_comment}" }}; '
             + "".join(
                 f':do {{ /ip hotspot walled-garden add action=allow dst-host="{_rsc_escape(h)}" comment="billing-saas captive portal access" }} on-error={{ :log warning "Billing SaaS: walled-garden add failed" }}; '
                 for h in walled_garden_hosts(tenant, portal_host)
@@ -1687,17 +1776,33 @@ def upsert_customer_access(tenant, customer, disabled=False):
         # Explicit password stripping or validation logic per specifications
         fields = {
             "name": customer.get("username"),
-            "password": "",  # Blanking password requirement out for seamless portal authentication
+            "password": customer.get("password"),
             "profile": customer.get("package_name") or customer.get("package"),
             "disabled": "yes" if disabled else "no",
+            "comment": f"billing-saas access expires: {customer.get('expires_at') or customer.get('expiry_date') or ''}".strip(),
         }
         if service_type == "pppoe":
             fields["password"] = customer.get("password")  # Keep for PPPoE authentication
             fields["service"] = "pppoe"
+        else:
+            limit_uptime = routeros_duration(customer.get("duration_seconds") or customer.get("limit_seconds"))
+            if limit_uptime:
+                fields["limit-uptime"] = limit_uptime
         if existing and existing.get(".id"):
             router_path.update(**{".id": existing[".id"], **fields})
+            if service_type == "hotspot" and not disabled and (customer.get("duration_seconds") or customer.get("limit_seconds")):
+                try:
+                    api.command("/ip/hotspot/user/reset-counters", {"numbers": existing[".id"]})
+                except Exception:
+                    pass
             return existing[".id"]
-        return router_path.add(**fields)
+        item_id = router_path.add(**fields)
+        if service_type == "hotspot" and item_id and not disabled and (customer.get("duration_seconds") or customer.get("limit_seconds")):
+            try:
+                api.command("/ip/hotspot/user/reset-counters", {"numbers": item_id})
+            except Exception:
+                pass
+        return item_id
     finally:
         api.close()
 
@@ -1754,15 +1859,20 @@ def set_customer_enabled(tenant, username, service_type="hotspot", enabled=True)
             return None
         result = api.path(*path).update(**{".id": existing[".id"], "disabled": "no" if enabled else "yes"})
 
+        active_path = ("ppp", "active") if service_type == "pppoe" else ("ip", "hotspot", "active")
+        match_field = "name" if service_type == "pppoe" else "user"
+        active = find_router_item_by_fields(api, active_path, {match_field: username})
         if not enabled:
-            active_path = ("ppp", "active") if service_type == "pppoe" else ("ip", "hotspot", "active")
-            match_field = "name" if service_type == "pppoe" else "user"
-            active = find_router_item_by_fields(api, active_path, {match_field: username})
             if active and active.get(".id"):
                 try:
                     api.path(*active_path).remove(active[".id"])
                 except Exception:
                     pass
+        elif active and active.get(".id") and service_type == "hotspot":
+            try:
+                api.path(*active_path).remove(active[".id"])
+            except Exception:
+                pass
 
         return result
     finally:
@@ -1823,6 +1933,23 @@ def send_whatsapp_message(phone, message, tenant=None):
         json=payload,
         timeout=20,
     )
+    response.raise_for_status()
+    return {"sent": True, "response": response.json() if response.content else {}}
+
+
+def send_sms_message(phone, message, tenant=None):
+    """Send through the shared SMS gateway; a tenant sender ID is optional."""
+    if tenant and tenant.get("sms_enabled") is False:
+        return {"sent": False, "skipped": "disabled"}
+    api_url = (os.getenv("SMS_API_URL") or os.getenv("ROAMTECH_API_URL") or "").strip()
+    token = os.getenv("SMS_API_TOKEN") or os.getenv("ROAMTECH_API_TOKEN") or os.getenv("ROAMTECH_TOKEN")
+    recipient = normalize_phone(phone)
+    if not recipient:
+        return {"sent": False, "skipped": "missing_phone"}
+    if not api_url or not token:
+        return {"sent": False, "skipped": "missing_credentials"}
+    sender = str((tenant or {}).get("roamtech_sender_id") or os.getenv("SMS_DEFAULT_SENDER_ID") or os.getenv("ROAMTECH_DEFAULT_SENDER_ID") or "EXPRESS WIFI").strip()
+    response = requests.post(api_url, headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"}, json={"to": recipient, "message": str(message or ""), "from": sender, "sender_id": sender}, timeout=20)
     response.raise_for_status()
     return {"sent": True, "response": response.json() if response.content else {}}
 

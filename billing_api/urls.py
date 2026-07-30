@@ -33,6 +33,10 @@ admin_urlpatterns = [
 urlpatterns = [
     path("health", views.health),
     path("health/", views.health),
+    path("generate_204", views.captive_probe),
+    path("hotspot-detect.html", views.captive_probe),
+    path("connecttest.txt", views.captive_probe),
+    path("ncsi.txt", views.captive_probe),
     path("auth/register", views.auth_register),
     path("auth/login", views.auth_login),
     path("public/site", views.public_site),

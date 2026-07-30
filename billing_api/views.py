@@ -1,5 +1,6 @@
 import json
 import html
+import logging
 import os
 import secrets
 from collections import Counter, defaultdict
@@ -68,6 +69,7 @@ from .services import (
     router_connect,
     router_interface_status,
     router_items,
+    send_sms_message,
     send_whatsapp_message,
     set_customer_enabled,
     tenant_token,
@@ -77,6 +79,8 @@ from .services import (
     verify_paystack_transaction,
     write_audit_log,
 )
+
+logger = logging.getLogger(__name__)
 
 
 DEFAULT_SITE = {
@@ -512,9 +516,11 @@ def auth_register(request):
             "paystack_currency": os.getenv("PAYSTACK_CURRENCY", "KES"),
             "paystack_platform_percentage": os.getenv("PAYSTACK_PLATFORM_PERCENTAGE", "1"),
             "paystack_subaccount_status": "not_created",
+            "sms_balance": 10,
+            "sms_sent_count": 0,
             "theme_color": data.get("theme_color") or "#fa8200",
             "dark_mode": False,
-            "status": "pending_setup",
+            "status": "active",
             "created_at": iso_now(),
         }
     )
@@ -527,7 +533,7 @@ def auth_register(request):
             subaccount_status = {"paystack_subaccount_status": "failed", "paystack_subaccount_error": exc.detail}
         ref(f"tenants/{tenant_ref.key}").update(subaccount_status)
     notify_admins_tenant_signup(tenant_ref.key, {**tenant_data, **subaccount_status})
-    return ok({"success": True, "message": "Business registered successfully. An admin will activate your account before you can sign in.", "tenantId": tenant_ref.key, **subaccount_status})
+    return ok({"success": True, "message": "Business registered successfully. Your account is active.", "tenantId": tenant_ref.key, **subaccount_status})
 
 
 @csrf_exempt
@@ -544,7 +550,9 @@ def auth_login(request):
         return ok({"message": "Wrong password"}, 401)
     tenant = tenant_obj.as_dict(include_id=True)
     if tenant.get("status") != "active":
-        return ok({"message": "Your account is pending admin activation. You will receive an email once it is active."}, 403)
+        tenant_obj.status = "active"
+        tenant_obj.save(update_fields=["status"])
+        tenant["status"] = "active"
     try:
         token = tenant_token(tenant["id"])
     except Exception as exc:
@@ -887,14 +895,23 @@ def captive_portal_pay(request, tenant_id):
     data = body(request)
     try:
         response = public_pay(request, tenant_id)
-    except Exception as exc:
+    except Exception:
         return _html_page("Payment unavailable", "<main><div class='alert'>Payment could not be started. Please try again or contact the provider.</div></main>", 503)
     payload = getattr(response, "data", {}) or {}
     if response.status_code >= 400:
-        return _html_page("Payment unavailable", f"<main><div class='alert'>{html.escape(str(payload.get('message') or payload.get('error') or 'Could not start payment'))}</div><p><a href='/api/captive/{html.escape(str(tenant_id))}'>Back to packages</a></p></main>", response.status_code)
+        back = f"/api/captive/{html.escape(str(tenant_id))}"
+        if data.get("ip"):
+            back = f"{back}?ip={html.escape(str(data.get('ip')))}"
+        return _html_page("Payment unavailable", f"<main><div class='alert'>{html.escape(str(payload.get('message') or payload.get('error') or 'Could not start payment'))}</div><p><a href='{back}'>Back to packages</a></p></main>", response.status_code)
     authorization_url = payload.get("authorizationUrl")
     if authorization_url:
         return redirect(authorization_url)
+    if payload.get("provider") == "mpesa":
+        return _html_page(
+            "Confirm payment",
+            f"<main><div class='card'><strong>{html.escape(str(payload.get('message') or 'Check your phone and enter your M-Pesa PIN to complete payment.'))}</strong><p class='muted'>After payment is confirmed, your access will be activated automatically. If nothing happens after a minute, reconnect to WiFi and open the portal again.</p></div></main>",
+            201,
+        )
     return _html_page("Payment unavailable", "<main><div class='alert'>Payment checkout was not returned. Please try again.</div></main>", 502)
 
 
@@ -1016,9 +1033,22 @@ def _public_pay_impl(request, tenant_id):
             },
         )
     except PaymentProviderError as exc:
+        logger.warning(
+            "Payment provider error for tenant=%s payment=%s provider=%s detail=%s",
+            tenant_id,
+            payment_ref.key,
+            "daraja" if uses_daraja else "paystack",
+            exc.detail,
+        )
         payment_ref.update({"status": "failed", "failed_at": iso_now(), "callback_result_desc": exc.detail})
         return ok({"success": False, "message": exc.public_message, "paymentId": payment_ref.key}, exc.status_code)
     except Exception as exc:
+        logger.exception(
+            "Unexpected payment initiation error for tenant=%s payment=%s provider=%s",
+            tenant_id,
+            payment_ref.key,
+            "daraja" if uses_daraja else "paystack",
+        )
         payment_ref.update({"status": "failed", "failed_at": iso_now(), "callback_result_desc": str(exc)})
         return ok({"success": False, "message": "Payment gateway is temporarily unavailable. Please try again later.", "paymentId": payment_ref.key}, 503)
     payment_ref.update(
@@ -1090,10 +1120,41 @@ def public_voucher_login(request, tenant_id):
     password = str(data.get("password") or "").strip()
     if not code and (not username or not password):
         return ok({"message": "Voucher code is required"}, 400)
-    voucher = next((item for item in list_children(f"tenants/{tenant_id}/vouchers") if str(item.get("code") or "").lower() == (code or username).lower()), None)
-    if not voucher or voucher.get("status") != "active" or (not code and str(voucher.get("password") or "") != password):
+    vouchers = list_children(f"tenants/{tenant_id}/vouchers")
+    if code:
+        voucher = next((item for item in vouchers if str(item.get("code") or "").lower() == code.lower()), None)
+    else:
+        voucher = next((item for item in vouchers if str(item.get("username") or "").lower() == username.lower() and str(item.get("password") or "") == password), None)
+    if not voucher or voucher.get("status") != "active":
         return ok({"message": "Invalid or inactive voucher credentials"}, 401)
     tenant = ref(f"tenants/{tenant_id}").get() or {}
+    if has_mikrotik_credentials(tenant):
+        try:
+            package = ref(f"tenants/{tenant_id}/packages/{voucher.get('package_id')}").get() if voucher.get("package_id") else None
+            profile_name = str((package or {}).get("name") or voucher.get("package") or "").strip()
+            if profile_name:
+                create_hotspot_profile({"id": tenant_id, **tenant}, profile_name, (package or {}).get("speed"))
+            api = router_connect({"id": tenant_id, **tenant})
+            try:
+                users = api.path("ip", "hotspot", "user")
+                existing = next((item for item in users.get() if str(item.get("name") or "") == str(voucher.get("username") or "")), None)
+                fields = {
+                    "name": voucher.get("username"),
+                    "password": voucher.get("password"),
+                    "profile": profile_name or "default",
+                    "disabled": "no",
+                    "comment": f"billing-saas-voucher:{voucher.get('code')}",
+                }
+                if existing and existing.get(".id"):
+                    users.update(**{".id": existing[".id"], **fields})
+                else:
+                    users.add(**fields)
+            finally:
+                api.close()
+        except Exception as exc:
+            if str(request.content_type or "").lower() != "application/json" and not request.headers.get("X-Requested-With"):
+                return _html_page("Voucher unavailable", f"<main><div class='alert'>Voucher was accepted, but router access could not be prepared: {html.escape(str(exc))}</div><p><a href='/api/captive/{html.escape(str(tenant_id))}'>Back to packages</a></p></main>", 503)
+            return ok({"message": f"Voucher was accepted, but router access could not be prepared: {exc}"}, 503)
     result = {"success": True, "username": voucher.get("username"), "password": voucher.get("password"), "router_ip": data.get("router_ip") or tenant.get("mikrotik_last_seen_ip") or "", "package_name": voucher.get("package"), "router_status": voucher.get("router_status")}
     # Captive requests are browser form posts from MikroTik. Return a page
     # that submits the actual credentials to the router, rather than JSON.
@@ -1106,8 +1167,15 @@ def public_voucher_login(request, tenant_id):
         password_value = html.escape(str(result.get("password") or ""), quote=True)
         if not router_ip:
             return _html_page("Voucher accepted", "<main><div class='card'>Voucher accepted. Please open the router login page to connect.</div></main>")
-        return _html_page("Connecting", f"<main><div class='card'>Voucher accepted. Connecting you to the internet...</div><form id='login' method='post' action='http://{router_ip}/login'><input type='hidden' name='username' value='{username_value}'><input type='hidden' name='password' value='{password_value}'></form><script>document.getElementById('login').submit();</script></main>")
+        return _html_page("Connecting", f"<main><div class='card'>Voucher accepted. Connecting you to the internet...</div><form id='login' method='post' action='http://{router_ip}/login'><input type='hidden' name='username' value='{username_value}'><input type='hidden' name='password' value='{password_value}'><input type='hidden' name='dst' value='http://connectivitycheck.gstatic.com/generate_204'></form><script>document.getElementById('login').submit();</script><noscript><button form='login' type='submit'>Connect now</button></noscript></main>")
     return ok(result)
+
+
+def captive_probe(request):
+    tenant_id = request.GET.get("tenant_id") or request.GET.get("tenant") or ""
+    if tenant_id:
+        return redirect(f"/api/captive/{tenant_id}")
+    return HttpResponse("OK", status=204)
 
 
 @csrf_exempt
@@ -2152,16 +2220,16 @@ def router_provision_script(request, token):
         :do {{ /system clock set time-zone-name="Africa/Nairobi" }} on-error={{}}
         :log info "Billing SaaS: creating default PPPoE server on managed bridge";
         :do {{ /interface pppoe-server server add service-name="billing-default-pppoe" interface=$billingBridge default-profile=default one-session-per-host=yes disabled=no comment="billing-saas default pppoe server" }} on-error={{ :log warning "Billing SaaS: PPPoE server creation failed" }}
-        :log info "Billing SaaS: configuring RADIUS for PPPoE and Hotspot";
-        :do {{ /radius add service=ppp,hotspot address={_rsc_escape(wg_server_tunnel_ip)} secret="{_rsc_escape(radius_shared_secret)}" src-address={_rsc_escape(wg_router_api_ip)} comment="billing-saas radius" }} on-error={{ /radius set [find address={_rsc_escape(wg_server_tunnel_ip)}] secret="{_rsc_escape(radius_shared_secret)}" src-address={_rsc_escape(wg_router_api_ip)} comment="billing-saas radius" }}
+        :log info "Billing SaaS: configuring RADIUS for PPPoE";
+        :do {{ /radius add service=ppp address={_rsc_escape(wg_server_tunnel_ip)} secret="{_rsc_escape(radius_shared_secret)}" src-address={_rsc_escape(wg_router_api_ip)} comment="billing-saas radius" }} on-error={{ /radius set [find address={_rsc_escape(wg_server_tunnel_ip)}] service=ppp secret="{_rsc_escape(radius_shared_secret)}" src-address={_rsc_escape(wg_router_api_ip)} comment="billing-saas radius" }}
         :do {{ /radius incoming set accept=yes port=3799 }} on-error={{ :log warning "Billing SaaS: RADIUS incoming (CoA) setup failed" }}
         /ppp aaa set use-radius=yes accounting=yes interim-update=5m;
-        :do {{ /ip hotspot profile set [find name="billing-saas-captive"] use-radius=yes radius-accounting=yes radius-interim-update=5m }} on-error={{ :log warning "Billing SaaS: hotspot RADIUS setup failed" }}
+        :do {{ /ip hotspot profile set [find name="billing-saas-captive"] use-radius=no radius-accounting=no }} on-error={{ :log warning "Billing SaaS: hotspot local auth setup failed" }}
         :do {{ /ip firewall filter remove [find comment="billing-saas allow radius"] }} on-error={{}}
         :do {{ /ip firewall filter add chain=input in-interface=wg-saas protocol=udp dst-port=1812,1813,3799 action=accept comment="billing-saas allow radius" }} on-error={{ :log warning "Billing SaaS: RADIUS firewall rule failed" }}
         :foreach s in=[/ppp secret find] do={{ :if ([/ppp secret get $s comment] != "billing-saas-managed") do={{ :do {{ /ppp secret remove $s }} on-error={{}} }} }}
         :log info "Billing SaaS: configuring captive portal (empty page until a port is assigned)";
-        :do {{ /ip hotspot profile add name=billing-saas-captive hotspot-address={_rsc_escape(lan_gateway)} dns-name="{_rsc_escape(hotspot_dns_name)}" login-by=http-chap,http-pap use-radius=yes radius-accounting=yes radius-interim-update=5m html-directory=hotspot }} on-error={{ /ip hotspot profile set [find name=billing-saas-captive] hotspot-address={_rsc_escape(lan_gateway)} dns-name="{_rsc_escape(hotspot_dns_name)}" login-by=http-chap,http-pap use-radius=yes radius-accounting=yes radius-interim-update=5m html-directory=hotspot }}
+        :do {{ /ip hotspot profile add name=billing-saas-captive hotspot-address={_rsc_escape(lan_gateway)} dns-name="{_rsc_escape(hotspot_dns_name)}" login-by=http-chap,http-pap use-radius=no radius-accounting=no html-directory=hotspot }} on-error={{ /ip hotspot profile set [find name=billing-saas-captive] hotspot-address={_rsc_escape(lan_gateway)} dns-name="{_rsc_escape(hotspot_dns_name)}" login-by=http-chap,http-pap use-radius=no radius-accounting=no html-directory=hotspot }}
         :do {{ /ip hotspot user profile add name=billing-saas-unpaid shared-users=1 keepalive-timeout=2m status-autorefresh=1m }} on-error={{}}
         :foreach h in=[/ip hotspot find] do={{
             :local hn [/ip hotspot get $h name];
@@ -3191,6 +3259,15 @@ def settings_notifications(request):
             {
                 "provider": request.tenant.get("notification_provider") or "whatsapp_cloud",
                 "sms_enabled": request.tenant.get("sms_enabled") is not False,
+                "sms_on_maintenance": request.tenant.get("sms_on_maintenance") is not False,
+                "sms_on_promotions": request.tenant.get("sms_on_promotions") is not False,
+                "sms_on_payment": request.tenant.get("sms_on_payment") is not False,
+                "sms_template_maintenance": request.tenant.get("sms_template_maintenance") or "We will be performing scheduled maintenance. Thank you for your patience.",
+                "sms_template_promotion": request.tenant.get("sms_template_promotion") or "Special offer from {{business}}: {{message}}",
+                "sms_template_hotspot": request.tenant.get("sms_template_hotspot") or "Your hotspot package is active. Username: {{username}}, Password: {{password}}.",
+                "sms_template_pppoe": request.tenant.get("sms_template_pppoe") or "Your PPPoE package is active. Username: {{username}}, Password: {{password}}.",
+                "sms_balance": int(request.tenant.get("sms_balance") or 0),
+                "sms_sent_count": int(request.tenant.get("sms_sent_count") or 0),
                 "whatsapp_enabled": bool(request.tenant.get("whatsapp_enabled")) or os.getenv("WHATSAPP_ENABLED", "false").lower() in {"1", "true", "yes", "on"},
                 "roamtech_sender_id": request.tenant.get("roamtech_sender_id") or "",
                 "payment_sms_template": request.tenant.get("payment_sms_template") or "Hi {{name}}, your {{package}} payment of Ksh {{amount}} is confirmed. Username: {{username}}, Password: {{password}}.",
@@ -3201,6 +3278,13 @@ def settings_notifications(request):
     updates = {
         "notification_provider": str(data.get("provider") or "whatsapp_cloud").strip(),
         "sms_enabled": data.get("sms_enabled") is not False,
+        "sms_on_maintenance": data.get("sms_on_maintenance") is not False,
+        "sms_on_promotions": data.get("sms_on_promotions") is not False,
+        "sms_on_payment": data.get("sms_on_payment") is not False,
+        "sms_template_maintenance": str(data.get("sms_template_maintenance") or "").strip(),
+        "sms_template_promotion": str(data.get("sms_template_promotion") or "").strip(),
+        "sms_template_hotspot": str(data.get("sms_template_hotspot") or "").strip(),
+        "sms_template_pppoe": str(data.get("sms_template_pppoe") or "").strip(),
         "whatsapp_enabled": bool(data.get("whatsapp_enabled")),
         "roamtech_sender_id": str(data.get("roamtech_sender_id") or "").strip(),
         "payment_sms_template": str(data.get("payment_sms_template") or "").strip(),
@@ -3223,9 +3307,8 @@ def render_notification_template(template, context):
 
 
 def notify_payment_access(tenant, payment, access):
-    if not ((tenant or {}).get("whatsapp_enabled") or os.getenv("WHATSAPP_ENABLED", "false").lower() in {"1", "true", "yes", "on"}):
-        return None
-    template = (tenant or {}).get("payment_whatsapp_template") or "Hi {{name}}, your {{package}} internet package is active. Amount: Ksh {{amount}}. Username: {{username}}, Password: {{password}}."
+    service_type = str(payment.get("service_type") or "hotspot").lower()
+    template = (tenant or {}).get("sms_template_pppoe" if service_type == "pppoe" else "sms_template_hotspot") or "Your package is active. Username: {{username}}, Password: {{password}}."
     message = render_notification_template(
         template,
         {
@@ -3237,7 +3320,21 @@ def notify_payment_access(tenant, payment, access):
             "expires_at": access.get("expiry_date") or "",
         },
     )
-    return send_whatsapp_message(payment.get("phone"), message, tenant)
+    results = {}
+    if (tenant or {}).get("sms_on_payment") is not False:
+        balance = int((tenant or {}).get("sms_balance") or 0)
+        if balance <= 0:
+            results["sms"] = {"sent": False, "skipped": "sms_balance_empty"}
+        else:
+            results["sms"] = send_sms_message(payment.get("phone"), message, tenant)
+            if results["sms"].get("sent"):
+                tenant_id = tenant.get("id")
+                if tenant_id:
+                    ref(f"tenants/{tenant_id}").update({"sms_balance": balance - 1, "sms_sent_count": int((tenant or {}).get("sms_sent_count") or 0) + 1})
+    if (tenant or {}).get("whatsapp_enabled") or os.getenv("WHATSAPP_ENABLED", "false").lower() in {"1", "true", "yes", "on"}:
+        whatsapp_template = (tenant or {}).get("payment_whatsapp_template") or message
+        results["whatsapp"] = send_whatsapp_message(payment.get("phone"), render_notification_template(whatsapp_template, {"name": payment.get("customer_name") or payment.get("phone") or "customer", "package": payment.get("package_name") or "", "amount": payment.get("amount") or "", "username": access.get("username") or "", "password": access.get("password") or ""}), tenant)
+    return results
 
 
 def activate_paid_access(tenant, payment_id, payment, phone, payment_code):
@@ -3254,7 +3351,9 @@ def activate_paid_access(tenant, payment_id, payment, phone, payment_code):
     service_type = payment.get("service_type") or (customer or {}).get("service_type") or "hotspot"
     package_for_access = package_name or (customer or {}).get("package")
     pkg = find_child_by_field(f"tenants/{tenant_id}/packages", "name", package_for_access)
-    expiry = utcnow() + package_duration_delta(pkg)
+    duration = package_duration_delta(pkg)
+    duration_seconds = int(duration.total_seconds())
+    expiry = utcnow() + duration
     mac_address = normalize_mac(payment.get("mac_address") or (customer or {}).get("mac_address"))
     username = mac_address if service_type == "tv" else (payment.get("username") or (customer or {}).get("username") or to_access_username(phone))
     password = str(payment_code)
@@ -3268,9 +3367,9 @@ def activate_paid_access(tenant, payment_id, payment, phone, payment_code):
         new_ref = ref(f"tenants/{tenant_id}/customers").push({"name": mac_address or phone, "phone": phone, "username": username, "password": password, "package": package_for_access, "service_type": service_type, "status": "active", "expiry_date": expiry.isoformat(), "last_payment_id": payment_id, "last_payment_code": payment_code, "auto_reconnect": True, "mac_address": mac_address, "created_at": iso_now()})
         customer_id = new_ref.key
     if service_type == "hotspot" and pkg:
-        create_hotspot_profile(tenant, pkg["name"], pkg.get("speed"))
+        create_hotspot_profile(tenant, pkg["name"], pkg.get("speed"), duration_seconds)
     if service_type == "pppoe" and pkg:
-        create_ppp_profile(tenant, pkg["name"], pkg.get("speed"))
+        create_ppp_profile(tenant, pkg["name"], pkg.get("speed"), duration_seconds)
     if service_type == "tv" and not mac_address:
         raise ValueError("TV MAC address is required for activation")
     if tenant.get("radius_enabled") and service_type in {"hotspot", "pppoe"}:
@@ -3293,14 +3392,27 @@ def activate_paid_access(tenant, payment_id, payment, phone, payment_code):
             sync_radius_customer(tenant_obj, {"username": username, "password": password})
         except Exception:
             pass
-    upsert_customer_access(tenant, {"username": username, "password": password, "package_name": package_for_access, "service_type": service_type, "mac_address": mac_address})
+    upsert_customer_access(
+        tenant,
+        {
+            "username": username,
+            "password": password,
+            "package_name": package_for_access,
+            "service_type": service_type,
+            "mac_address": mac_address,
+            "duration_seconds": duration_seconds,
+            "expires_at": expiry.isoformat(),
+        },
+    )
     set_customer_enabled(tenant, username, service_type, True)
     ref(f"tenants/{tenant_id}/payments/{payment_id}").update({"customer_id": customer_id, "access_username": username, "access_password": password, "access_mac_address": mac_address, "access_expires_at": expiry.isoformat(), "access_status": "active", "auto_reconnect": True})
     access = {"username": username, "password": password, "mac_address": mac_address, "expiry_date": expiry.isoformat()}
     try:
         notify_result = notify_payment_access(tenant, {**payment, "phone": phone, "package_name": package_for_access}, access)
         if notify_result:
-            ref(f"tenants/{tenant_id}/payments/{payment_id}").update({"whatsapp_status": "sent" if notify_result.get("sent") else "skipped", "whatsapp_detail": notify_result.get("skipped") or ""})
+            sent_channels = [name for name, result in notify_result.items() if result.get("sent")]
+            skipped = "; ".join(f"{name}: {result.get('skipped')}" for name, result in notify_result.items() if result.get("skipped"))
+            ref(f"tenants/{tenant_id}/payments/{payment_id}").update({"notification_status": "sent" if sent_channels else "skipped", "notification_channels": sent_channels, "notification_detail": skipped})
     except Exception as exc:
         ref(f"tenants/{tenant_id}/payments/{payment_id}").update({"whatsapp_status": "failed", "whatsapp_detail": str(exc)})
     return access
@@ -3427,6 +3539,7 @@ def paystack_callback(request):
 def complete_daraja_payment(tenant_id, payment_id, callback_metadata, amount, receipt, paid_at, phone):
     payment = ref(f"tenants/{tenant_id}/payments/{payment_id}").get()
     if not payment:
+        logger.warning("Daraja callback payment not found tenant=%s payment=%s receipt=%s", tenant_id, payment_id, receipt)
         return False
     if payment.get("status") == "success":
         return True
@@ -3434,6 +3547,14 @@ def complete_daraja_payment(tenant_id, payment_id, callback_metadata, amount, re
     expected_amount = round(float(payment.get("amount") or 0), 2)
     paid_amount = round(float(amount or 0), 2)
     if expected_amount and paid_amount != expected_amount:
+        logger.warning(
+            "Daraja callback amount mismatch tenant=%s payment=%s expected=%s paid=%s receipt=%s",
+            tenant_id,
+            payment_id,
+            expected_amount,
+            paid_amount,
+            receipt,
+        )
         ref(f"tenants/{tenant_id}/payments/{payment_id}").update({
             "status": "failed",
             "failed_at": iso_now(),
@@ -3456,6 +3577,7 @@ def complete_daraja_payment(tenant_id, payment_id, callback_metadata, amount, re
     ref(f"tenants/{tenant_id}/payments/{payment_id}").update(update)
     tenant_data = ref(f"tenants/{tenant_id}").get() or {}
     activate_paid_access({"id": tenant_id, **tenant_data}, payment_id, {**payment, **callback_metadata}, phone or payment.get("phone"), receipt)
+    logger.info("Daraja payment completed tenant=%s payment=%s receipt=%s phone=%s amount=%s", tenant_id, payment_id, receipt, phone or payment.get("phone"), paid_amount)
     return True
 
 
@@ -3466,6 +3588,7 @@ def daraja_callback(request, tenant_id, payment_id, token):
     # embedded in the callback URL at STK push time is what stops this
     # endpoint from being used to spoof completion of an arbitrary payment.
     if not verify_daraja_callback_token(tenant_id, payment_id, token):
+        logger.warning("Daraja callback rejected invalid token tenant=%s payment=%s", tenant_id, payment_id)
         return ok({"success": False, "message": "Invalid callback token"}, 401)
 
     event = body(request)
@@ -3474,6 +3597,13 @@ def daraja_callback(request, tenant_id, payment_id, token):
     result_desc = stk_callback.get("ResultDesc") or ""
 
     if str(result_code) != "0":
+        logger.warning(
+            "Daraja callback failed tenant=%s payment=%s result_code=%s result_desc=%s",
+            tenant_id,
+            payment_id,
+            result_code,
+            result_desc,
+        )
         ref(f"tenants/{tenant_id}/payments/{payment_id}").update({
             "status": "failed",
             "failed_at": iso_now(),
@@ -3491,7 +3621,11 @@ def daraja_callback(request, tenant_id, payment_id, token):
     paid_at = values.get("TransactionDate")
     phone = values.get("PhoneNumber")
 
-    complete_daraja_payment(tenant_id, payment_id, {}, amount, receipt, paid_at, phone)
+    try:
+        complete_daraja_payment(tenant_id, payment_id, {}, amount, receipt, paid_at, phone)
+    except Exception:
+        logger.exception("Daraja callback activation failed tenant=%s payment=%s receipt=%s", tenant_id, payment_id, receipt)
+        raise
     return ok({"success": True})
 
 

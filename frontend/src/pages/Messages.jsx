@@ -5,10 +5,13 @@ import api from '../api/axios';
 
 const defaults = {
   sms_enabled: true,
+  sms_on_maintenance: true,
+  sms_on_promotions: true,
+  sms_on_payment: true,
   whatsapp_enabled: false,
   roamtech_sender_id: '',
-  payment_sms_template: '',
-  payment_whatsapp_template: '',
+  sms_template_maintenance: '', sms_template_promotion: '', sms_template_hotspot: '', sms_template_pppoe: '',
+  sms_balance: 0, sms_sent_count: 0,
 };
 
 export default function Messages() {
@@ -22,10 +25,12 @@ export default function Messages() {
         const { data } = await api.get('/settings/notifications');
         setForm({
           sms_enabled: data.sms_enabled !== false,
+          sms_on_maintenance: data.sms_on_maintenance !== false,
+          sms_on_promotions: data.sms_on_promotions !== false,
+          sms_on_payment: data.sms_on_payment !== false,
           whatsapp_enabled: Boolean(data.whatsapp_enabled),
           roamtech_sender_id: data.roamtech_sender_id || '',
-          payment_sms_template: data.payment_sms_template || '',
-          payment_whatsapp_template: data.payment_whatsapp_template || '',
+          sms_template_maintenance: data.sms_template_maintenance || '', sms_template_promotion: data.sms_template_promotion || '', sms_template_hotspot: data.sms_template_hotspot || '', sms_template_pppoe: data.sms_template_pppoe || '', sms_balance: data.sms_balance || 0, sms_sent_count: data.sms_sent_count || 0,
         });
       } catch (error) {
         toast.error(error.response?.data?.message || 'Failed to load message settings');
@@ -96,6 +101,14 @@ export default function Messages() {
                 <span className="block text-sm text-slate-600">Customers receive access details when Paystack confirms a Hotspot or PPPoE package.</span>
               </span>
             </label>
+            <div className="rounded-lg border border-slate-200 bg-white p-3">
+              <p className="text-sm font-medium text-slate-950">Send messages for</p>
+              <div className="mt-3 space-y-3">
+                <label className="flex items-center gap-3 text-sm"><input name="sms_on_maintenance" type="checkbox" checked={form.sms_on_maintenance} onChange={update} /> Maintenance notices</label>
+                <label className="flex items-center gap-3 text-sm"><input name="sms_on_promotions" type="checkbox" checked={form.sms_on_promotions} onChange={update} /> Promotions</label>
+                <label className="flex items-center gap-3 text-sm"><input name="sms_on_payment" type="checkbox" checked={form.sms_on_payment} onChange={update} /> Customer package purchases</label>
+              </div>
+            </div>
 
             <label className="flex items-start gap-3 rounded-lg border border-slate-200 bg-white p-3">
               <input className="mt-1" name="whatsapp_enabled" type="checkbox" checked={form.whatsapp_enabled} onChange={update} />
@@ -108,27 +121,33 @@ export default function Messages() {
 
           <section className="space-y-4">
             <div>
-              <label className="form-label" htmlFor="payment_sms_template">Payment SMS template</label>
+              <p className="text-sm font-semibold">SMS balance: {form.sms_balance} &nbsp; | &nbsp; Sent: {form.sms_sent_count}</p>
+              <label className="form-label" htmlFor="sms_template_hotspot">Hotspot package message</label>
               <textarea
-                id="payment_sms_template"
-                name="payment_sms_template"
+                id="sms_template_hotspot"
+                name="sms_template_hotspot"
                 className="mt-1 min-h-28 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-app-accent focus:ring-2 focus:ring-blue-100"
-                value={form.payment_sms_template}
+                value={form.sms_template_hotspot}
                 onChange={update}
               />
             </div>
 
             <div>
-              <label className="form-label" htmlFor="payment_whatsapp_template">Payment WhatsApp template</label>
+              <label className="form-label" htmlFor="sms_template_pppoe">PPPoE package message</label>
               <textarea
-                id="payment_whatsapp_template"
-                name="payment_whatsapp_template"
+                id="sms_template_pppoe"
+                name="sms_template_pppoe"
                 className="mt-1 min-h-28 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-app-accent focus:ring-2 focus:ring-blue-100"
-                value={form.payment_whatsapp_template}
+                value={form.sms_template_pppoe}
                 onChange={update}
               />
             </div>
           </section>
+        </div>
+
+        <div className="mt-4 grid gap-4 lg:grid-cols-2">
+          <label className="form-label">Maintenance message<textarea name="sms_template_maintenance" className="mt-1 min-h-24 w-full rounded-md border p-3" value={form.sms_template_maintenance} onChange={update} /></label>
+          <label className="form-label">Promotion message<textarea name="sms_template_promotion" className="mt-1 min-h-24 w-full rounded-md border p-3" value={form.sms_template_promotion} onChange={update} /></label>
         </div>
 
         <div className="mt-4 flex flex-col gap-3 border-t border-slate-200 pt-4 sm:flex-row sm:items-center sm:justify-between">

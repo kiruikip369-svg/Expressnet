@@ -8,6 +8,28 @@ const publicApi = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
 });
 
+function submitRouterLogin(routerIp, username, password) {
+  if (!routerIp || !username || !password) return false;
+  const form = document.createElement('form');
+  form.method = 'POST';
+  form.action = `http://${routerIp}/login`;
+  form.style.display = 'none';
+  [
+    ['username', username],
+    ['password', password],
+    ['dst', 'http://connectivitycheck.gstatic.com/generate_204'],
+  ].forEach(([name, value]) => {
+    const input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = name;
+    input.value = value;
+    form.appendChild(input);
+  });
+  document.body.appendChild(form);
+  form.submit();
+  return true;
+}
+
 function packageType(pkg) {
   return pkg?.service_type === 'pppoe' ? 'pppoe' : 'hotspot';
 }
@@ -88,11 +110,7 @@ export default function CustomerPortal() {
           // MikroTik's built-in login handler instead of leaving the
           // customer to read credentials off the screen and type them in.
           const loginIp = routerIp || data.router_ip;
-          if (loginIp && data.username && data.password) {
-            const loginUrl = `http://${loginIp}/login?username=${encodeURIComponent(data.username)}&password=${encodeURIComponent(data.password)}`;
-            window.location.href = loginUrl;
-            return;
-          }
+          if (submitRouterLogin(loginIp, data.username, data.password)) return;
         }
       } catch (err) {
         setVerification({ success: false, message: err.response?.data?.message || 'Payment verification failed. Please contact your ISP.' });
@@ -176,13 +194,17 @@ export default function CustomerPortal() {
         router_mac: routerContext.mac,
         payment_method: paymentMethod,
       });
-      toast.success(data.message || 'Redirecting to Paystack');
+      toast.success(data.message || (data.provider === 'mpesa' ? 'Check your phone for the M-Pesa prompt' : 'Redirecting to Paystack'));
       if (data.authorizationUrl) {
         if (!String(data.authorizationUrl).startsWith('https://checkout.paystack.com/')) {
           toast.error('Payment checkout URL was rejected');
           return;
         }
         window.location.href = data.authorizationUrl;
+        return;
+      }
+      if (data.provider === 'mpesa') {
+        closePayment();
         return;
       }
       closePayment();
@@ -221,8 +243,7 @@ export default function CustomerPortal() {
     try {
       const { data } = await publicApi.post(`/public/${tenantId}/voucher-login`, { code: voucherCode, router_ip: routerContext.ip });
       setVoucherAccess(data);
-      if (data.router_ip) window.location.href = `http://${data.router_ip}/login?username=${encodeURIComponent(data.username)}&password=${encodeURIComponent(data.password)}`;
-      else toast.success('Voucher accepted. Connect through the Hotspot login page.');
+      if (!submitRouterLogin(data.router_ip, data.username, data.password)) toast.success('Voucher accepted. Connect through the Hotspot login page.');
     } catch (err) { toast.error(err.response?.data?.message || 'Voucher login failed'); }
     finally { setRecovering(false); }
   };
@@ -233,8 +254,7 @@ export default function CustomerPortal() {
     try {
       const { data } = await publicApi.post(`/public/${tenantId}/voucher-login`, { username: accessUsername, password: accessPassword, router_ip: routerContext.ip });
       setVoucherAccess(data);
-      if (data.router_ip) window.location.href = `http://${data.router_ip}/login?username=${encodeURIComponent(data.username)}&password=${encodeURIComponent(data.password)}`;
-      else toast.success('Credentials accepted. Connect through the Hotspot login page.');
+      if (!submitRouterLogin(data.router_ip, data.username, data.password)) toast.success('Credentials accepted. Connect through the Hotspot login page.');
     } catch (err) { toast.error(err.response?.data?.message || 'Sign-in failed'); }
     finally { setRecovering(false); }
   };
