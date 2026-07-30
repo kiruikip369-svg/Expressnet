@@ -1741,13 +1741,6 @@ def _build_port_command_script(interface_name, service_type, profile_name, porta
 
 def upsert_customer_access(tenant, customer, disabled=False):
     service_type = customer.get("service_type") or "pppoe"
-    # When RADIUS is enabled, skip the RouterOS API call entirely.
-    # The router will ask the RADIUS server at login time, so there is
-    # nothing to push. The radius_secret is managed by sync_radius_customer.
-    tenant_radius_enabled = tenant.get("radius_enabled") if isinstance(tenant, dict) else getattr(tenant, "radius_enabled", False)
-    if tenant_radius_enabled and service_type != "pppoe":
-        return {"skipped": True, "reason": "RADIUS enabled — auth handled by RADIUS server, no RouterOS API call needed"}
-
     if not has_mikrotik_credentials(tenant):
         return None
     api = router_connect(tenant)
@@ -1835,7 +1828,7 @@ def set_customer_enabled(tenant, username, service_type="hotspot", enabled=True)
 
     if tenant_radius_enabled and enabled:
         try:
-            from .models import Customer as CustomerModel
+            from .models import Tenant as TenantModel, Customer as CustomerModel
             tenant_obj = TenantModel.objects.get(pk=tenant_id) if isinstance(tenant, dict) else tenant
             CustomerModel.objects.filter(
                 tenant=tenant_obj, username=username

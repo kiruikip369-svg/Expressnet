@@ -84,12 +84,12 @@ logger = logging.getLogger(__name__)
 
 
 DEFAULT_SITE = {
-    "brand_name": "Billing SaaS",
+    "brand_name": "Expressnet",
     "headline": "Internet billing built for hotspot businesses",
     "subheadline": "Sell packages, collect Paystack payments, and activate MikroTik users automatically.",
     "about": "We help hotspot operators manage customers, packages, payments, and access control from one secure platform.",
     "phone": "+254 701396967/+254 729 281669",
-    "email": "support@example.com",
+    "email": "expressnet.support@gmail.com",
     "location": "Thika , Kenya",
     "address": "Nairobi, Kenya",
     "cta_label": "Register your business",
