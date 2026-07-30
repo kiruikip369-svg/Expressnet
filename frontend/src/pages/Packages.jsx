@@ -32,6 +32,7 @@ export default function Packages() {
   const [saving, setSaving] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
   const [syncingId, setSyncingId] = useState(null);
+  const [syncingAll, setSyncingAll] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingPackage, setEditingPackage] = useState(null);
   const [form, setForm] = useState(initialForm);
@@ -192,11 +193,39 @@ export default function Packages() {
       } else {
         toast.success(data?.message || 'Package profile synced to MikroTik');
       }
-      await load();
+      if (data?.package) {
+        setPackages((current) => current.map((item) => (item.id === data.package.id ? { ...item, ...data.package } : item)));
+      } else {
+        setPackages((current) => current.map((item) => (item.id === pkg.id ? { ...item, ppp_profile_status: data?.queued ? 'queued' : 'synced' } : item)));
+      }
     } catch (error) {
       toast.error(error.response?.data?.message || 'Failed to sync package profiles');
     } finally {
       setSyncingId(null);
+    }
+  };
+
+  const syncAllPackages = async () => {
+    setSyncingAll(true);
+    try {
+      const { data } = await api.post('/packages/sync-all');
+      if (data?.success === false && !data?.queued) {
+        toast.error(data?.message || 'Failed to sync package profiles');
+      } else if (data?.queued) {
+        toast(data?.message || 'All package sync queued');
+      } else {
+        toast.success(data?.message || 'All package profiles synced');
+      }
+      if (Array.isArray(data?.packages)) {
+        const updatedById = new Map(data.packages.map((item) => [item.id, item]));
+        setPackages((current) => current.map((item) => (updatedById.has(item.id) ? { ...item, ...updatedById.get(item.id) } : item)));
+      } else {
+        setPackages((current) => current.map((item) => ({ ...item, ppp_profile_status: data?.queued ? 'queued' : 'synced' })));
+      }
+    } catch (error) {
+      toast.error(error.response?.data?.message || 'Failed to sync package profiles');
+    } finally {
+      setSyncingAll(false);
     }
   };
 
@@ -233,6 +262,10 @@ export default function Packages() {
             <button type="button" className="btn-secondary" onClick={() => toast('Use speed formats like 5M/5M, 10M/10M, or 512K/512K.')}>
               <BookOpen size={17} />
               Package Guide
+            </button>
+            <button type="button" className="btn-secondary" onClick={syncAllPackages} disabled={syncingAll || packages.length === 0}>
+              <RefreshCw size={17} className={syncingAll ? 'animate-spin' : ''} />
+              {syncingAll ? 'Syncing...' : 'Sync All'}
             </button>
             <button type="button" className="btn-primary" onClick={openAddModal}>
               <PackagePlus size={17} />

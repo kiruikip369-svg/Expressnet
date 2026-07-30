@@ -3,6 +3,7 @@ import html
 import logging
 import os
 import secrets
+import socket
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -61,6 +62,7 @@ from .services import (
     normalize_public_url,
     normalize_phone,
     normalize_rate_limit,
+    routeros_duration,
     package_service_type,
     PaymentProviderError,
     ref,
@@ -255,9 +257,10 @@ def normalized_package_payload(data):
 
 def sync_package_profile(tenant, package):
     service_type = package_service_type(package)
+    duration_seconds = int(package_duration_delta(package).total_seconds())
     if service_type == "pppoe":
-        return create_ppp_profile(tenant, package.get("name"), package.get("speed"))
-    return create_hotspot_profile(tenant, package.get("name"), package.get("speed"))
+        return create_ppp_profile(tenant, package.get("name"), package.get("speed"), duration_seconds)
+    return create_hotspot_profile(tenant, package.get("name"), package.get("speed"), duration_seconds)
 
 
 def _package_sync_script_for_request(request, package):
@@ -1759,20 +1762,22 @@ def _package_profile_script(package):
     service_type = package_service_type(package)
     rate_limit = _rsc_escape(normalize_rate_limit(package.get("speed")) or "")
     rate_limit_field = f' rate-limit="{rate_limit}"' if rate_limit else ""
+    session_timeout = _rsc_escape(routeros_duration(package_duration_delta(package)) or "")
+    session_timeout_field = f' session-timeout="{session_timeout}"' if session_timeout else ""
     if service_type == "pppoe":
         return (
             f':do {{ '
             f':if ([:len [/ppp profile find name="{name}"]] = 0) do={{'
-            f' /ppp profile add name="{name}"{rate_limit_field} comment="billing-saas-package" }} '
-            f'else={{ /ppp profile set [find name="{name}"]{rate_limit_field} comment="billing-saas-package" }}; '
+            f' /ppp profile add name="{name}"{rate_limit_field}{session_timeout_field} comment="billing-saas-package" }} '
+            f'else={{ /ppp profile set [find name="{name}"]{rate_limit_field}{session_timeout_field} comment="billing-saas-package" }}; '
             f'}} on-error={{ :log warning "Billing SaaS agent: PPPoE profile sync failed for {name}"; :error "PPPoE profile sync failed for {name}" }};'
             f':if ([:len [/ppp profile find name="{name}"]] = 0) do={{ :error "PPPoE profile missing after sync: {name}" }};'
         )
     return (
         f':do {{ '
         f':if ([:len [/ip hotspot user profile find name="{name}"]] = 0) do={{'
-        f' /ip hotspot user profile add name="{name}"{rate_limit_field} }} '
-        f'else={{ /ip hotspot user profile set [find name="{name}"]{rate_limit_field} }}; '
+        f' /ip hotspot user profile add name="{name}"{rate_limit_field}{session_timeout_field} }} '
+        f'else={{ /ip hotspot user profile set [find name="{name}"]{rate_limit_field}{session_timeout_field} }}; '
         f'}} on-error={{ :log warning "Billing SaaS agent: Hotspot profile sync failed for {name}"; :error "Hotspot profile sync failed for {name}" }};'
         f':if ([:len [/ip hotspot user profile find name="{name}"]] = 0) do={{ :error "Hotspot profile missing after sync: {name}" }};'
     )
@@ -1860,21 +1865,43 @@ def router_provision_command(request):
     script_url = f"{public_base_url(request)}/api/router/provision/{token}"
     callback_url = f"{public_base_url(request)}/api/router/provision/{token}/complete"
     script_host = urlparse(script_url).netloc.split("@")[-1].split(":")[0]
+    try:
+        resolved_ips = sorted({item[4][0] for item in socket.getaddrinfo(script_host, 443, type=socket.SOCK_STREAM)})
+    except socket.gaierror:
+        resolved_ips = []
     # NOTE: the imported .rsc script (router_provision_script) already performs
     # the full device/interface/profile snapshot AND calls the /complete
     # callback internally. Do not duplicate that work here — doing so doubles
     # the number of sequential HTTPS/TLS handshakes the router has to make,
     # which is enough to exhaust RouterOS's SSL session pool on low-resource
     # hardware (RB9xx-class devices) and surfaces as "SSL: internal error (6)".
+    dns_probe_command = (
+        f':local billingHost "{script_host}"; '
+        ':do { /ip dns cache flush } on-error={}; '
+        ':do { /ip dns set servers=1.1.1.1,8.8.8.8,9.9.9.9 allow-remote-requests=yes } on-error={}; '
+        ':delay 2s; '
+        ':put ("Resolving " . $billingHost); '
+        ':put [:resolve $billingHost];'
+    )
     command = (
-        ':do { /ip dns set servers=1.1.1.1,8.8.8.8 allow-remote-requests=yes } on-error={}; '
-        f':do {{ :resolve "{script_host}" }} on-error={{ :log warning "Billing SaaS: DNS cannot resolve {script_host}" }}; '
-        f'/tool fetch url="{script_url}" dst-path=billing-saas.rsc; delay 2s; /import billing-saas.rsc;'
+        f':local billingHost "{script_host}"; '
+        ':local billingResolved 0; '
+        ':do { /ip dns cache flush } on-error={}; '
+        ':foreach billingDns in={"1.1.1.1";"8.8.8.8";"9.9.9.9"} do={ '
+        '  :if ($billingResolved = 0) do={ '
+        '    :do { /ip dns set servers=$billingDns allow-remote-requests=yes; :delay 2s; :resolve $billingHost; :set billingResolved 1 } '
+        '    on-error={ :log warning ("Billing SaaS: DNS failed through " . $billingDns . " for " . $billingHost) } '
+        '  } '
+        '}; '
+        ':if ($billingResolved = 0) do={ :error ("Billing SaaS: DNS cannot resolve " . $billingHost . ". Check WAN internet, default route, and DNS firewall rules.") }; '
+        f'/tool fetch check-certificate=no url="{script_url}" dst-path=billing-saas.rsc; delay 2s; /import billing-saas.rsc;'
     )
     return ok({
         "command": command,
+        "dns_probe_command": dns_probe_command,
         "script_url": script_url,
         "script_host": script_host,
+        "resolved_ips": resolved_ips,
         "callback_url": callback_url,
         "expires_in_minutes": 15,
         "expires_at": expires_at.isoformat(),
@@ -2052,6 +2079,9 @@ def router_provision_script(request, token):
         return str(value or "").replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$")
 
     hotspot_file_script = _hotspot_captive_file_script(tenant, app_base_url)
+    tenant_packages = [pkg for pkg in list_children(f"tenants/{tenant_id}/packages") if pkg.get("name")]
+    package_profile_script = "".join(_package_profile_script(pkg) for pkg in tenant_packages)
+    package_profile_ids = [str(pkg.get("id")) for pkg in tenant_packages if pkg.get("id")]
     snapshot_script = _router_snapshot_fetch_script(snapshot_url)
 
     wg_server_public_key = str(os.getenv("WG_SERVER_PUBLIC_KEY") or tenant.get("wg_server_public_key") or "").strip()
@@ -2108,6 +2138,12 @@ def router_provision_script(request, token):
             "mikrotik_bridge_name": bridge_name,
             "mikrotik_wan_interface": wan_interface,
         })
+        for package_id_value in package_profile_ids:
+            ref(f"tenants/{tenant_id}/packages/{package_id_value}").update({
+                "ppp_profile_status": "queued",
+                "ppp_profile_queued_at": iso_now(),
+                "ppp_profile_error": None,
+            })
     except OperationalError:
         close_old_connections()
         try:
@@ -2122,6 +2158,12 @@ def router_provision_script(request, token):
                 "mikrotik_bridge_name": bridge_name,
                 "mikrotik_wan_interface": wan_interface,
             })
+            for package_id_value in package_profile_ids:
+                ref(f"tenants/{tenant_id}/packages/{package_id_value}").update({
+                    "ppp_profile_status": "queued",
+                    "ppp_profile_queued_at": iso_now(),
+                    "ppp_profile_error": None,
+                })
         except OperationalError:
             pass
 
@@ -2252,6 +2294,8 @@ def router_provision_script(request, token):
             :do {{ /ip hotspot walled-garden ip add action=accept dst-address=$billingPortalIp protocol=tcp dst-port=443 comment="billing-saas captive portal access" }} on-error={{}}
         }}
         {hotspot_file_script}
+        :log info "Billing SaaS: syncing package profiles";
+        {package_profile_script or ':log info "Billing SaaS: no package profiles to sync";'}
         :local billingHsFileCount [:len [/file find name~"hotspot"]];
         :do {{ /tool fetch keep-result=no url=("{snapshot_url}/hotspot-files-check?count=" . $billingHsFileCount) }} on-error={{ :log warning "Billing SaaS: hotspot file count report failed" }}
         {interface_report_loop}
@@ -2455,6 +2499,13 @@ def router_provision_complete(request, token):
     if bridge:
         updates["mikrotik_bridge_name"] = bridge
     ref(f"tenants/{tenant_id}").update(updates)
+    for package in list_children(f"tenants/{tenant_id}/packages"):
+        if package.get("id"):
+            ref(f"tenants/{tenant_id}/packages/{package['id']}").update({
+                "ppp_profile_status": "synced",
+                "ppp_profile_synced_at": iso_now(),
+                "ppp_profile_error": None,
+            })
     tenant_data = ref(f"tenants/{tenant_id}").get() or {}
     _update_linked_router(tenant_id, {**tenant_data, **updates}, status="online")
 
@@ -2600,11 +2651,17 @@ def package_sync(request, package_id=None):
         for pkg in packages_to_sync:
             if pkg.get("id"):
                 ref(f"tenants/{tenant_id}/packages/{pkg['id']}").update(status_updates)
+        updated_packages = [
+            {"id": pkg["id"], **(ref(f"tenants/{tenant_id}/packages/{pkg['id']}").get() or {})}
+            for pkg in packages_to_sync
+            if pkg.get("id")
+        ]
         payload = getattr(response, "data", {}) or {}
         payload.update({
             "message": "Package profile sync queued and will be applied on next router poll (usually within 30s).",
             "queued": True,
             "count": len(packages_to_sync),
+            "packages": updated_packages,
         })
         return ok(payload)
     results = []
@@ -2627,10 +2684,16 @@ def package_sync(request, package_id=None):
             results.append({"id": pkg["id"], "name": pkg.get("name"), "success": False, "message": str(exc)})
     if package_id:
         result = results[0] if results else {}
-        return ok({"success": bool(result.get("success")), "queued": bool(result.get("queued")), "message": "Package profile sync queued" if result.get("queued") else "MikroTik package profile synced" if result.get("success") else result.get("message", "Package profile sync failed")}, 200 if result.get("success") else 400)
+        updated_package = {"id": package_id, **(ref(f"tenants/{tenant_id}/packages/{package_id}").get() or {})}
+        return ok({"success": bool(result.get("success")), "queued": bool(result.get("queued")), "message": "Package profile sync queued" if result.get("queued") else "MikroTik package profile synced" if result.get("success") else result.get("message", "Package profile sync failed"), "package": updated_package}, 200 if result.get("success") else 400)
     synced = len([r for r in results if r["success"]])
     failed = len(results) - synced
-    return ok({"success": failed == 0, "message": "All package profiles synced" if failed == 0 else f"{synced} package profiles synced, {failed} failed", "synced": synced, "failed": failed, "results": results})
+    updated_packages = [
+        {"id": pkg["id"], **(ref(f"tenants/{tenant_id}/packages/{pkg['id']}").get() or {})}
+        for pkg in packages_to_sync
+        if pkg.get("id")
+    ]
+    return ok({"success": failed == 0, "message": "All package profiles synced" if failed == 0 else f"{synced} package profiles synced, {failed} failed", "synced": synced, "failed": failed, "results": results, "packages": updated_packages})
 
 
 @csrf_exempt
