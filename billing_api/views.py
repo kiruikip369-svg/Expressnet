@@ -614,6 +614,8 @@ def public_packages(request, tenant_id):
         return ok({"message": "Tenant is not accepting payments"}, 403)
     requested_service = str(request.GET.get("service_type") or "").strip().lower()
     packages = _public_packages_for_tenant(tenant_id, requested_service)
+    if requested_service in {"hotspot", "pppoe"} and not packages:
+        packages = _public_packages_for_tenant(tenant_id)
     return ok(sorted(packages, key=lambda item: float(item.get("price") or 0)))
 
 
@@ -1199,7 +1201,9 @@ def public_voucher_login(request, tenant_id):
 def captive_probe(request):
     tenant_id = _probe_tenant_id(request)
     if tenant_id:
-        return redirect(f"/api/captive/{tenant_id}")
+        request.GET = request.GET.copy()
+        request.GET["probe"] = "1"
+        return captive_portal_page(request, tenant_id)
     return HttpResponse("", status=204)
 
 

@@ -83,8 +83,24 @@ export default function CustomerPortal() {
         setTenant(tenantRes.data);
         const methods = Array.isArray(tenantRes.data?.payment_methods) ? tenantRes.data.payment_methods : [];
         setPaymentMethod(methods.find((item) => ['daraja_paybill', 'daraja_buygoods'].includes(item)) || '');
-        setPackages(responseItems(packagesRes.data));
+        let loadedPackages = responseItems(packagesRes.data);
+        if (routeServiceType && loadedPackages.length === 0) {
+          const fallbackRes = await publicApi.get(`/public/${tenantId}/packages`);
+          loadedPackages = responseItems(fallbackRes.data);
+        }
+        setPackages(loadedPackages);
       } catch (err) {
+        try {
+          const fallbackRes = await publicApi.get(`/public/${tenantId}/packages`);
+          const fallbackPackages = responseItems(fallbackRes.data);
+          if (fallbackPackages.length > 0) {
+            setPackages(fallbackPackages);
+            setError('');
+            return;
+          }
+        } catch (_) {
+          // Keep the original user-facing error below.
+        }
         setError(err.response?.data?.message || 'Unable to load packages');
       } finally {
         setLoading(false);
