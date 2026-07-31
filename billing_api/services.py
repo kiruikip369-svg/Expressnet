@@ -1227,7 +1227,7 @@ def hotspot_portal_landing_html(target, title):
         "<!doctype html><html><head>"
         "<meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width, initial-scale=1'>"
-        f"<meta http-equiv='refresh' content='1; url={escaped_target}'>"
+        f"<meta http-equiv='refresh' content='0; url={escaped_target}'>"
         f"<title>{title}</title>"
         "<style>body{margin:0;background:#f8fafc;font-family:Arial,sans-serif;color:#0f172a}"
         ".wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}"
@@ -1236,10 +1236,17 @@ def hotspot_portal_landing_html(target, title):
         "p{font-size:14px;color:#475569}</style>"
         "</head><body>"
         "<div class='wrap'><div class='card'><h2>Internet Access</h2><p>Opening your internet packages...</p>"
-        f"<a id='open' href='{escaped_target}'>Open packages</a></div></div>"
+        f"<a id='open' target='_self' rel='noreferrer' href='{escaped_target}'>Open packages</a></div></div>"
         "<script>"
         f"var target={target_json};"
-        "setTimeout(function(){try{window.top.location.href=target;}catch(e){window.location.href=target;}},250);"
+        "function go(){"
+        "try{window.location.replace(target);return;}catch(e){}"
+        "try{window.location.assign(target);return;}catch(e){}"
+        "try{document.location.href=target;return;}catch(e){}"
+        "try{window.top.location.href=target;}catch(e){}"
+        "}"
+        "document.getElementById('open').onclick=function(){go();return false;};"
+        "go();setTimeout(go,300);setTimeout(go,1000);"
         "</script>"
         "</body></html>"
     )
@@ -1366,6 +1373,9 @@ def walled_garden_hosts(tenant, portal_host=None):
     # reachable before Hotspot authentication.
     if portal_host and not portal_host.startswith("*."):
         hosts.append(f"*.{portal_host}")
+        parts = portal_host.split(".")
+        if len(parts) > 2:
+            hosts.append(f"*.{'.'.join(parts[-2:])}")
     hosts.append("challenges.cloudflare.com")
 
     gateway_hosts = {
@@ -1427,6 +1437,10 @@ def ensure_hotspot_captive_portal(tenant, base_url=None):
     profile_name = "billing-saas-captive"
     api = router_connect(tenant)
     try:
+        try:
+            api.command("/ip/dns/set", {"allow-remote-requests": "yes"})
+        except Exception:
+            pass
         upsert_router_item(
             api,
             ("ip", "hotspot", "profile"),
@@ -1687,6 +1701,7 @@ def _build_port_command_script(interface_name, service_type, profile_name, porta
     hotspot_setup = ""
     if portal_url:
         hotspot_setup = (
+            f':do {{ /ip dns set allow-remote-requests=yes }} on-error={{ :log warning "Billing SaaS: failed to enable DNS for hotspot clients" }}; '
             f':do {{ /ip hotspot profile add name="billing-saas-captive" login-by=http-pap,http-chap use-radius=no radius-accounting=no html-directory=hotspot comment="billing-saas captive portal: {portal_comment}" }} '
             f'on-error={{ /ip hotspot profile set [find name="billing-saas-captive"] login-by=http-pap,http-chap use-radius=no radius-accounting=no html-directory=hotspot comment="billing-saas captive portal: {portal_comment}" }}; '
             + "".join(
