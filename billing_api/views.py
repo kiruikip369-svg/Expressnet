@@ -1865,8 +1865,6 @@ def router_provision_command(request):
     script_url = f"{public_base_url(request)}/api/router/provision/{token}"
     callback_url = f"{public_base_url(request)}/api/router/provision/{token}/complete"
     script_host = urlparse(script_url).netloc.split("@")[-1].split(":")[0]
-    wan_interface = str(os.getenv("MIKROTIK_WAN_INTERFACE") or request.tenant.get("mikrotik_wan_interface") or "ether1").strip()
-    escaped_wan_interface = _rsc_escape(wan_interface)
     # NOTE: the imported .rsc script (router_provision_script) already performs
     # the full device/interface/profile snapshot AND calls the /complete
     # callback internally. Do not duplicate that work here — doing so doubles
@@ -1874,26 +1872,12 @@ def router_provision_command(request):
     # which is enough to exhaust RouterOS's SSL session pool on low-resource
     # hardware (RB9xx-class devices) and surfaces as "SSL: internal error (6)".
     command = (
-        f':do {{ /ip dhcp-client add interface="{escaped_wan_interface}" add-default-route=yes use-peer-dns=no disabled=no }} '
-        f'on-error={{ /ip dhcp-client set [find interface="{escaped_wan_interface}"] add-default-route=yes use-peer-dns=no disabled=no }}; '
-        ':do { /ip dns set servers=1.1.1.1,8.8.8.8 allow-remote-requests=yes } on-error={}; '
-        ':delay 5s; '
         f'/tool fetch check-certificate=no url="{script_url}" dst-path=billing-saas.rsc; '
         ':delay 2s; '
         '/import billing-saas.rsc;'
     )
-    preflight_command = (
-        f':put "WAN interface: {escaped_wan_interface}"; '
-        f'/ip dhcp-client print detail where interface="{escaped_wan_interface}"; '
-        '/ip address print; '
-        '/ip route print where dst-address=0.0.0.0/0; '
-        '/ip dns print; '
-        f':put "Resolving {script_host}"; '
-        f':put [:resolve "{script_host}"];'
-    )
     return ok({
         "command": command,
-        "preflight_command": preflight_command,
         "script_url": script_url,
         "script_host": script_host,
         "callback_url": callback_url,
@@ -2073,9 +2057,6 @@ def router_provision_script(request, token):
 
     agent_token = jwt.encode({"purpose": "mikrotik_agent", "tenant_id": tenant_id}, _get_jwt_secret("JWT_SECRET"), algorithm="HS256")
     agent_poll_url = f"{app_base_url}/api/router/agent/{agent_token}/poll"
-
-    def _rsc_escape(value):
-        return str(value or "").replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$")
 
     hotspot_file_script = _hotspot_captive_file_script(tenant, app_base_url)
     tenant_packages = [pkg for pkg in list_children(f"tenants/{tenant_id}/packages") if pkg.get("name")]
