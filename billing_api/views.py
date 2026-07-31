@@ -1871,9 +1871,8 @@ def router_provision_command(request):
     # which is enough to exhaust RouterOS's SSL session pool on low-resource
     # hardware (RB9xx-class devices) and surfaces as "SSL: internal error (6)".
     command = (
-        ':do { /ip dns set servers=1.1.1.1,8.8.8.8 allow-remote-requests=yes } on-error={}; '
         f'/tool fetch check-certificate=no url="{script_url}" dst-path=billing-saas.rsc; '
-        'delay 2s; '
+        ':delay 2s; '
         '/import billing-saas.rsc;'
     )
     return ok({
