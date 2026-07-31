@@ -10,7 +10,7 @@ import uuid
 import base64
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import urlparse, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlparse, urlsplit, urlunsplit
 
 import bcrypt
 import firebase_admin
@@ -1221,8 +1221,17 @@ def hotspot_redirect_html(portal_url=None):
 
 
 def hotspot_portal_landing_html(target, title):
+    parsed = urlsplit(str(target or ""))
+    action = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+    fields = parse_qsl(parsed.query, keep_blank_values=True)
     target_json = json.dumps(str(target or ""))
+    action_json = json.dumps(action)
     escaped_target = str(target or "").replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;").replace(">", "&gt;")
+    escaped_action = action.replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;").replace(">", "&gt;")
+    hidden_fields = "".join(
+        f"<input type='hidden' name='{str(name).replace('&', '&amp;').replace(chr(34), '&quot;').replace('<', '&lt;').replace('>', '&gt;')}' value='{str(value).replace('&', '&amp;').replace(chr(34), '&quot;').replace('<', '&lt;').replace('>', '&gt;')}'>"
+        for name, value in fields
+    )
     return (
         "<!doctype html><html><head>"
         "<meta charset='utf-8'>"
@@ -1232,21 +1241,23 @@ def hotspot_portal_landing_html(target, title):
         "<style>body{margin:0;background:#f8fafc;font-family:Arial,sans-serif;color:#0f172a}"
         ".wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}"
         ".card{max-width:360px;width:100%;background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:18px;text-align:center}"
-        "a,button{display:block;width:100%;box-sizing:border-box;border:0;border-radius:8px;background:#f97316;color:#fff;padding:12px 14px;font-weight:700;text-decoration:none}"
+        "a,button{display:block;width:100%;box-sizing:border-box;border:0;border-radius:8px;background:#f97316;color:#fff;padding:12px 14px;font-weight:700;text-decoration:none;cursor:pointer}"
         "p{font-size:14px;color:#475569}</style>"
         "</head><body>"
         "<div class='wrap'><div class='card'><h2>Internet Access</h2><p>Opening your internet packages...</p>"
-        f"<a id='open' target='_self' rel='noreferrer' href='{escaped_target}'>Open packages</a></div></div>"
+        f"<form id='portal-form' method='get' action='{escaped_action}'>{hidden_fields}<button id='open' type='submit'>Open packages</button></form>"
+        f"<p><a target='_self' rel='noreferrer' href='{escaped_target}'>Open in browser</a></p></div></div>"
         "<script>"
         f"var target={target_json};"
+        f"var action={action_json};"
+        "var form=document.getElementById('portal-form');"
         "function go(){"
+        "try{if(form){form.submit();return;}}catch(e){}"
         "try{window.location.replace(target);return;}catch(e){}"
-        "try{window.location.assign(target);return;}catch(e){}"
-        "try{document.location.href=target;return;}catch(e){}"
-        "try{window.top.location.href=target;}catch(e){}"
+        "try{window.location.href=target;return;}catch(e){}"
+        "try{window.top.location.href=target;return;}catch(e){}"
         "}"
-        "document.getElementById('open').onclick=function(){go();return false;};"
-        "go();setTimeout(go,300);setTimeout(go,1000);"
+        "setTimeout(go,100);setTimeout(go,900);setTimeout(go,2500);"
         "</script>"
         "</body></html>"
     )
@@ -1447,6 +1458,8 @@ def ensure_hotspot_captive_portal(tenant, base_url=None):
             {"name": profile_name},
             {
                 "name": profile_name,
+                "hotspot-address": "192.168.88.1",
+                "dns-name": "",
                 "login-by": "http-pap,http-chap",
                 "use-radius": "no",
                 "radius-accounting": "no",
@@ -1702,8 +1715,8 @@ def _build_port_command_script(interface_name, service_type, profile_name, porta
     if portal_url:
         hotspot_setup = (
             f':do {{ /ip dns set allow-remote-requests=yes }} on-error={{ :log warning "Billing SaaS: failed to enable DNS for hotspot clients" }}; '
-            f':do {{ /ip hotspot profile add name="billing-saas-captive" login-by=http-pap,http-chap use-radius=no radius-accounting=no html-directory=hotspot comment="billing-saas captive portal: {portal_comment}" }} '
-            f'on-error={{ /ip hotspot profile set [find name="billing-saas-captive"] login-by=http-pap,http-chap use-radius=no radius-accounting=no html-directory=hotspot comment="billing-saas captive portal: {portal_comment}" }}; '
+            f':do {{ /ip hotspot profile add name="billing-saas-captive" hotspot-address=192.168.88.1 dns-name="" login-by=http-pap,http-chap use-radius=no radius-accounting=no html-directory=hotspot comment="billing-saas captive portal: {portal_comment}" }} '
+            f'on-error={{ /ip hotspot profile set [find name="billing-saas-captive"] hotspot-address=192.168.88.1 dns-name="" login-by=http-pap,http-chap use-radius=no radius-accounting=no html-directory=hotspot comment="billing-saas captive portal: {portal_comment}" }}; '
             + "".join(
                 f':do {{ /ip hotspot walled-garden add action=allow dst-host="{_rsc_escape(h)}" comment="billing-saas captive portal access" }} on-error={{ :log warning "Billing SaaS: walled-garden add failed" }}; '
                 for h in walled_garden_hosts(tenant, portal_host)
