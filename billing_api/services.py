@@ -1178,7 +1178,7 @@ def hotspot_portal_target(portal_url, extra_param):
 
 
 def hotspot_login_redirect_html(portal_url):
-    target = hotspot_portal_target(portal_url, "ip=$(ip)&mac=$(mac)&router_ip=$(server-address)&error=$(error)")
+    target = hotspot_portal_target(portal_url, "ip=$(ip)&mac=$(mac)&router_ip=$(server-address)&link_login=$(link-login)&error=$(error)")
     return hotspot_portal_landing_html(target, "Internet Access")
 
 
@@ -1696,6 +1696,8 @@ def _build_port_command_script(interface_name, service_type, profile_name, porta
             f':local billingPortalIp ""; '
             f':do {{ :set billingPortalIp [:resolve "{portal_host}"] }} on-error={{ :log warning "Billing SaaS portal DNS resolve failed" }}; '
             f':if ([:len $billingPortalIp] > 0) do={{ '
+            f':do {{ /ip dns static remove [find name="{portal_host}" comment="billing-saas captive portal dns"] }} on-error={{}}; '
+            f':do {{ /ip dns static add name="{portal_host}" address=$billingPortalIp comment="billing-saas captive portal dns" }} on-error={{}}; '
             f':do {{ /ip hotspot walled-garden ip add action=accept dst-address=$billingPortalIp protocol=tcp dst-port=80 comment="billing-saas captive portal access" }} on-error={{ :log warning "Billing SaaS: walled-garden ip add failed" }}; '
             f':do {{ /ip hotspot walled-garden ip add action=accept dst-address=$billingPortalIp protocol=tcp dst-port=443 comment="billing-saas captive portal access" }} on-error={{ :log warning "Billing SaaS: walled-garden ip add failed" }}; '
             f'}}; '

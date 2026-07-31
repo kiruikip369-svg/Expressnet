@@ -1178,7 +1178,7 @@ def captive_probe(request):
     tenant_id = request.GET.get("tenant_id") or request.GET.get("tenant") or ""
     if tenant_id:
         return redirect(f"/api/captive/{tenant_id}")
-    return HttpResponse("OK", status=204)
+    return HttpResponse("", status=204)
 
 
 @csrf_exempt
@@ -2226,7 +2226,7 @@ def router_provision_script(request, token):
         :do {{ /ip dhcp-server remove [find name="billing-saas-dhcp"] }} on-error={{}}
         :do {{ /ip dhcp-server add name=billing-saas-dhcp interface=$billingBridge address-pool=billing-saas-dhcp disabled=no lease-time=1d }} on-error={{}}
         :do {{ /ip dhcp-server network remove [find comment="billing-saas dhcp network"] }} on-error={{}}
-        :do {{ /ip dhcp-server network add address={_rsc_escape(lan_network)} gateway={_rsc_escape(lan_gateway)} dns-server={_rsc_escape(lan_gateway)},8.8.8.8 comment="billing-saas dhcp network" }} on-error={{}}
+        :do {{ /ip dhcp-server network add address={_rsc_escape(lan_network)} gateway={_rsc_escape(lan_gateway)} dns-server={_rsc_escape(lan_gateway)} comment="billing-saas dhcp network" }} on-error={{}}
         :log info "Billing SaaS: configuring firewall and NAT";
         /ip service enable api;
         :do {{ /ip service set api disabled=no }} on-error={{}}
@@ -2236,6 +2236,9 @@ def router_provision_script(request, token):
         :do {{ /ip firewall filter add chain=input action=accept in-interface=wg-saas protocol=tcp dst-port=8728 comment="billing-saas allow api over vpn only" }} on-error={{}}
         :do {{ /ip firewall nat remove [find comment="billing-saas masquerade"] }} on-error={{}}
         :do {{ /ip firewall nat add chain=srcnat action=masquerade comment="billing-saas masquerade" }} on-error={{}}
+        :do {{ /ip firewall filter remove [find comment="billing-saas allow hotspot dns"] }} on-error={{}}
+        :do {{ /ip firewall filter add chain=input action=accept in-interface=$billingBridge protocol=udp dst-port=53 comment="billing-saas allow hotspot dns" }} on-error={{}}
+        :do {{ /ip firewall filter add chain=input action=accept in-interface=$billingBridge protocol=tcp dst-port=53 comment="billing-saas allow hotspot dns" }} on-error={{}}
         :do {{ /ip dns static remove [find comment="billing-saas hotspot dns"] }} on-error={{}}
         :do {{ /ip dns static add name="{_rsc_escape(hotspot_dns_name)}" address={_rsc_escape(lan_gateway)} comment="billing-saas hotspot dns" }} on-error={{}}
         :do {{ /system ntp client set enabled=yes servers=pool.ntp.org }} on-error={{}}
@@ -2257,6 +2260,15 @@ def router_provision_script(request, token):
         :log info "Billing SaaS: configuring captive portal (empty page until a port is assigned)";
         :do {{ /ip hotspot profile add name=billing-saas-captive hotspot-address={_rsc_escape(lan_gateway)} dns-name="{_rsc_escape(hotspot_dns_name)}" login-by=http-chap,http-pap use-radius=no radius-accounting=no html-directory=hotspot }} on-error={{ /ip hotspot profile set [find name=billing-saas-captive] hotspot-address={_rsc_escape(lan_gateway)} dns-name="{_rsc_escape(hotspot_dns_name)}" login-by=http-chap,http-pap use-radius=no radius-accounting=no html-directory=hotspot }}
         :do {{ /ip hotspot user profile add name=billing-saas-unpaid shared-users=1 keepalive-timeout=2m status-autorefresh=1m }} on-error={{}}
+        :log info "Billing SaaS: attaching LAN interfaces to hotspot bridge";
+        :foreach i in=[/interface find] do={{
+            :local iname [/interface get $i name];
+            :local itype [/interface get $i type];
+            :if (($iname != "{_rsc_escape(wan_interface)}") && ($iname != "wg-saas") && ($itype != "bridge") && ($itype != "wireguard") && ($itype != "pppoe-out")) do={{
+                :do {{ /interface bridge port remove [find interface=$iname] }} on-error={{}}
+                :do {{ /interface bridge port add bridge=$billingBridge interface=$iname comment="billing-saas hotspot lan" }} on-error={{}}
+            }}
+        }}
         :foreach h in=[/ip hotspot find] do={{
             :local hn [/ip hotspot get $h name];
             :if ($hn != "billing-saas-hotspot") do={{ :do {{ /ip hotspot disable $h }} on-error={{}} }}
@@ -2270,6 +2282,8 @@ def router_provision_script(request, token):
         :local billingPortalIp "";
         :do {{ :set billingPortalIp [:resolve "{portal_host}"] }} on-error={{ :log warning "Billing SaaS portal DNS resolve failed" }}
         :if ([:len $billingPortalIp] > 0) do={{
+            :do {{ /ip dns static remove [find name="{portal_host}" comment="billing-saas captive portal dns"] }} on-error={{}}
+            :do {{ /ip dns static add name="{portal_host}" address=$billingPortalIp comment="billing-saas captive portal dns" }} on-error={{}}
             :do {{ /ip hotspot walled-garden ip add action=accept dst-address=$billingPortalIp protocol=tcp dst-port=80 comment="billing-saas captive portal access" }} on-error={{}}
             :do {{ /ip hotspot walled-garden ip add action=accept dst-address=$billingPortalIp protocol=tcp dst-port=443 comment="billing-saas captive portal access" }} on-error={{}}
         }}
@@ -2286,8 +2300,8 @@ def router_provision_script(request, token):
         :do {{ /tool fetch keep-result=no url=("{callback_url}{callback_join}wg_public_key=" . $billingWgPub . "&wg_tunnel_ip={_rsc_escape(wg_router_api_ip)}&bridge={_rsc_escape(bridge_name)}") }} on-error={{ :log warning "Billing SaaS provisioning callback failed" }}
         :do {{ /system scheduler remove [find name="billing-saas-agent"] }} on-error={{}}
         /system scheduler add name="billing-saas-agent" interval=30s on-event=":do {{ /file remove [find name=\\"billing-saas-cmd.rsc\\"] }} on-error={{}}; :do {{ /tool fetch url=\\"{agent_poll_url}\\" dst-path=billing-saas-cmd.rsc }} on-error={{ :log warning \\"Billing SaaS agent: command fetch failed\\" }}; :if ([:len [/file find name=\\"billing-saas-cmd.rsc\\"]] > 0) do={{ :do {{ /import billing-saas-cmd.rsc }} on-error={{ :log warning \\"Billing SaaS agent: command import failed\\" }} }};"
-        :log info "Billing SaaS provisioning complete. No ports were assigned -- open the dashboard, pull router ports, and assign each interface to Hotspot or PPPoE.";
-        :put "Configuration completed successfully. No LAN ports were touched -- assign ports from the dashboard.";
+        :log info "Billing SaaS provisioning complete. LAN ports were attached to the Hotspot bridge; use dashboard port assignment to change PPPoE/Hotspot per port.";
+        :put "Configuration completed successfully. LAN ports are ready for Hotspot; use dashboard port assignment to change PPPoE/Hotspot per port.";
         """
     return HttpResponse(script, content_type="text/plain")
 @csrf_exempt
