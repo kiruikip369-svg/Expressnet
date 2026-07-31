@@ -1179,32 +1179,12 @@ def hotspot_portal_target(portal_url, extra_param):
 
 def hotspot_login_redirect_html(portal_url):
     target = hotspot_portal_target(portal_url, "ip=$(ip)&mac=$(mac)&router_ip=$(server-address)&error=$(error)")
-    return (
-        "<!doctype html><html><head>"
-        "<meta charset='utf-8'>"
-        "<meta name='viewport' content='width=device-width, initial-scale=1'>"
-        f"<meta http-equiv='refresh' content='0; url={target}'>"
-        "<title>Internet Access</title>"
-        "</head><body>"
-        f"<script>window.location.replace('{target}');</script>"
-        f"<a href='{target}'>Open packages</a>"
-        "</body></html>"
-    )
+    return hotspot_portal_landing_html(target, "Internet Access")
 
 
 def hotspot_error_redirect_html(portal_url):
     target = hotspot_portal_target(portal_url, "ip=$(ip)&mac=$(mac)&mikrotik_error=$(error)")
-    return (
-        "<!doctype html><html><head>"
-        "<meta charset='utf-8'>"
-        "<meta name='viewport' content='width=device-width, initial-scale=1'>"
-        f"<meta http-equiv='refresh' content='0; url={target}'>"
-        "<title>Internet Access</title>"
-        "</head><body>"
-        f"<script>window.location.replace('{target}');</script>"
-        f"<a href='{target}'>Open packages</a>"
-        "</body></html>"
-    )
+    return hotspot_portal_landing_html(target, "Internet Access")
 
 
 def hotspot_alogin_redirect_html(portal_url):
@@ -1226,17 +1206,7 @@ def hotspot_alogin_redirect_html(portal_url):
 def hotspot_redirect_html(portal_url=None):
     if portal_url:
         target = hotspot_portal_target(portal_url, "ip=$(ip)&mac=$(mac)&error=$(error)")
-        return (
-            "<!doctype html><html><head>"
-            "<meta charset='utf-8'>"
-            "<meta name='viewport' content='width=device-width, initial-scale=1'>"
-            f"<meta http-equiv='refresh' content='0; url={target}'>"
-            "<title>Internet Packages</title>"
-            "</head><body>"
-            f"<script>window.location.replace('{target}');</script>"
-            f"<a href='{target}'>Open packages</a>"
-            "</body></html>"
-        )
+        return hotspot_portal_landing_html(target, "Internet Packages")
     return (
         "<!doctype html><html><head>"
         "<meta charset='utf-8'>"
@@ -1246,6 +1216,31 @@ def hotspot_redirect_html(portal_url=None):
         "</head><body>"
         "<p style='font-family:Arial,sans-serif;text-align:center;padding:20px'>Connecting...</p>"
         "<script>setTimeout(function(){window.location.href='$(link-orig)';},300);</script>"
+        "</body></html>"
+    )
+
+
+def hotspot_portal_landing_html(target, title):
+    target_json = json.dumps(str(target or ""))
+    escaped_target = str(target or "").replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;").replace(">", "&gt;")
+    return (
+        "<!doctype html><html><head>"
+        "<meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+        f"<meta http-equiv='refresh' content='1; url={escaped_target}'>"
+        f"<title>{title}</title>"
+        "<style>body{margin:0;background:#f8fafc;font-family:Arial,sans-serif;color:#0f172a}"
+        ".wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}"
+        ".card{max-width:360px;width:100%;background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:18px;text-align:center}"
+        "a,button{display:block;width:100%;box-sizing:border-box;border:0;border-radius:8px;background:#f97316;color:#fff;padding:12px 14px;font-weight:700;text-decoration:none}"
+        "p{font-size:14px;color:#475569}</style>"
+        "</head><body>"
+        "<div class='wrap'><div class='card'><h2>Internet Access</h2><p>Opening your internet packages...</p>"
+        f"<a id='open' href='{escaped_target}'>Open packages</a></div></div>"
+        "<script>"
+        f"var target={target_json};"
+        "setTimeout(function(){try{window.top.location.href=target;}catch(e){window.location.href=target;}},250);"
+        "</script>"
         "</body></html>"
     )
 

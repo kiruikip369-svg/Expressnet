@@ -55,6 +55,7 @@ from .services import (
     initiate_paystack_payment,
     initiate_daraja_stk,
     iso_now,
+    walled_garden_hosts,
     firebase_backup_configured,
     list_children,
     mikrotik_managed_bridge_name,
@@ -2057,6 +2058,11 @@ def router_provision_script(request, token):
     app_base_url = public_base_url(request).rstrip("/")
     portal_url = captive_portal_url(tenant, app_base_url)
     portal_host = urlparse(portal_url).netloc.split("@")[-1].split(":")[0]
+    captive_hosts_script = "".join(
+        f':do {{ /ip hotspot walled-garden add action=allow dst-host="{_rsc_escape(host)}" comment="billing-saas captive portal access" }} on-error={{}}\\n'
+        for host in walled_garden_hosts(tenant, portal_host)
+        if host
+    )
     callback_base_url = f"{app_base_url}/api/router/provision/{token}/complete"
     snapshot_url = f"{app_base_url}/api/router/provision/{token}/snapshot"
     snapshot_interface_url = f"{app_base_url}/api/router/provision/{token}/snapshot/interface"
@@ -2279,11 +2285,7 @@ def router_provision_script(request, token):
         :do {{ /ip hotspot set [find name=billing-saas-hotspot] disabled=no }} on-error={{}}
         :do {{ /ip hotspot walled-garden remove [find comment="billing-saas captive portal access"] }} on-error={{}}
         :do {{ /ip hotspot walled-garden ip remove [find comment="billing-saas captive portal access"] }} on-error={{}}
-        :do {{ /ip hotspot walled-garden add action=allow dst-host="{portal_host}" comment="billing-saas captive portal access" }} on-error={{}}
-        :do {{ /ip hotspot walled-garden add action=allow dst-host="checkout.paystack.com" comment="billing-saas captive portal access" }} on-error={{}}
-        :do {{ /ip hotspot walled-garden add action=allow dst-host="api.paystack.co" comment="billing-saas captive portal access" }} on-error={{}}
-        :do {{ /ip hotspot walled-garden add action=allow dst-host="*.paystack.co" comment="billing-saas captive portal access" }} on-error={{}}
-        :do {{ /ip hotspot walled-garden add action=allow dst-host="*.paystack.com" comment="billing-saas captive portal access" }} on-error={{}}
+        {captive_hosts_script}
         :local billingPortalIp "";
         :do {{ :set billingPortalIp [:resolve "{portal_host}"] }} on-error={{ :log warning "Billing SaaS portal DNS resolve failed" }}
         :if ([:len $billingPortalIp] > 0) do={{
