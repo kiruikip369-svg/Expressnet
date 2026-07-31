@@ -3,7 +3,6 @@ import html
 import logging
 import os
 import secrets
-import socket
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -1865,43 +1864,22 @@ def router_provision_command(request):
     script_url = f"{public_base_url(request)}/api/router/provision/{token}"
     callback_url = f"{public_base_url(request)}/api/router/provision/{token}/complete"
     script_host = urlparse(script_url).netloc.split("@")[-1].split(":")[0]
-    try:
-        resolved_ips = sorted({item[4][0] for item in socket.getaddrinfo(script_host, 443, type=socket.SOCK_STREAM)})
-    except socket.gaierror:
-        resolved_ips = []
     # NOTE: the imported .rsc script (router_provision_script) already performs
     # the full device/interface/profile snapshot AND calls the /complete
     # callback internally. Do not duplicate that work here — doing so doubles
     # the number of sequential HTTPS/TLS handshakes the router has to make,
     # which is enough to exhaust RouterOS's SSL session pool on low-resource
     # hardware (RB9xx-class devices) and surfaces as "SSL: internal error (6)".
-    dns_probe_command = (
-        f':local billingHost "{script_host}"; '
-        ':do { /ip dns cache flush } on-error={}; '
-        ':do { /ip dns set servers=1.1.1.1,8.8.8.8,9.9.9.9 allow-remote-requests=yes } on-error={}; '
-        ':delay 2s; '
-        ':put ("Resolving " . $billingHost); '
-        ':put [:resolve $billingHost];'
-    )
     command = (
-        f':local billingHost "{script_host}"; '
-        ':local billingResolved 0; '
-        ':do { /ip dns cache flush } on-error={}; '
-        ':foreach billingDns in={"1.1.1.1";"8.8.8.8";"9.9.9.9"} do={ '
-        '  :if ($billingResolved = 0) do={ '
-        '    :do { /ip dns set servers=$billingDns allow-remote-requests=yes; :delay 2s; :resolve $billingHost; :set billingResolved 1 } '
-        '    on-error={ :log warning ("Billing SaaS: DNS failed through " . $billingDns . " for " . $billingHost) } '
-        '  } '
-        '}; '
-        ':if ($billingResolved = 0) do={ :error ("Billing SaaS: DNS cannot resolve " . $billingHost . ". Check WAN internet, default route, and DNS firewall rules.") }; '
-        f'/tool fetch check-certificate=no url="{script_url}" dst-path=billing-saas.rsc; delay 2s; /import billing-saas.rsc;'
+        ':do { /ip dns set servers=1.1.1.1,8.8.8.8 allow-remote-requests=yes } on-error={}; '
+        f'/tool fetch check-certificate=no url="{script_url}" dst-path=billing-saas.rsc; '
+        'delay 2s; '
+        '/import billing-saas.rsc;'
     )
     return ok({
         "command": command,
-        "dns_probe_command": dns_probe_command,
         "script_url": script_url,
         "script_host": script_host,
-        "resolved_ips": resolved_ips,
         "callback_url": callback_url,
         "expires_in_minutes": 15,
         "expires_at": expires_at.isoformat(),

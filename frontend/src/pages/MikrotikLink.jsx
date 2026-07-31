@@ -216,26 +216,6 @@ export default function MikrotikSettings() {
                 <p className="text-xs font-semibold uppercase text-slate-500">Purpose</p>
                 <p className="mt-1 text-sm font-semibold text-slate-900">Link router, report ports, and prepare captive portal</p>
               </div>
-              <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                <p className="text-xs font-semibold uppercase text-slate-500">Portal host</p>
-                <p className="mt-1 break-all font-mono text-sm text-slate-900">{provision.script_host}</p>
-              </div>
-              <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                <p className="text-xs font-semibold uppercase text-slate-500">Resolved IPs</p>
-                <p className="mt-1 break-all font-mono text-sm text-slate-900">{Array.isArray(provision.resolved_ips) && provision.resolved_ips.length ? provision.resolved_ips.join(', ') : '-'}</p>
-              </div>
-            </div>
-          )}
-          {provision?.dns_probe_command && (
-            <div className="mt-3 rounded-lg border border-slate-200 bg-white p-3">
-              <div className="flex items-center justify-between gap-3">
-                <p className="text-xs font-bold uppercase tracking-wide text-slate-500">DNS test command</p>
-                <button type="button" className="btn-secondary" onClick={() => copy(provision.dns_probe_command, 'DNS test command')}>
-                  <Clipboard size={15} />
-                  Copy
-                </button>
-              </div>
-              <pre className="mt-2 max-h-28 overflow-auto whitespace-pre-wrap break-all rounded-md bg-slate-100 p-3 text-xs leading-6 text-slate-700">{provision.dns_probe_command}</pre>
             </div>
           )}
           {provisioningState?.status === 'completed' && (
