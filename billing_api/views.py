@@ -1864,6 +1864,8 @@ def router_provision_command(request):
     script_url = f"{public_base_url(request)}/api/router/provision/{token}"
     callback_url = f"{public_base_url(request)}/api/router/provision/{token}/complete"
     script_host = urlparse(script_url).netloc.split("@")[-1].split(":")[0]
+    wan_interface = str(os.getenv("MIKROTIK_WAN_INTERFACE") or request.tenant.get("mikrotik_wan_interface") or "ether1").strip()
+    escaped_wan_interface = _rsc_escape(wan_interface)
     # NOTE: the imported .rsc script (router_provision_script) already performs
     # the full device/interface/profile snapshot AND calls the /complete
     # callback internally. Do not duplicate that work here — doing so doubles
@@ -1871,6 +1873,10 @@ def router_provision_command(request):
     # which is enough to exhaust RouterOS's SSL session pool on low-resource
     # hardware (RB9xx-class devices) and surfaces as "SSL: internal error (6)".
     command = (
+        f':do {{ /ip dhcp-client add interface="{escaped_wan_interface}" add-default-route=yes use-peer-dns=no disabled=no }} '
+        f'on-error={{ /ip dhcp-client set [find interface="{escaped_wan_interface}"] add-default-route=yes use-peer-dns=no disabled=no }}; '
+        ':do { /ip dns set servers=1.1.1.1,8.8.8.8 allow-remote-requests=yes } on-error={}; '
+        ':delay 5s; '
         f'/tool fetch check-certificate=no url="{script_url}" dst-path=billing-saas.rsc; '
         ':delay 2s; '
         '/import billing-saas.rsc;'
@@ -2237,10 +2243,14 @@ def router_provision_script(request, token):
         :do {{ /ip dns static add name="{_rsc_escape(hotspot_dns_name)}" address={_rsc_escape(lan_gateway)} comment="billing-saas hotspot dns" }} on-error={{}}
         :do {{ /system ntp client set enabled=yes servers=pool.ntp.org }} on-error={{}}
         :do {{ /system clock set time-zone-name="Africa/Nairobi" }} on-error={{}}
+        :log info "Billing SaaS: preparing WAN internet";
+        :do {{ /ip dhcp-client add interface="{_rsc_escape(wan_interface)}" add-default-route=yes use-peer-dns=no disabled=no comment="billing-saas wan" }} on-error={{ /ip dhcp-client set [find interface="{_rsc_escape(wan_interface)}"] add-default-route=yes use-peer-dns=no disabled=no comment="billing-saas wan" }}
+        :do {{ /ip dns set servers=1.1.1.1,8.8.8.8 allow-remote-requests=yes }} on-error={{}}
+        :delay 3s;
         :log info "Billing SaaS: creating default PPPoE server on managed bridge";
         :do {{ /interface pppoe-server server add service-name="billing-default-pppoe" interface=$billingBridge default-profile=default one-session-per-host=yes disabled=no comment="billing-saas default pppoe server" }} on-error={{ :log warning "Billing SaaS: PPPoE server creation failed" }}
         :log info "Billing SaaS: configuring RADIUS for PPPoE";
-        :do {{ /radius add service=ppp address={_rsc_escape(wg_server_tunnel_ip)} secret="{_rsc_escape(radius_shared_secret)}" src-address={_rsc_escape(wg_router_api_ip)} comment="billing-saas radius" }} on-error={{ /radius set [find address={_rsc_escape(wg_server_tunnel_ip)}] service=ppp secret="{_rsc_escape(radius_shared_secret)}" src-address={_rsc_escape(wg_router_api_ip)} comment="billing-saas radius" }}
+        :do {{ /radius add service=ppp address={_rsc_escape(wg_server_tunnel_ip)} secret="{_rsc_escape(radius_shared_secret)}" protocol=udp authentication-port=1812 accounting-port=1813 src-address={_rsc_escape(wg_router_api_ip)} comment="billing-saas radius" }} on-error={{ /radius set [find address={_rsc_escape(wg_server_tunnel_ip)}] service=ppp protocol=udp authentication-port=1812 accounting-port=1813 secret="{_rsc_escape(radius_shared_secret)}" src-address={_rsc_escape(wg_router_api_ip)} comment="billing-saas radius" }}
         :do {{ /radius incoming set accept=yes port=3799 }} on-error={{ :log warning "Billing SaaS: RADIUS incoming (CoA) setup failed" }}
         /ppp aaa set use-radius=yes accounting=yes interim-update=5m;
         :do {{ /ip hotspot profile set [find name="billing-saas-captive"] use-radius=no radius-accounting=no }} on-error={{ :log warning "Billing SaaS: hotspot local auth setup failed" }}
