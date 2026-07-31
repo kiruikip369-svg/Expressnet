@@ -206,6 +206,18 @@ export default function MikrotikSettings() {
             </div>
             <pre className="mt-3 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-md bg-slate-800 p-3 text-xs leading-6 text-slate-100">{provision?.command || 'Generating command...'}</pre>
           </div>
+          {provision?.preflight_command && (
+            <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-xs font-bold uppercase tracking-wide text-slate-500">WAN/DNS preflight</span>
+                <button type="button" className="btn-secondary" onClick={() => copy(provision.preflight_command, 'Preflight command')}>
+                  <Clipboard size={15} />
+                  Copy
+                </button>
+              </div>
+              <pre className="mt-2 max-h-28 overflow-auto whitespace-pre-wrap break-all rounded-md bg-white p-3 text-xs leading-6 text-slate-700">{provision.preflight_command}</pre>
+            </div>
+          )}
           {provision && (
             <div className="mt-3 grid gap-3 sm:grid-cols-2">
               <div className="rounded-md border border-slate-200 bg-slate-50 p-3">

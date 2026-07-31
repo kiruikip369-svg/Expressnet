@@ -1881,8 +1881,18 @@ def router_provision_command(request):
         ':delay 2s; '
         '/import billing-saas.rsc;'
     )
+    preflight_command = (
+        f':put "WAN interface: {escaped_wan_interface}"; '
+        f'/ip dhcp-client print detail where interface="{escaped_wan_interface}"; '
+        '/ip address print; '
+        '/ip route print where dst-address=0.0.0.0/0; '
+        '/ip dns print; '
+        f':put "Resolving {script_host}"; '
+        f':put [:resolve "{script_host}"];'
+    )
     return ok({
         "command": command,
+        "preflight_command": preflight_command,
         "script_url": script_url,
         "script_host": script_host,
         "callback_url": callback_url,
