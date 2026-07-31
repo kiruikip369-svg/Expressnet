@@ -662,6 +662,27 @@ def _captive_packages(tenant_id):
     return _public_packages_for_tenant(tenant_id)
 
 
+def _probe_tenant_id(request):
+    requested = str(request.GET.get("tenant_id") or request.GET.get("tenant") or "").strip()
+    if requested:
+        return requested
+
+    host = request.get_host().split(":", 1)[0].lower()
+    for tenant in list_children("tenants"):
+        tenant_host = str(tenant.get("captive_portal_host") or tenant.get("portal_host") or "").strip().lower()
+        if tenant_host and tenant_host == host:
+            return str(tenant.get("id") or "")
+
+    active_tenants = [
+        tenant
+        for tenant in list_children("tenants")
+        if tenant.get("status") not in {"suspended", "pending_setup"}
+    ]
+    if len(active_tenants) == 1:
+        return str(active_tenants[0].get("id") or "")
+    return ""
+
+
 def _html_page(title, body, status=200):
     return HttpResponse(
         f"""<!doctype html>
@@ -1175,7 +1196,7 @@ def public_voucher_login(request, tenant_id):
 
 
 def captive_probe(request):
-    tenant_id = request.GET.get("tenant_id") or request.GET.get("tenant") or ""
+    tenant_id = _probe_tenant_id(request)
     if tenant_id:
         return redirect(f"/api/captive/{tenant_id}")
     return HttpResponse("", status=204)

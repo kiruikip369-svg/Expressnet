@@ -40,6 +40,12 @@ function pathServiceType() {
   return '';
 }
 
+function responseItems(data) {
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.results)) return data.results;
+  return [];
+}
+
 export default function CustomerPortal() {
   const { tenantId } = useParams();
   const [tenant, setTenant] = useState(null);
@@ -77,7 +83,7 @@ export default function CustomerPortal() {
         setTenant(tenantRes.data);
         const methods = Array.isArray(tenantRes.data?.payment_methods) ? tenantRes.data.payment_methods : [];
         setPaymentMethod(methods.find((item) => ['daraja_paybill', 'daraja_buygoods'].includes(item)) || '');
-        setPackages(Array.isArray(packagesRes.data) ? packagesRes.data : []);
+        setPackages(responseItems(packagesRes.data));
       } catch (err) {
         setError(err.response?.data?.message || 'Unable to load packages');
       } finally {
