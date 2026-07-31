@@ -1177,6 +1177,42 @@ def hotspot_portal_target(portal_url, extra_param):
     return f"{portal_url}{separator}{ngrok_param}{extra_param}"
 
 
+CENTIPID_PORTAL_PLACEHOLDER = "https://expresswifi.centipidtechnologies.com/buy/packages"
+CENTIPID_ROUTER_PLACEHOLDER = "71785"
+
+
+def _strip_external_beacon(content):
+    marker = '<script defer src="https://static.cloudflareinsights.com'
+    start = content.find(marker)
+    if start == -1:
+        return content
+    end = content.find("</script>", start)
+    if end == -1:
+        return content[:start]
+    return content[:start] + content[end + len("</script>"):]
+
+
+def centipid_hotspot_file_html(page, portal_url):
+    page_name = str(page or "").strip().lower()
+    source_name = page_name
+    if source_name in {"status.html", "radvert.html"}:
+        source_name = "rlogin.html"
+    template_path = BASE_DIR / "centipeed" / "centipid-hotspot" / source_name
+    if not template_path.exists():
+        return None
+
+    content = template_path.read_text(encoding="utf-8", errors="ignore")
+    content = _strip_external_beacon(content)
+    target = str(portal_url or "").rstrip("/")
+    content = content.replace(CENTIPID_PORTAL_PLACEHOLDER, target)
+    content = content.replace(f"router={CENTIPID_ROUTER_PLACEHOLDER}", "router_ip=$(server-address)&link_login=$(link-login)")
+    content = content.replace(f"router={CENTIPID_ROUTER_PLACEHOLDER}&", "router_ip=$(server-address)&link_login=$(link-login)&")
+    content = content.replace(f'"router=71785"', '"router_ip=$(server-address)&link_login=$(link-login)"')
+    content = content.replace("router=71785", "router_ip=$(server-address)&link_login=$(link-login)")
+    content = content.replace("mikrotik_error=$(error)", "error=$(error)")
+    return content
+
+
 def hotspot_login_redirect_html(portal_url):
     target = hotspot_portal_target(portal_url, "ip=$(ip)&mac=$(mac)&router_ip=$(server-address)&link_login=$(link-login)&error=$(error)")
     return hotspot_portal_landing_html(target, "Internet Access")
@@ -1314,13 +1350,13 @@ def routeros_hotspot_fetch_script(portal_url, log_prefix="Billing SaaS"):
 def ensure_hotspot_login_redirect(api, portal_url):
     fallback_redirect_html = hotspot_redirect_html(portal_url)
     files_to_push = {
-        "hotspot/login.html": hotspot_login_redirect_html(portal_url),
-        "hotspot/alogin.html": hotspot_alogin_redirect_html(portal_url),
-        "hotspot/redirect.html": fallback_redirect_html,
-        "hotspot/error.html": hotspot_error_redirect_html(portal_url),
-        "hotspot/status.html": fallback_redirect_html,
-        "hotspot/rlogin.html": fallback_redirect_html,
-        "hotspot/radvert.html": fallback_redirect_html,
+        "hotspot/login.html": centipid_hotspot_file_html("login.html", portal_url) or hotspot_login_redirect_html(portal_url),
+        "hotspot/alogin.html": centipid_hotspot_file_html("alogin.html", portal_url) or hotspot_alogin_redirect_html(portal_url),
+        "hotspot/redirect.html": centipid_hotspot_file_html("redirect.html", portal_url) or fallback_redirect_html,
+        "hotspot/error.html": centipid_hotspot_file_html("error.html", portal_url) or hotspot_error_redirect_html(portal_url),
+        "hotspot/status.html": centipid_hotspot_file_html("status.html", portal_url) or fallback_redirect_html,
+        "hotspot/rlogin.html": centipid_hotspot_file_html("rlogin.html", portal_url) or fallback_redirect_html,
+        "hotspot/radvert.html": centipid_hotspot_file_html("radvert.html", portal_url) or fallback_redirect_html,
     }
     existing_files = list(api.path("file").select())
     pushed = {}

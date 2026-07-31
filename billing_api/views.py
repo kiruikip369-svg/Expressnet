@@ -48,6 +48,7 @@ from .services import (
     has_mikrotik_credentials,
     hash_password,
     hotspot_alogin_redirect_html,
+    centipid_hotspot_file_html,
     hotspot_error_redirect_html,
     hotspot_login_redirect_html,
     hotspot_redirect_html,
@@ -896,13 +897,13 @@ def captive_hotspot_file(request, tenant_id, page):
     portal_url = captive_portal_url({"id": tenant_id, **tenant}, public_base_url(request).rstrip("/"))
     redirect_html = hotspot_redirect_html(portal_url)
     files = {
-        "login.html": hotspot_login_redirect_html(portal_url),
-        "alogin.html": hotspot_alogin_redirect_html(portal_url),
-        "redirect.html": redirect_html,
-        "error.html": hotspot_error_redirect_html(portal_url),
-        "status.html": redirect_html,
-        "rlogin.html": redirect_html,
-        "radvert.html": redirect_html,
+        "login.html": centipid_hotspot_file_html("login.html", portal_url) or hotspot_login_redirect_html(portal_url),
+        "alogin.html": centipid_hotspot_file_html("alogin.html", portal_url) or hotspot_alogin_redirect_html(portal_url),
+        "redirect.html": centipid_hotspot_file_html("redirect.html", portal_url) or redirect_html,
+        "error.html": centipid_hotspot_file_html("error.html", portal_url) or hotspot_error_redirect_html(portal_url),
+        "status.html": centipid_hotspot_file_html("status.html", portal_url) or redirect_html,
+        "rlogin.html": centipid_hotspot_file_html("rlogin.html", portal_url) or redirect_html,
+        "radvert.html": centipid_hotspot_file_html("radvert.html", portal_url) or redirect_html,
     }
     content = files.get(str(page or "").strip().lower())
     if not content:
@@ -2101,7 +2102,7 @@ def router_provision_script(request, token):
     lan_gateway = lan_cidr.split("/", 1)[0]
     lan_network = str(os.getenv("MIKROTIK_LAN_NETWORK") or tenant.get("mikrotik_lan_network") or "192.168.88.0/24").strip()
     dhcp_pool = str(os.getenv("MIKROTIK_DHCP_POOL") or tenant.get("mikrotik_dhcp_pool") or "192.168.88.10-192.168.88.254").strip()
-    hotspot_dns_name = str(os.getenv("MIKROTIK_HOTSPOT_DNS_NAME") or tenant.get("mikrotik_hotspot_dns_name") or "signup.billing.local").strip()
+    hotspot_dns_name = str(os.getenv("MIKROTIK_HOTSPOT_DNS_NAME") or tenant.get("mikrotik_hotspot_dns_name") or "").strip()
 
     vpn_private_key_set = (
         f':do {{ /interface wireguard set [find name="wg-saas"] private-key="{_rsc_escape(wg_router_private_key)}" }} on-error={{}}\n'
@@ -2261,7 +2262,6 @@ def router_provision_script(request, token):
         :do {{ /ip firewall filter add chain=input action=accept in-interface=$billingBridge protocol=udp dst-port=53 comment="billing-saas allow hotspot dns" }} on-error={{}}
         :do {{ /ip firewall filter add chain=input action=accept in-interface=$billingBridge protocol=tcp dst-port=53 comment="billing-saas allow hotspot dns" }} on-error={{}}
         :do {{ /ip dns static remove [find comment="billing-saas hotspot dns"] }} on-error={{}}
-        :do {{ /ip dns static add name="{_rsc_escape(hotspot_dns_name)}" address={_rsc_escape(lan_gateway)} comment="billing-saas hotspot dns" }} on-error={{}}
         :do {{ /system ntp client set enabled=yes servers=pool.ntp.org }} on-error={{}}
         :do {{ /system clock set time-zone-name="Africa/Nairobi" }} on-error={{}}
         :log info "Billing SaaS: preparing WAN internet";
@@ -2279,7 +2279,9 @@ def router_provision_script(request, token):
         :do {{ /ip firewall filter add chain=input in-interface=wg-saas protocol=udp dst-port=1812,1813,3799 action=accept comment="billing-saas allow radius" }} on-error={{ :log warning "Billing SaaS: RADIUS firewall rule failed" }}
         :foreach s in=[/ppp secret find] do={{ :if ([/ppp secret get $s comment] != "billing-saas-managed") do={{ :do {{ /ppp secret remove $s }} on-error={{}} }} }}
         :log info "Billing SaaS: configuring captive portal (empty page until a port is assigned)";
-        :do {{ /ip hotspot profile add name=billing-saas-captive hotspot-address={_rsc_escape(lan_gateway)} dns-name="{_rsc_escape(hotspot_dns_name)}" login-by=http-chap,http-pap use-radius=no radius-accounting=no html-directory=hotspot }} on-error={{ /ip hotspot profile set [find name=billing-saas-captive] hotspot-address={_rsc_escape(lan_gateway)} dns-name="{_rsc_escape(hotspot_dns_name)}" login-by=http-chap,http-pap use-radius=no radius-accounting=no html-directory=hotspot }}
+        :do {{ /ip hotspot profile add name=billing-saas-captive hotspot-address={_rsc_escape(lan_gateway)} dns-name="" login-by=http-chap,http-pap use-radius=no radius-accounting=no html-directory=hotspot }} on-error={{ /ip hotspot profile set [find name=billing-saas-captive] hotspot-address={_rsc_escape(lan_gateway)} dns-name="" login-by=http-chap,http-pap use-radius=no radius-accounting=no html-directory=hotspot }}
+        :do {{ /interface wireless security-profiles add name="billing-saas-open" mode=none authentication-types="" wpa-pre-shared-key="" wpa2-pre-shared-key="" supplicant-identity="billing-saas" }} on-error={{ /interface wireless security-profiles set [find name="billing-saas-open"] mode=none authentication-types="" wpa-pre-shared-key="" wpa2-pre-shared-key="" supplicant-identity="billing-saas" }}
+        :do {{ /interface wireless set [find name="wlan1"] security-profile="billing-saas-open" disabled=no }} on-error={{ :log warning "Billing SaaS: wlan1 open hotspot profile failed" }}
         :do {{ /ip hotspot user profile add name=billing-saas-unpaid shared-users=1 keepalive-timeout=2m status-autorefresh=1m }} on-error={{}}
         :foreach h in=[/ip hotspot find] do={{
             :local hn [/ip hotspot get $h name];
