@@ -2043,7 +2043,7 @@ def router_provision_script(request, token):
     portal_url = captive_portal_url(tenant, app_base_url)
     portal_host = urlparse(portal_url).netloc.split("@")[-1].split(":")[0]
     captive_hosts_script = "".join(
-        f':do {{ /ip hotspot walled-garden add action=allow dst-host="{_rsc_escape(host)}" comment="billing-saas captive portal access" }} on-error={{}}\\n'
+        f':do {{ /ip hotspot walled-garden add action=allow dst-host="{_rsc_escape(host)}" comment="billing-saas captive portal access" }} on-error={{}}\n'
         for host in walled_garden_hosts(tenant, portal_host)
         if host
     )
