@@ -2237,6 +2237,7 @@ def router_provision_script(request, token):
         :log info "Billing SaaS: creating LAN bridge (no ports attached yet -- assign ports from the dashboard)";
         :local billingBridge "{_rsc_escape(bridge_name)}";
         :do {{ /interface bridge add name=$billingBridge comment="billing-saas managed bridge" }} on-error={{}}
+        :do {{ /interface list member add list=LAN interface=$billingBridge comment="billing-saas captive LAN" }} on-error={{ /interface list member set [find interface=$billingBridge] list=LAN comment="billing-saas captive LAN" }}
         :do {{ /ip address remove [find comment="billing-saas bridge gateway"] }} on-error={{}}
         :do {{ /ip address add address={_rsc_escape(lan_cidr)} interface=$billingBridge comment="billing-saas bridge gateway" }} on-error={{}}
         :do {{ /ip pool remove [find name="billing-saas-dhcp"] }} on-error={{}}
@@ -2259,8 +2260,12 @@ def router_provision_script(request, token):
         :do {{ /ip firewall nat remove [find comment="billing-saas masquerade"] }} on-error={{}}
         :do {{ /ip firewall nat add chain=srcnat action=masquerade comment="billing-saas masquerade" }} on-error={{}}
         :do {{ /ip firewall filter remove [find comment="billing-saas allow hotspot dns"] }} on-error={{}}
-        :do {{ /ip firewall filter add chain=input action=accept in-interface=$billingBridge protocol=udp dst-port=53 comment="billing-saas allow hotspot dns" }} on-error={{}}
-        :do {{ /ip firewall filter add chain=input action=accept in-interface=$billingBridge protocol=tcp dst-port=53 comment="billing-saas allow hotspot dns" }} on-error={{}}
+        :do {{ /ip firewall filter remove [find comment="billing-saas allow hotspot dhcp"] }} on-error={{}}
+        :do {{ /ip firewall filter remove [find comment="billing-saas allow hotspot web-proxy"] }} on-error={{}}
+        :do {{ /ip firewall filter add chain=input action=accept in-interface=$billingBridge protocol=udp dst-port=53 place-before=[find comment="defconf: drop all not coming from LAN"] comment="billing-saas allow hotspot dns" }} on-error={{ /ip firewall filter add chain=input action=accept in-interface=$billingBridge protocol=udp dst-port=53 comment="billing-saas allow hotspot dns" }}
+        :do {{ /ip firewall filter add chain=input action=accept in-interface=$billingBridge protocol=tcp dst-port=53 place-before=[find comment="defconf: drop all not coming from LAN"] comment="billing-saas allow hotspot dns" }} on-error={{ /ip firewall filter add chain=input action=accept in-interface=$billingBridge protocol=tcp dst-port=53 comment="billing-saas allow hotspot dns" }}
+        :do {{ /ip firewall filter add chain=input action=accept in-interface=$billingBridge protocol=udp dst-port=67,68 place-before=[find comment="defconf: drop all not coming from LAN"] comment="billing-saas allow hotspot dhcp" }} on-error={{ /ip firewall filter add chain=input action=accept in-interface=$billingBridge protocol=udp dst-port=67,68 comment="billing-saas allow hotspot dhcp" }}
+        :do {{ /ip firewall filter add chain=input action=accept in-interface=$billingBridge protocol=tcp dst-port=64872-64875 place-before=[find comment="defconf: drop all not coming from LAN"] comment="billing-saas allow hotspot web-proxy" }} on-error={{ /ip firewall filter add chain=input action=accept in-interface=$billingBridge protocol=tcp dst-port=64872-64875 comment="billing-saas allow hotspot web-proxy" }}
         :do {{ /ip dns static remove [find comment="billing-saas hotspot dns"] }} on-error={{}}
         :do {{ /system ntp client set enabled=yes servers=pool.ntp.org }} on-error={{}}
         :do {{ /system clock set time-zone-name="Africa/Nairobi" }} on-error={{}}
