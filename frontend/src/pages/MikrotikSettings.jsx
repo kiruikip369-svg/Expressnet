@@ -4,6 +4,34 @@ import toast from 'react-hot-toast';
 import { useNavigate } from 'react-router-dom';
 import api from '../api/axios';
 
+function toDate(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.valueOf()) ? null : date;
+}
+
+function isFreshLastSeen(value) {
+  const date = toDate(value);
+  return date ? Date.now() - date.getTime() <= 3 * 60 * 1000 : false;
+}
+
+function formatLastSeen(value) {
+  const date = toDate(value);
+  if (!date) return 'Never';
+  const seconds = Math.max(0, Math.round((Date.now() - date.getTime()) / 1000));
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  return date.toLocaleString();
+}
+
+function formatMemory(value) {
+  const bytes = Number(value || 0);
+  if (!bytes) return '-';
+  if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB free`;
+  return `${Math.round(bytes / (1024 * 1024))} MB free`;
+}
+
 export default function MikrotikSettings() {
   const navigate = useNavigate();
   const [config, setConfig] = useState(null);
@@ -23,8 +51,10 @@ export default function MikrotikSettings() {
       provisioning: item.provisioning_status || config?.mikrotik_provisioning_status || 'pending',
       cpu: routerStatus?.device?.cpu_load ?? item.cpu_load,
       memory: routerStatus?.device?.free_memory ?? item.free_memory,
-      status: item.status || (item.last_seen_at ? 'online' : 'offline'),
-      remoteWinbox: item.last_seen_ip || config?.mikrotik_host || '-',
+      status: routerStatus?.connection_status || item.status || (isFreshLastSeen(item.last_seen_at || config?.mikrotik_last_seen_at) ? 'online' : 'offline'),
+      remoteWinbox: routerStatus?.last_seen_ip || item.last_seen_ip || config?.mikrotik_host || '-',
+      lastSeenAt: routerStatus?.last_seen_at || item.last_seen_at || config?.mikrotik_last_seen_at,
+      source: routerStatus?.source || 'stored',
       ports: routerStatus?.interfaces?.length ?? item.interface_count,
       version: routerStatus?.device?.version || item.version,
     }));
@@ -44,8 +74,8 @@ export default function MikrotikSettings() {
     return true;
   });
 
-  async function loadConfig() {
-    setLoading(true);
+  async function loadConfig({ silent = false } = {}) {
+    if (!silent) setLoading(true);
     try {
       const { data } = await api.get('/settings/mikrotik');
       setConfig(data);
@@ -60,12 +90,16 @@ export default function MikrotikSettings() {
     } catch (error) {
       toast.error(error.response?.data?.message || 'Failed to load MikroTik routers');
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }
 
   useEffect(() => {
     loadConfig();
+    const interval = window.setInterval(() => {
+      loadConfig({ silent: true });
+    }, 30000);
+    return () => window.clearInterval(interval);
   }, []);
 
   const editRouter = async (routerId) => {
@@ -175,7 +209,7 @@ export default function MikrotikSettings() {
           </div>
 
           <div className="overflow-x-auto">
-            <table className="min-w-[900px] divide-y divide-slate-200">
+            <table className="min-w-[980px] divide-y divide-slate-200">
               <thead className="table-head">
                 <tr>
                   <th className="px-4 py-3">Board Name</th>
@@ -183,6 +217,8 @@ export default function MikrotikSettings() {
                   <th className="px-4 py-3">CPU</th>
                   <th className="px-4 py-3">Memory</th>
                   <th className="px-4 py-3">Status</th>
+                  <th className="px-4 py-3">Last Seen</th>
+                  <th className="px-4 py-3">Source</th>
                   <th className="px-4 py-3">Router IP</th>
                   <th className="px-4 py-3">Ports</th>
                   <th className="px-4 py-3 text-right">Actions</th>
@@ -191,19 +227,21 @@ export default function MikrotikSettings() {
               <tbody className="divide-y divide-slate-100">
                 {filteredRows.length === 0 ? (
                   <tr>
-                    <td className="table-cell text-slate-500" colSpan="8">No MikroTik routers linked yet.</td>
+                    <td className="table-cell text-slate-500" colSpan="10">No MikroTik routers linked yet.</td>
                   </tr>
                 ) : filteredRows.map((router) => (
                   <tr key={router.id}>
                     <td className="table-cell font-medium text-slate-950">{router.boardName}</td>
                     <td className="table-cell"><span className="rounded bg-orange-50 px-2 py-1 text-[11px] font-medium text-orange-700">{router.provisioning}</span></td>
                     <td className="table-cell">{router.cpu === undefined ? '-' : <span className="rounded bg-green-50 px-2 py-1 text-[11px] font-medium text-green-700">{router.cpu}%</span>}</td>
-                    <td className="table-cell">{router.memory ? <span className="rounded bg-orange-50 px-2 py-1 text-[11px] font-medium text-orange-700">{router.memory}</span> : '-'}</td>
+                    <td className="table-cell">{router.memory ? <span className="rounded bg-orange-50 px-2 py-1 text-[11px] font-medium text-orange-700">{formatMemory(router.memory)}</span> : '-'}</td>
                     <td className="table-cell">
-                      <span className={`rounded px-2 py-1 text-[11px] font-medium ${router.status === 'online' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-600'}`}>
-                        {router.status === 'online' ? 'Online' : 'Offline'}
+                      <span className={`rounded px-2 py-1 text-[11px] font-medium ${router.status === 'online' ? 'bg-green-50 text-green-700' : router.status === 'suspended' ? 'bg-amber-50 text-amber-700' : 'bg-red-50 text-red-600'}`}>
+                        {router.status === 'online' ? 'Online' : router.status === 'suspended' ? 'Suspended' : 'Offline'}
                       </span>
                     </td>
+                    <td className="table-cell">{formatLastSeen(router.lastSeenAt)}</td>
+                    <td className="table-cell"><span className="rounded bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-700">{router.source === 'routeros_api' ? 'Live API' : router.source === 'agent_report' ? 'Agent' : 'Stored'}</span></td>
                     <td className="table-cell text-green-700">{router.remoteWinbox}</td>
                     <td className="table-cell">{router.ports ?? '-'}</td>
                     <td className="table-cell">

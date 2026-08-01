@@ -21,6 +21,73 @@ function formatDate(value) {
   return `${String(date.getDate()).padStart(2, '0')}.${String(date.getMonth() + 1).padStart(2, '0')}.${date.getFullYear()} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
 }
 
+const ORANGE = '#d96f00';
+const GRID = '#e5e7eb';
+
+const fallbackSeries = {
+  payments: [['Jan', 23000], ['Feb', 18000], ['Mar', 21000], ['Apr', 14000], ['May', 14000], ['Jun', 200]],
+  activeUsers: [['Mon', 36, 0], ['Tue', 19, 0], ['Wed', 5, 0], ['Thu', 2, 0], ['Fri', 1, 0]],
+  retention: [['Jan', 130, 70, 38], ['Feb', 138, 68, 37], ['Mar', 72, 68, 39], ['Apr', 66, 67, 34], ['May', 50, 63, 43], ['Jun', 10, 28, 75]],
+  dataUsage: [['27 May', 62], ['28 May', 38], ['29 May', 49], ['30 May', 50], ['31 May', 75], ['01 Jun', 45]],
+  sms: [['Thu', 70], ['Fri', 190], ['Sat', 190], ['Sun', 170], ['Mon', 190], ['Tue', 40]],
+};
+
+function maxValue(data, index = 1) {
+  return Math.max(...data.map((item) => Number(item[index]) || 0), 1);
+}
+
+function points(data, index, width = 320, height = 190, pad = 18) {
+  const max = maxValue(data, index);
+  return data.map((item, i) => {
+    const x = pad + (i * (width - pad * 2)) / Math.max(data.length - 1, 1);
+    const y = height - pad - ((Number(item[index]) || 0) / max) * (height - pad * 2);
+    return `${x},${y}`;
+  }).join(' ');
+}
+
+function ChartCard({ title, subtitle, children }) {
+  return (
+    <section className="min-h-[318px] rounded-lg border border-slate-200 bg-white text-slate-950">
+      <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-3">
+        <div>
+          <h2 className="text-sm font-semibold">{title}</h2>
+          <p className="mt-1 text-[11px] text-slate-500">{subtitle}</p>
+        </div>
+        <button type="button" className="h-8 rounded-md border border-slate-200 bg-slate-50 px-3 text-[11px] font-semibold text-slate-700">This week</button>
+      </div>
+      <div className="p-4">{children}</div>
+    </section>
+  );
+}
+
+function BarChart({ data, valueIndex = 1, height = 190 }) {
+  const max = maxValue(data, valueIndex);
+  return (
+    <div className="flex items-end gap-3" style={{ height }}>
+      {data.map((item) => (
+        <div key={item[0]} className="flex flex-1 flex-col items-center gap-2">
+          <div className="w-full max-w-[26px] rounded-t-sm" style={{ height: `${Math.max(((Number(item[valueIndex]) || 0) / max) * (height - 28), item[valueIndex] ? 5 : 1)}px`, background: ORANGE }} />
+          <span className="text-[10px] text-slate-500">{item[0]}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function LineChart({ data, indexes = [1], colors = [ORANGE], height = 190 }) {
+  return (
+    <svg viewBox="0 0 320 190" className="h-full w-full" style={{ minHeight: height }}>
+      {[0, 1, 2, 3].map((line) => <line key={line} x1="18" x2="304" y1={24 + line * 42} y2={24 + line * 42} stroke={GRID} strokeWidth="1" />)}
+      {indexes.map((index, lineIndex) => <polyline key={index} fill="none" stroke={colors[lineIndex]} strokeWidth="3" points={points(data, index)} />)}
+      {indexes.map((index, lineIndex) => points(data, index).split(' ').map((point) => {
+        const [cx, cy] = point.split(',');
+        return <circle key={`${index}-${point}`} cx={cx} cy={cy} r="3.5" fill={colors[lineIndex]} stroke="#fff" strokeWidth="1" />;
+      }))}
+      {data.map((item, index) => <text key={item[0]} x={18 + (index * 286) / Math.max(data.length - 1, 1)} y="184" textAnchor="middle" fill="#64748b" fontSize="9">{String(item[0]).split(' ')[0]}</text>)}
+    </svg>
+  );
+}
+
 function sameDay(a, b) {
   return a && a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
@@ -51,6 +118,7 @@ function MetricCard({ title, value, helper }) {
 
 export default function Reports() {
   const [payments, setPayments] = useState([]);
+  const [dashboard, setDashboard] = useState(null);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState('');
   const [tab, setTab] = useState('checked');
@@ -59,8 +127,13 @@ export default function Reports() {
     async function load() {
       setLoading(true);
       try {
-        const { data } = await api.get('/payments?page_size=100');
-        setPayments(Array.isArray(data) ? data : data.results || []);
+        const [paymentsResponse, dashboardResponse] = await Promise.all([
+          api.get('/payments?page_size=100'),
+          api.get('/dashboard/stats'),
+        ]);
+        const paymentData = paymentsResponse.data;
+        setPayments(Array.isArray(paymentData) ? paymentData : paymentData.results || []);
+        setDashboard(dashboardResponse.data);
       } catch (error) {
         toast.error(error.response?.data?.message || 'Failed to load payment report');
       } finally {
@@ -94,6 +167,15 @@ export default function Reports() {
     };
   }, [successfulPayments]);
 
+  const chartData = useMemo(() => ({
+    payments: dashboard?.payments_chart?.length ? dashboard.payments_chart : fallbackSeries.payments,
+    activeUsers: dashboard?.active_users_chart?.length ? dashboard.active_users_chart : fallbackSeries.activeUsers,
+    retention: dashboard?.retention_chart?.length ? dashboard.retention_chart : fallbackSeries.retention,
+    dataUsage: dashboard?.data_usage_chart?.length ? dashboard.data_usage_chart : fallbackSeries.dataUsage,
+    forecast: dashboard?.revenue_forecast?.length ? dashboard.revenue_forecast : fallbackSeries.payments,
+    sms: dashboard?.sms_chart?.length ? dashboard.sms_chart : fallbackSeries.sms,
+  }), [dashboard]);
+
   return (
     <div className="space-y-7">
       <div className="flex items-center justify-between gap-3">
@@ -112,6 +194,15 @@ export default function Reports() {
         <MetricCard title="Weekly Earnings" value={totals.weekly} helper="Total earnings this week" />
         <MetricCard title="Monthly Earnings" value={totals.monthly} helper="Total earnings this month" />
         <MetricCard title="Mobile Money (This Month)" value={totals.monthly} helper="Excluding voucher payments" />
+      </section>
+
+      <section className="grid gap-4 xl:grid-cols-2">
+        <ChartCard title="Payments" subtitle="Payments and expenses trend."><BarChart data={chartData.payments} height={230} /></ChartCard>
+        <ChartCard title="Active Users" subtitle="Active and new users trend."><LineChart data={chartData.activeUsers} indexes={[1, 2]} colors={[ORANGE, '#f8dcc7']} height={230} /></ChartCard>
+        <ChartCard title="Customer retention rate" subtitle="Recurring and active customer movement."><LineChart data={chartData.retention} indexes={[1, 2, 3]} colors={['#2563eb', '#16a34a', '#ef4444']} height={230} /></ChartCard>
+        <ChartCard title="Data Usage" subtitle="Data usage trend for PPPoE and Hotspot users."><LineChart data={chartData.dataUsage} indexes={[1]} colors={[ORANGE]} height={230} /></ChartCard>
+        <ChartCard title="Revenue Forecast" subtitle="Expected revenue trend."><LineChart data={chartData.forecast} indexes={[1]} colors={['#2563eb']} height={230} /></ChartCard>
+        <ChartCard title="Sent SMS" subtitle="SMS sent from the system."><BarChart data={chartData.sms} height={230} /></ChartCard>
       </section>
 
       <section className="border-b border-slate-200">

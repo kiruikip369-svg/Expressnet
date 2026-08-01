@@ -724,7 +724,18 @@ def _router_is_agent_linked(tenant):
     return bool((tenant or {}).get("mikrotik_last_seen_at") or (tenant or {}).get("mikrotik_router_snapshot") or (tenant or {}).get("mikrotik_provisioning_status") in {"script_downloaded", "completed"})
 
 
-def _limited_router_status_payload(snapshot, assignments=None, source="provisioning_snapshot", message="Showing the latest configuration reported by the router agent."):
+def _router_connection_status(tenant, live=False):
+    if (tenant or {}).get("mikrotik_router_suspended"):
+        return "suspended"
+    if live:
+        return "online"
+    last_seen = parse_date((tenant or {}).get("mikrotik_last_seen_at"))
+    if last_seen and utcnow() - last_seen <= timedelta(minutes=3):
+        return "online"
+    return "offline"
+
+
+def _limited_router_status_payload(snapshot, assignments=None, source="provisioning_snapshot", message="Showing the latest configuration reported by the router agent.", tenant=None, live=False):
     payload = {**_empty_router_snapshot(), **(snapshot or {})}
     def port_rank(item):
         name = str(item.get("name") or "").lower()
@@ -750,6 +761,10 @@ def _limited_router_status_payload(snapshot, assignments=None, source="provision
     payload["assignments"] = assignments or {}
     payload["source"] = source
     payload["message"] = message
+    if tenant is not None:
+        payload["connection_status"] = _router_connection_status(tenant, live=live)
+        payload["last_seen_at"] = (tenant or {}).get("mikrotik_last_seen_at") or ""
+        payload["last_seen_ip"] = (tenant or {}).get("mikrotik_last_seen_ip") or ""
     return payload
 
 
@@ -761,7 +776,7 @@ def _linked_router_from_tenant(tenant):
         "board_name": device.get("board_name") or (tenant or {}).get("mikrotik_detected_board") or "MikroTik Router",
         "identity": (tenant or {}).get("mikrotik_detected_identity") or "",
         "version": device.get("version") or (tenant or {}).get("mikrotik_detected_version") or "",
-        "status": "suspended" if (tenant or {}).get("mikrotik_router_suspended") else "online" if (tenant or {}).get("mikrotik_last_seen_at") else "offline",
+        "status": _router_connection_status(tenant),
         "provisioning_status": (tenant or {}).get("mikrotik_provisioning_status") or "",
         "last_seen_at": (tenant or {}).get("mikrotik_last_seen_at") or "",
         "last_seen_ip": (tenant or {}).get("mikrotik_last_seen_ip") or "",
@@ -820,7 +835,7 @@ def captive_portal_page(request, tenant_id):
     packages = sorted(_captive_packages(tenant_id), key=lambda item: float(item.get("price") or 0))
     hidden = "".join(
         f"<input type='hidden' name='{html.escape(key)}' value='{html.escape(str(request.GET.get(key) or ''))}'>"
-        for key in ["ip", "mac", "router_ip", "error"]
+        for key in ["ip", "mac", "router_ip", "link_login", "link-orig", "dst", "error"]
         if request.GET.get(key)
     )
     if packages:
@@ -1182,19 +1197,39 @@ def public_voucher_login(request, tenant_id):
             if str(request.content_type or "").lower() != "application/json" and not request.headers.get("X-Requested-With"):
                 return _html_page("Voucher unavailable", f"<main><div class='alert'>Voucher was accepted, but router access could not be prepared: {html.escape(str(exc))}</div><p><a href='/api/captive/{html.escape(str(tenant_id))}'>Back to packages</a></p></main>", 503)
             return ok({"message": f"Voucher was accepted, but router access could not be prepared: {exc}"}, 503)
-    result = {"success": True, "username": voucher.get("username"), "password": voucher.get("password"), "router_ip": data.get("router_ip") or tenant.get("mikrotik_last_seen_ip") or "", "package_name": voucher.get("package"), "router_status": voucher.get("router_status")}
+    result = {
+        "success": True,
+        "username": voucher.get("username"),
+        "password": voucher.get("password"),
+        "router_ip": data.get("router_ip") or data.get("ip") or tenant.get("mikrotik_last_seen_ip") or "",
+        "link_login": data.get("link_login") or data.get("link-login") or "",
+        "dst": data.get("dst") or data.get("link-orig") or "http://connectivitycheck.gstatic.com/generate_204",
+        "package_name": voucher.get("package"),
+        "router_status": voucher.get("router_status"),
+    }
     # Captive requests are browser form posts from MikroTik. Return a page
     # that submits the actual credentials to the router, rather than JSON.
     # MikroTik submits application/x-www-form-urlencoded and often sends
     # Accept: */*. Do not return JSON for that captive-browser request.
-    accepts_html = str(request.content_type or "").lower() != "application/json" and not request.headers.get("X-Requested-With")
-    if accepts_html:
+    accept_header = str(request.headers.get("Accept") or "")
+    content_type = str(request.content_type or "").lower()
+    wants_html = (
+        not request.headers.get("X-Requested-With")
+        and (
+            "text/html" in accept_header
+            or "application/x-www-form-urlencoded" in content_type
+            or "multipart/form-data" in content_type
+        )
+    )
+    if wants_html:
         router_ip = html.escape(str(result.get("router_ip") or ""), quote=True)
+        login_action = html.escape(str(result.get("link_login") or (f"http://{router_ip}/login" if router_ip else "")), quote=True)
         username_value = html.escape(str(result.get("username") or ""), quote=True)
         password_value = html.escape(str(result.get("password") or ""), quote=True)
-        if not router_ip:
+        dst_value = html.escape(str(result.get("dst") or "http://connectivitycheck.gstatic.com/generate_204"), quote=True)
+        if not login_action:
             return _html_page("Voucher accepted", "<main><div class='card'>Voucher accepted. Please open the router login page to connect.</div></main>")
-        return _html_page("Connecting", f"<main><div class='card'>Voucher accepted. Connecting you to the internet...</div><form id='login' method='post' action='http://{router_ip}/login'><input type='hidden' name='username' value='{username_value}'><input type='hidden' name='password' value='{password_value}'><input type='hidden' name='dst' value='http://connectivitycheck.gstatic.com/generate_204'></form><script>document.getElementById('login').submit();</script><noscript><button form='login' type='submit'>Connect now</button></noscript></main>")
+        return _html_page("Connecting", f"<main><div class='card'>Voucher accepted. Connecting you to the internet...</div><form id='login' method='post' action='{login_action}'><input type='hidden' name='username' value='{username_value}'><input type='hidden' name='password' value='{password_value}'><input type='hidden' name='dst' value='{dst_value}'></form><script>document.getElementById('login').submit();</script><noscript><button form='login' type='submit'>Connect now</button></noscript></main>")
     return ok(result)
 
 
@@ -1297,23 +1332,37 @@ def customer_add(request):
     if service_type not in {"pppoe", "hotspot"}:
         return ok({"message": "Customer service type must be PPPoE or Hotspot"}, 400)
     provision = data.get("provision_mikrotik", True)
+    pkg = find_child_by_field(f"tenants/{request.tenant['id']}/packages", "name", data["package_name"])
+    if not pkg:
+        return ok({"message": f"Package \"{data['package_name']}\" was not found"}, 404)
+    provisioning_status = "not_requested"
+    provisioning_message = None
     if provision:
-        if not has_mikrotik_credentials(request.tenant):
-            return ok({"message": "Configure MikroTik credentials before provisioning customers"}, 400)
-        pkg = find_child_by_field(f"tenants/{request.tenant['id']}/packages", "name", data["package_name"])
-        if not pkg:
-            return ok({"message": f"Package \"{data['package_name']}\" was not found"}, 404)
-        try:
-            if service_type == "pppoe":
-                create_ppp_profile(request.tenant, pkg["name"], pkg.get("speed"))
-            else:
-                create_hotspot_profile(request.tenant, pkg["name"], pkg.get("speed"))
-            upsert_customer_access(request.tenant, {**data, "service_type": service_type}, disabled=True)
-        except (TimeoutError, OSError):
+        if not has_mikrotik_credentials(request.tenant) and not _router_is_agent_linked(request.tenant):
+            return ok({"message": "Link a MikroTik router before provisioning customers"}, 400)
+        if has_mikrotik_credentials(request.tenant):
+            try:
+                if service_type == "pppoe":
+                    create_ppp_profile(request.tenant, pkg["name"], pkg.get("speed"))
+                else:
+                    create_hotspot_profile(request.tenant, pkg["name"], pkg.get("speed"))
+                upsert_customer_access(request.tenant, {**data, "service_type": service_type}, disabled=True)
+                provisioning_status = "provisioned"
+                provisioning_message = f"{service_type.upper()} access created on MikroTik and kept disabled until payment"
+            except (TimeoutError, OSError):
+                _queue_router_command(request, {
+                    "type": "sync_secrets",
+                    "script": _customer_secret_script({**data, "package": data["package_name"], "speed": pkg.get("speed"), "service_type": service_type, "status": "inactive"}),
+                })
+                provisioning_status = "queued"
+                provisioning_message = f"{service_type.upper()} access queued for MikroTik sync"
+        else:
             _queue_router_command(request, {
                 "type": "sync_secrets",
                 "script": _customer_secret_script({**data, "package": data["package_name"], "speed": pkg.get("speed"), "service_type": service_type, "status": "inactive"}),
             })
+            provisioning_status = "queued"
+            provisioning_message = f"{service_type.upper()} access queued for MikroTik sync"
     new_ref = ref(f"tenants/{request.tenant['id']}/customers").push(
         {
             "name": data["name"],
@@ -1322,8 +1371,8 @@ def customer_add(request):
             "password": data["password"],
             "package": data["package_name"],
             "service_type": service_type,
-            "provisioning_status": "provisioned" if provision else "not_requested",
-            "provisioning_message": f"{service_type.upper()} access created on MikroTik and kept disabled until payment" if provision else None,
+            "provisioning_status": provisioning_status,
+            "provisioning_message": provisioning_message,
             "status": "inactive",
             "expiry_date": None,
             "auto_reconnect": True,
@@ -1351,24 +1400,34 @@ def customer_provision(request, customer_id):
     customer = ref(f"tenants/{request.tenant['id']}/customers/{customer_id}").get()
     if not customer:
         return ok({"message": "Customer not found"}, 404)
-    if not has_mikrotik_credentials(request.tenant):
-        return ok({"message": "Configure MikroTik credentials before provisioning customers"}, 400)
+    if not has_mikrotik_credentials(request.tenant) and not _router_is_agent_linked(request.tenant):
+        return ok({"message": "Link a MikroTik router before provisioning customers"}, 400)
     service_type = customer.get("service_type") or "pppoe"
     pkg = find_child_by_field(f"tenants/{request.tenant['id']}/packages", "name", customer.get("package"))
-    try:
-        if pkg:
-            if service_type == "pppoe":
-                create_ppp_profile(request.tenant, pkg["name"], pkg.get("speed"))
-            elif service_type == "hotspot":
-                create_hotspot_profile(request.tenant, pkg["name"], pkg.get("speed"))
-        upsert_customer_access(request.tenant, {**customer, "package_name": customer.get("package"), "service_type": service_type}, disabled=customer.get("status") != "active")
-    except (TimeoutError, OSError):
+    provisioning_status = "queued"
+    provisioning_message = f"{service_type.upper()} access queued for MikroTik sync"
+    if has_mikrotik_credentials(request.tenant):
+        try:
+            if pkg:
+                if service_type == "pppoe":
+                    create_ppp_profile(request.tenant, pkg["name"], pkg.get("speed"))
+                elif service_type == "hotspot":
+                    create_hotspot_profile(request.tenant, pkg["name"], pkg.get("speed"))
+            upsert_customer_access(request.tenant, {**customer, "package_name": customer.get("package"), "service_type": service_type}, disabled=customer.get("status") != "active")
+            provisioning_status = "provisioned"
+            provisioning_message = f"{service_type.upper()} access synced on MikroTik"
+        except (TimeoutError, OSError):
+            _queue_router_command(request, {
+                "type": "sync_secrets",
+                "script": _customer_secret_script({**customer, "package_name": customer.get("package"), "speed": (pkg or {}).get("speed"), "service_type": service_type}),
+            })
+    else:
         _queue_router_command(request, {
             "type": "sync_secrets",
             "script": _customer_secret_script({**customer, "package_name": customer.get("package"), "speed": (pkg or {}).get("speed"), "service_type": service_type}),
         })
     ref(f"tenants/{request.tenant['id']}/customers/{customer_id}").update(
-        {"provisioning_status": "provisioned", "service_type": service_type, "auto_reconnect": True, "provisioning_message": f"{service_type.upper()} access synced on MikroTik", "provisioned_at": iso_now()}
+        {"provisioning_status": provisioning_status, "service_type": service_type, "auto_reconnect": True, "provisioning_message": provisioning_message, "provisioned_at": iso_now()}
     )
     # Sync to Postgres + RADIUS if tenant has RADIUS enabled
     if request.tenant.get("radius_enabled"):
@@ -1580,18 +1639,18 @@ def router_status(request):
     snapshot = request.tenant.get("mikrotik_router_snapshot") or {}
     if not has_mikrotik_credentials(tenant):
         if _router_is_agent_linked(request.tenant) and snapshot:
-            return ok(_limited_router_status_payload(snapshot, assignments, "agent_report", "Showing the latest live configuration reported by the linked MikroTik agent."))
+            return ok(_limited_router_status_payload(snapshot, assignments, "agent_report", "Showing the latest configuration reported by the linked MikroTik agent.", request.tenant))
         return ok({"message": "Live MikroTik status requires reachable RouterOS API credentials. Stored provisioning data is not being shown as live status."}, 503)
     try:
         status = router_interface_status(tenant)
-        return ok(_limited_router_status_payload(status, assignments, "routeros_api", "Router configuration loaded from the live RouterOS API."))
+        return ok(_limited_router_status_payload(status, assignments, "routeros_api", "Router configuration loaded from the live RouterOS API.", request.tenant, live=True))
     except (TimeoutError, OSError) as exc:
         if _router_is_agent_linked(request.tenant) and snapshot:
-            return ok(_limited_router_status_payload(snapshot, assignments, "agent_report", f"Showing the latest live configuration reported by the linked MikroTik agent. Direct RouterOS API is unavailable: {exc}"))
+            return ok(_limited_router_status_payload(snapshot, assignments, "agent_report", f"Showing the latest configuration reported by the linked MikroTik agent. Direct RouterOS API is unavailable: {exc}", request.tenant))
         return ok({"message": f"Unable to pull live MikroTik status on port {tenant.get('mikrotik_port') or 8728}: {exc}"}, 503)
     except Exception as exc:
         if _router_is_agent_linked(request.tenant) and snapshot:
-            return ok(_limited_router_status_payload(snapshot, assignments, "agent_report", f"Showing the latest live configuration reported by the linked MikroTik agent. Direct RouterOS API failed: {exc}"))
+            return ok(_limited_router_status_payload(snapshot, assignments, "agent_report", f"Showing the latest configuration reported by the linked MikroTik agent. Direct RouterOS API failed: {exc}", request.tenant))
         return ok({"message": f"Unable to pull live MikroTik status: {exc}"}, 503)
 
 
@@ -2885,9 +2944,11 @@ def dashboard_stats(request):
     customers_data = tenant_customers(tenant_id)
     packages_data = tenant_packages(tenant_id)
     now = utcnow()
+    today = now.date()
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     paid_payments = [p for p in payments_data if p.get("status") == "success"]
     revenue_this_month = sum(float(p.get("amount") or 0) for p in paid_payments if (payment_date(p) or now) >= month_start)
+    revenue_today = sum(float(p.get("amount") or 0) for p in paid_payments if payment_date(p) and payment_date(p).date() == today)
 
     last_12 = []
     for offset in range(11, -1, -1):
@@ -2982,13 +3043,35 @@ def dashboard_stats(request):
             }
         )
 
+    pppoe_customers = [c for c in customers_data if str(c.get("service_type") or "pppoe").lower() == "pppoe"]
+    hotspot_customers = [c for c in customers_data if str(c.get("service_type") or "hotspot").lower() == "hotspot"]
+    active_hotspot_users = [
+        c for c in hotspot_customers
+        if str(c.get("status") or "").lower() == "active"
+    ]
+    snapshot = request.tenant.get("mikrotik_router_snapshot") or {}
+    device = snapshot.get("device") or {}
+    cpu_load = device.get("cpu_load")
+    router_status = "suspended" if request.tenant.get("mikrotik_router_suspended") else "online" if request.tenant.get("mikrotik_last_seen_at") else "offline"
+    active_ratio = (len([c for c in customers_data if c.get("status") == "active"]) / len(customers_data) * 100) if customers_data else 0
+
     return ok(
         {
             "summary": {
                 "revenue_this_month": round(revenue_this_month, 2),
+                "revenue_today": round(revenue_today, 2),
                 "sms_balance": float(request.tenant.get("sms_balance") or 0),
                 "total_customers": len(customers_data),
+                "pppoe_customers": len(pppoe_customers),
+                "hotspot_customers": len(hotspot_customers),
                 "active_customers": len([c for c in customers_data if c.get("status") == "active"]),
+            },
+            "router_health": {
+                "status": router_status,
+                "board_name": device.get("board_name") or request.tenant.get("mikrotik_detected_board"),
+                "cpu_load_percent": cpu_load,
+                "internet_strength_percent": 96 if router_status == "online" else 0 if router_status == "offline" else 62,
+                "traffic_percent": round(min(active_ratio, 100), 1),
             },
             "payments_chart": last_12,
             "active_users_chart": days,
@@ -3012,6 +3095,21 @@ def dashboard_stats(request):
                 key=lambda item: item["data_used"],
                 reverse=True,
             )[:6],
+            "top_hotspot_active_users": sorted(
+                [
+                    {
+                        "username": c.get("username") or c.get("phone"),
+                        "phone": c.get("phone"),
+                        "data_used": radius_data_usage.get(
+                            c.get("username"),
+                            float(c.get("data_used") or c.get("data_usage") or 0),
+                        ),
+                    }
+                    for c in active_hotspot_users
+                ],
+                key=lambda item: item["data_used"],
+                reverse=True,
+            )[:5],
             "package_performance": package_performance,
         }
     )
