@@ -8,16 +8,16 @@ const publicApi = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
 });
 
-function submitRouterLogin(routerIp, username, password) {
-  if (!routerIp || !username || !password) return false;
+function submitRouterLogin(routerIp, username, password, linkLogin = '', dst = '') {
+  if ((!routerIp && !linkLogin) || !username || !password) return false;
   const form = document.createElement('form');
   form.method = 'POST';
-  form.action = `http://${routerIp}/login`;
+  form.action = linkLogin || `http://${routerIp}/login`;
   form.style.display = 'none';
   [
     ['username', username],
     ['password', password],
-    ['dst', 'http://connectivitycheck.gstatic.com/generate_204'],
+    ['dst', dst || 'http://connectivitycheck.gstatic.com/generate_204'],
   ].forEach(([name, value]) => {
     const input = document.createElement('input');
     input.type = 'hidden';
@@ -67,7 +67,7 @@ export default function CustomerPortal() {
   const [verifying, setVerifying] = useState(false);
   const [verification, setVerification] = useState(null);
   const [error, setError] = useState('');
-  const [routerContext, setRouterContext] = useState({ ip: '', mac: '' });
+  const [routerContext, setRouterContext] = useState({ ip: '', mac: '', linkLogin: '', dst: '' });
   const [paymentMethod, setPaymentMethod] = useState('');
 
   useEffect(() => {
@@ -112,9 +112,11 @@ export default function CustomerPortal() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const routerIp = params.get('ip');
+    const routerIp = params.get('router_ip') || params.get('ip');
     const routerMac = params.get('mac');
-    setRouterContext({ ip: routerIp || '', mac: routerMac || '' });
+    const linkLogin = params.get('link_login') || params.get('link-login') || '';
+    const dst = params.get('dst') || params.get('link-orig') || '';
+    setRouterContext({ ip: routerIp || '', mac: routerMac || '', linkLogin, dst });
     const reference = params.get('reference') || params.get('trxref');
     if (!reference) return;
     // Carried through by the router's hotspot login.html redirect (see
@@ -132,7 +134,7 @@ export default function CustomerPortal() {
           // MikroTik's built-in login handler instead of leaving the
           // customer to read credentials off the screen and type them in.
           const loginIp = routerIp || data.router_ip;
-          if (submitRouterLogin(loginIp, data.username, data.password)) return;
+          if (submitRouterLogin(loginIp, data.username, data.password, linkLogin || data.link_login, dst || data.dst)) return;
         }
       } catch (err) {
         setVerification({ success: false, message: err.response?.data?.message || 'Payment verification failed. Please contact your ISP.' });
@@ -214,6 +216,8 @@ export default function CustomerPortal() {
         mac: routerContext.mac,
         router_ip: routerContext.ip,
         router_mac: routerContext.mac,
+        link_login: routerContext.linkLogin,
+        dst: routerContext.dst,
         payment_method: paymentMethod,
       });
       toast.success(data.message || (data.provider === 'mpesa' ? 'Check your phone for the M-Pesa prompt' : 'Redirecting to Paystack'));
@@ -265,7 +269,7 @@ export default function CustomerPortal() {
     try {
       const { data } = await publicApi.post(`/public/${tenantId}/voucher-login`, { code: voucherCode, router_ip: routerContext.ip });
       setVoucherAccess(data);
-      if (!submitRouterLogin(data.router_ip, data.username, data.password)) toast.success('Voucher accepted. Connect through the Hotspot login page.');
+      if (!submitRouterLogin(data.router_ip, data.username, data.password, data.link_login || routerContext.linkLogin, data.dst || routerContext.dst)) toast.success('Voucher accepted. Connect through the Hotspot login page.');
     } catch (err) { toast.error(err.response?.data?.message || 'Voucher login failed'); }
     finally { setRecovering(false); }
   };
@@ -276,7 +280,7 @@ export default function CustomerPortal() {
     try {
       const { data } = await publicApi.post(`/public/${tenantId}/voucher-login`, { username: accessUsername, password: accessPassword, router_ip: routerContext.ip });
       setVoucherAccess(data);
-      if (!submitRouterLogin(data.router_ip, data.username, data.password)) toast.success('Credentials accepted. Connect through the Hotspot login page.');
+      if (!submitRouterLogin(data.router_ip, data.username, data.password, data.link_login || routerContext.linkLogin, data.dst || routerContext.dst)) toast.success('Credentials accepted. Connect through the Hotspot login page.');
     } catch (err) { toast.error(err.response?.data?.message || 'Sign-in failed'); }
     finally { setRecovering(false); }
   };

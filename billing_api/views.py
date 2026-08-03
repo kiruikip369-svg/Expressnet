@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from io import StringIO
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 import jwt
 from django.conf import settings
@@ -735,6 +735,26 @@ def _router_connection_status(tenant, live=False):
     return "offline"
 
 
+def _router_login_form_html(username, password, router_ip="", link_login="", dst=""):
+    router_ip_value = str(router_ip or "").strip()
+    login_action_value = str(link_login or "").strip() or (f"http://{router_ip_value}/login" if router_ip_value else "")
+    if not login_action_value:
+        return ""
+    username_value = html.escape(str(username or ""), quote=True)
+    password_value = html.escape(str(password or ""), quote=True)
+    action_value = html.escape(login_action_value, quote=True)
+    dst_value = html.escape(str(dst or "http://connectivitycheck.gstatic.com/generate_204"), quote=True)
+    return (
+        f"<form id='login' method='post' action='{action_value}'>"
+        f"<input type='hidden' name='username' value='{username_value}'>"
+        f"<input type='hidden' name='password' value='{password_value}'>"
+        f"<input type='hidden' name='dst' value='{dst_value}'>"
+        "</form>"
+        "<script>document.getElementById('login').submit();</script>"
+        "<noscript><button form='login' type='submit'>Connect now</button></noscript>"
+    )
+
+
 def _limited_router_status_payload(snapshot, assignments=None, source="provisioning_snapshot", message="Showing the latest configuration reported by the router agent.", tenant=None, live=False):
     payload = {**_empty_router_snapshot(), **(snapshot or {})}
     def port_rank(item):
@@ -815,17 +835,27 @@ def captive_portal_page(request, tenant_id):
         _, _, payment = find_payment_by_paystack_reference(reference, tenant_id=tenant_id)
         if payment and payment.get("status") == "success":
             router_ip = payment.get("router_ip") or request.GET.get("ip") or ""
+            link_login = payment.get("link_login") or request.GET.get("link_login") or request.GET.get("link-login") or ""
+            dst = payment.get("dst") or request.GET.get("dst") or request.GET.get("link-orig") or "http://connectivitycheck.gstatic.com/generate_204"
             username = payment.get("access_username") or payment.get("username") or ""
             password = payment.get("access_password") or ""
-            login_url = f"http://{router_ip}/login?username={username}&password={password}" if router_ip and username and password else ""
-            auto_redirect = f"<script>setTimeout(function(){{ location.href = {json.dumps(login_url)}; }}, 1200);</script>" if login_url else ""
+            login_action = link_login or (f"http://{router_ip}/login" if router_ip else "")
+            auto_redirect = ""
+            if login_action and username and password:
+                auto_redirect = (
+                    f"<form id='paid-login' method='post' action='{html.escape(str(login_action), quote=True)}'>"
+                    f"<input type='hidden' name='username' value='{html.escape(str(username), quote=True)}'>"
+                    f"<input type='hidden' name='password' value='{html.escape(str(password), quote=True)}'>"
+                    f"<input type='hidden' name='dst' value='{html.escape(str(dst), quote=True)}'>"
+                    "</form><script>setTimeout(function(){document.getElementById('paid-login').submit();}, 800);</script>"
+                )
             payment_notice = f"""
               <div class="card">
                 <strong>Payment successful. Internet access is ready.</strong>
                 <p class="muted">Package: {html.escape(str(payment.get('package_name') or ''))}</p>
                 <p>Username: <strong>{html.escape(str(username))}</strong></p>
                 <p>Password: <strong>{html.escape(str(password))}</strong></p>
-                {f"<p><a href='{html.escape(login_url)}'>Connect now</a></p>" if login_url else ""}
+                {f"<p><button form='paid-login' type='submit'>Connect now</button></p>" if auto_redirect else ""}
               </div>
               {auto_redirect}
             """
@@ -975,6 +1005,8 @@ def _public_pay_impl(request, tenant_id):
     phone = normalize_phone(data["phone"])
     router_ip = str(data.get("ip") or data.get("router_ip") or "").strip()
     router_mac = str(data.get("mac") or data.get("router_mac") or "").strip()
+    link_login = str(data.get("link_login") or data.get("link-login") or "").strip()
+    dst = str(data.get("dst") or data.get("link-orig") or "").strip()
     service_type = str(data.get("service_type") or "hotspot").strip().lower()
     if service_type not in {"hotspot", "pppoe", "tv"}:
         return ok({"message": "Invalid service type"}, 400)
@@ -1023,6 +1055,8 @@ def _public_pay_impl(request, tenant_id):
             "mac_address": mac_address,
             "router_ip": router_ip,
             "router_mac": router_mac,
+            "link_login": link_login,
+            "dst": dst,
             "source": "customer_portal",
             "provider": "mpesa" if uses_daraja else "paystack",
         }
@@ -1046,6 +1080,8 @@ def _public_pay_impl(request, tenant_id):
                     "mac_address": mac_address,
                     "router_ip": router_ip,
                     "router_mac": router_mac,
+                    "link_login": link_login,
+                    "dst": dst,
                 },
                 payment_method=daraja_method,
             )
@@ -1072,6 +1108,8 @@ def _public_pay_impl(request, tenant_id):
                 "mac_address": mac_address,
                 "router_ip": router_ip,
                 "router_mac": router_mac,
+                "link_login": link_login,
+                "dst": dst,
             },
         )
     except PaymentProviderError as exc:
@@ -1148,6 +1186,8 @@ def public_redeem(request, tenant_id):
             "mac_address": payment.get("access_mac_address") or payment.get("mac_address"),
             "router_ip": payment.get("router_ip"),
             "router_mac": payment.get("router_mac"),
+            "link_login": payment.get("link_login"),
+            "dst": payment.get("dst"),
             "expires_at": payment.get("access_expires_at"),
         }
     )
@@ -1275,6 +1315,8 @@ def public_verify(request, tenant_id):
             "mac_address": payment.get("access_mac_address") or payment.get("mac_address"),
             "router_ip": payment.get("router_ip"),
             "router_mac": payment.get("router_mac"),
+            "link_login": payment.get("link_login"),
+            "dst": payment.get("dst"),
             "expires_at": payment.get("access_expires_at"),
             "paymentId": payment_id,
         }
@@ -1893,7 +1935,12 @@ def _queue_all_customer_secrets(request):
 
 def _queue_router_command(request, command_data):
     tenant_id = request.tenant["id"]
-    commands = [c for c in (request.tenant.get("pending_router_commands") or []) if c.get("status") == "pending"][-19:]
+    return _queue_router_command_for_tenant(tenant_id, command_data, request.tenant)
+
+
+def _queue_router_command_for_tenant(tenant_id, command_data, tenant_data=None):
+    tenant_data = tenant_data or ref(f"tenants/{tenant_id}").get() or {}
+    commands = [c for c in (tenant_data.get("pending_router_commands") or []) if c.get("status") == "pending"][-19:]
     command_id = secrets.token_hex(8)
     if command_data.get("type") == "reboot":
         script = '/system reboot;'
@@ -3544,10 +3591,6 @@ def activate_paid_access(tenant, payment_id, payment, phone, payment_code):
     else:
         new_ref = ref(f"tenants/{tenant_id}/customers").push({"name": mac_address or phone, "phone": phone, "username": username, "password": password, "package": package_for_access, "service_type": service_type, "status": "active", "expiry_date": expiry.isoformat(), "last_payment_id": payment_id, "last_payment_code": payment_code, "auto_reconnect": True, "mac_address": mac_address, "created_at": iso_now()})
         customer_id = new_ref.key
-    if service_type == "hotspot" and pkg:
-        create_hotspot_profile(tenant, pkg["name"], pkg.get("speed"), duration_seconds)
-    if service_type == "pppoe" and pkg:
-        create_ppp_profile(tenant, pkg["name"], pkg.get("speed"), duration_seconds)
     if service_type == "tv" and not mac_address:
         raise ValueError("TV MAC address is required for activation")
     if tenant.get("radius_enabled") and service_type in {"hotspot", "pppoe"}:
@@ -3570,20 +3613,42 @@ def activate_paid_access(tenant, payment_id, payment, phone, payment_code):
             sync_radius_customer(tenant_obj, {"username": username, "password": password})
         except Exception:
             pass
-    upsert_customer_access(
-        tenant,
-        {
-            "username": username,
-            "password": password,
-            "package_name": package_for_access,
-            "service_type": service_type,
-            "mac_address": mac_address,
-            "duration_seconds": duration_seconds,
-            "expires_at": expiry.isoformat(),
-        },
-    )
-    set_customer_enabled(tenant, username, service_type, True)
-    ref(f"tenants/{tenant_id}/payments/{payment_id}").update({"customer_id": customer_id, "access_username": username, "access_password": password, "access_mac_address": mac_address, "access_expires_at": expiry.isoformat(), "access_status": "active", "auto_reconnect": True})
+    router_access_status = "active"
+    router_access_error = None
+    access_payload = {
+        "username": username,
+        "password": password,
+        "package_name": package_for_access,
+        "package": package_for_access,
+        "service_type": service_type,
+        "mac_address": mac_address,
+        "duration_seconds": duration_seconds,
+        "expires_at": expiry.isoformat(),
+        "status": "active",
+        "speed": (pkg or {}).get("speed"),
+    }
+    if has_mikrotik_credentials(tenant):
+        try:
+            if service_type == "hotspot" and pkg:
+                create_hotspot_profile(tenant, pkg["name"], pkg.get("speed"), duration_seconds)
+            if service_type == "pppoe" and pkg:
+                create_ppp_profile(tenant, pkg["name"], pkg.get("speed"), duration_seconds)
+            upsert_customer_access(tenant, access_payload)
+            set_customer_enabled(tenant, username, service_type, True)
+        except Exception as exc:
+            if _router_is_agent_linked(tenant):
+                _queue_router_command_for_tenant(tenant_id, {"type": "sync_secrets", "script": _customer_secret_script(access_payload)})
+                router_access_status = "queued"
+                router_access_error = str(exc)
+            else:
+                raise
+    elif _router_is_agent_linked(tenant):
+        _queue_router_command_for_tenant(tenant_id, {"type": "sync_secrets", "script": _customer_secret_script(access_payload)})
+        router_access_status = "queued"
+    else:
+        router_access_status = "pending"
+        router_access_error = "No linked MikroTik router"
+    ref(f"tenants/{tenant_id}/payments/{payment_id}").update({"customer_id": customer_id, "access_username": username, "access_password": password, "access_mac_address": mac_address, "access_expires_at": expiry.isoformat(), "access_status": router_access_status, "access_error": router_access_error, "auto_reconnect": True})
     access = {"username": username, "password": password, "mac_address": mac_address, "expiry_date": expiry.isoformat()}
     try:
         notify_result = notify_payment_access(tenant, {**payment, "phone": phone, "package_name": package_for_access}, access)
@@ -3708,7 +3773,16 @@ def paystack_callback(request):
         if not complete_paystack_payment(verified):
             return ok({"success": False, "message": "The paid amount did not match the package amount."}, 400)
         if "text/html" in request.headers.get("accept", ""):
-            return redirect(f"/portal/{tenant_id}?reference={reference}")
+            payment = ref(f"tenants/{tenant_id}/payments/{payment_id}").get() or payment or {}
+            query = {
+                "reference": reference,
+                "router_ip": payment.get("router_ip") or "",
+                "ip": payment.get("router_ip") or "",
+                "mac": payment.get("router_mac") or "",
+                "link_login": payment.get("link_login") or "",
+                "dst": payment.get("dst") or "",
+            }
+            return redirect(f"/api/captive/{tenant_id}?{urlencode({key: value for key, value in query.items() if value})}")
         return ok({"success": True, "message": "Payment verified. You can return to the customer portal.", "paymentId": payment_id})
     ref(f"tenants/{tenant_id}/payments/{payment_id}").update({"status": "failed", "callback_result_desc": verified.get("gateway_response") or "Paystack verification did not succeed", "failed_at": iso_now()})
     return ok({"success": False, "message": "Payment was not successful"}, 400)
