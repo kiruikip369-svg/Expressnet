@@ -23,7 +23,8 @@ from django.http import FileResponse, Http404, HttpResponse
 from django.shortcuts import redirect
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
-from rest_framework.decorators import api_view,permission_classes
+from rest_framework.decorators import api_view, permission_classes, renderer_classes
+from rest_framework.renderers import JSONRenderer
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
 
@@ -1195,6 +1196,7 @@ def public_redeem(request, tenant_id):
 
 @csrf_exempt
 @api_view(["POST"])
+@renderer_classes([JSONRenderer])
 def public_voucher_login(request, tenant_id):
     data = body(request)
     code = str(data.get("code") or "").strip()
@@ -1210,9 +1212,30 @@ def public_voucher_login(request, tenant_id):
     if not voucher or voucher.get("status") != "active":
         return ok({"message": "Invalid or inactive voucher credentials"}, 401)
     tenant = ref(f"tenants/{tenant_id}").get() or {}
+    package = ref(f"tenants/{tenant_id}/packages/{voucher.get('package_id')}").get() if voucher.get("package_id") else None
+    access_payload = {
+        "name": voucher.get("username"),
+        "phone": data.get("phone") or "",
+        "username": voucher.get("username"),
+        "password": voucher.get("password"),
+        "package": voucher.get("package"),
+        "package_name": voucher.get("package"),
+        "service_type": "hotspot",
+        "status": "active",
+        "speed": (package or {}).get("speed"),
+    }
+    if tenant.get("radius_enabled"):
+        try:
+            from .radius_provisioning import sync_radius_customer, upsert_pg_customer
+
+            tenant_obj = Tenant.objects.get(pk=tenant_id)
+            pg_customer = upsert_pg_customer(tenant_obj, access_payload)
+            if pg_customer:
+                sync_radius_customer(tenant_obj, pg_customer)
+        except Exception as exc:
+            logger.warning("Voucher RADIUS sync failed tenant=%s voucher=%s error=%s", tenant_id, voucher.get("code"), exc)
     if has_mikrotik_credentials(tenant):
         try:
-            package = ref(f"tenants/{tenant_id}/packages/{voucher.get('package_id')}").get() if voucher.get("package_id") else None
             profile_name = str((package or {}).get("name") or voucher.get("package") or "").strip()
             if profile_name:
                 create_hotspot_profile({"id": tenant_id, **tenant}, profile_name, (package or {}).get("speed"))
@@ -1237,6 +1260,15 @@ def public_voucher_login(request, tenant_id):
             if str(request.content_type or "").lower() != "application/json" and not request.headers.get("X-Requested-With"):
                 return _html_page("Voucher unavailable", f"<main><div class='alert'>Voucher was accepted, but router access could not be prepared: {html.escape(str(exc))}</div><p><a href='/api/captive/{html.escape(str(tenant_id))}'>Back to packages</a></p></main>", 503)
             return ok({"message": f"Voucher was accepted, but router access could not be prepared: {exc}"}, 503)
+    elif _router_is_agent_linked(tenant):
+        script = _voucher_hotspot_user_script(voucher, package)
+        if script:
+            try:
+                _queue_router_command_for_tenant(tenant_id, {"type": "sync_voucher", "script": script}, tenant)
+                if voucher.get("id"):
+                    ref(f"tenants/{tenant_id}/vouchers/{voucher['id']}").update({"router_status": "queued", "router_error": None})
+            except Exception as exc:
+                logger.warning("Voucher router queue failed tenant=%s voucher=%s error=%s", tenant_id, voucher.get("code"), exc)
     result = {
         "success": True,
         "username": voucher.get("username"),
@@ -1251,15 +1283,10 @@ def public_voucher_login(request, tenant_id):
     # that submits the actual credentials to the router, rather than JSON.
     # MikroTik submits application/x-www-form-urlencoded and often sends
     # Accept: */*. Do not return JSON for that captive-browser request.
-    accept_header = str(request.headers.get("Accept") or "")
     content_type = str(request.content_type or "").lower()
     wants_html = (
         not request.headers.get("X-Requested-With")
-        and (
-            "text/html" in accept_header
-            or "application/x-www-form-urlencoded" in content_type
-            or "multipart/form-data" in content_type
-        )
+        and "application/json" not in content_type
     )
     if wants_html:
         router_ip = html.escape(str(result.get("router_ip") or ""), quote=True)
@@ -1645,14 +1672,7 @@ def vouchers(request):
         # agent's next ~30s poll, instead of losing the voucher entirely.
         voucher["router_status"] = "queued"
         voucher["router_error"] = str(exc)
-        profile_name = _rsc_escape(package.get("name") or "default")
-        script = (
-            f':do {{ :if ([:len [/ip hotspot user profile find name="{profile_name}"]] = 0) do={{ /ip hotspot user profile add name="{profile_name}" }} }} on-error={{}};'
-            f':if ([:len [/ip hotspot user find name="{_rsc_escape(voucher_username)}"]] = 0) do={{'
-            f' /ip hotspot user add name="{_rsc_escape(voucher_username)}" password="{_rsc_escape(voucher_password)}" '
-            f'profile="{profile_name}" disabled=no comment="billing-saas-voucher:{_rsc_escape(code)}" }} else={{'
-            f' /ip hotspot user set [find name="{_rsc_escape(voucher_username)}"] password="{_rsc_escape(voucher_password)}" profile="{profile_name}" disabled=no comment="billing-saas-voucher:{_rsc_escape(code)}" }};'
-        )
+        script = _voucher_hotspot_user_script(voucher, package)
         try:
             _queue_router_command(request, {"type": "sync_voucher", "script": script})
         except Exception as queue_exc:
@@ -1878,6 +1898,26 @@ def _customer_secret_script(customer):
         f'profile="{profile}" disabled={disabled} comment="billing-saas-managed" }} '
         f'else={{ /ip hotspot user set [find name="{username}"] password="{password}" '
         f'profile="{profile}" disabled={disabled} comment="billing-saas-managed" }};'
+    )
+
+
+def _voucher_hotspot_user_script(voucher, package=None):
+    profile_name = _rsc_escape((package or {}).get("name") or voucher.get("package") or "default")
+    username = _rsc_escape(voucher.get("username") or "")
+    password = _rsc_escape(voucher.get("password") or "")
+    code = _rsc_escape(voucher.get("code") or "")
+    speed = normalize_rate_limit((package or {}).get("speed")) or ""
+    rate_limit = f' rate-limit="{_rsc_escape(speed)}"' if speed else ""
+    if not username:
+        return ""
+    return (
+        f':do {{ :if ([:len [/ip hotspot user profile find name="{profile_name}"]] = 0) do={{'
+        f' /ip hotspot user profile add name="{profile_name}"{rate_limit} }} else={{'
+        f' /ip hotspot user profile set [find name="{profile_name}"]{rate_limit} }} }} on-error={{}};'
+        f':if ([:len [/ip hotspot user find name="{username}"]] = 0) do={{'
+        f' /ip hotspot user add name="{username}" password="{password}" '
+        f'profile="{profile_name}" disabled=no comment="billing-saas-voucher:{code}" }} else={{'
+        f' /ip hotspot user set [find name="{username}"] password="{password}" profile="{profile_name}" disabled=no comment="billing-saas-voucher:{code}" }};'
     )
 
 
