@@ -49,7 +49,7 @@ from .services import (
     has_mikrotik_credentials,
     hash_password,
     hotspot_alogin_redirect_html,
-    centipid_hotspot_file_html,
+    expressnet_hotspot_file_html,
     hotspot_error_redirect_html,
     hotspot_login_redirect_html,
     hotspot_redirect_html,
@@ -945,13 +945,13 @@ def captive_hotspot_file(request, tenant_id, page):
     portal_url = captive_portal_url({"id": tenant_id, **tenant}, public_base_url(request).rstrip("/"))
     redirect_html = hotspot_redirect_html(portal_url)
     files = {
-        "login.html": centipid_hotspot_file_html("login.html", portal_url) or hotspot_login_redirect_html(portal_url),
-        "alogin.html": centipid_hotspot_file_html("alogin.html", portal_url) or hotspot_alogin_redirect_html(portal_url),
-        "redirect.html": centipid_hotspot_file_html("redirect.html", portal_url) or redirect_html,
-        "error.html": centipid_hotspot_file_html("error.html", portal_url) or hotspot_error_redirect_html(portal_url),
-        "status.html": centipid_hotspot_file_html("status.html", portal_url) or redirect_html,
-        "rlogin.html": centipid_hotspot_file_html("rlogin.html", portal_url) or redirect_html,
-        "radvert.html": centipid_hotspot_file_html("radvert.html", portal_url) or redirect_html,
+        "login.html": expressnet_hotspot_file_html("login.html", portal_url) or hotspot_login_redirect_html(portal_url),
+        "alogin.html": expressnet_hotspot_file_html("alogin.html", portal_url) or hotspot_alogin_redirect_html(portal_url),
+        "redirect.html": expressnet_hotspot_file_html("redirect.html", portal_url) or redirect_html,
+        "error.html": expressnet_hotspot_file_html("error.html", portal_url) or hotspot_error_redirect_html(portal_url),
+        "status.html": expressnet_hotspot_file_html("status.html", portal_url) or redirect_html,
+        "rlogin.html": expressnet_hotspot_file_html("rlogin.html", portal_url) or redirect_html,
+        "radvert.html": expressnet_hotspot_file_html("radvert.html", portal_url) or redirect_html,
     }
     content = files.get(str(page or "").strip().lower())
     if not content:
