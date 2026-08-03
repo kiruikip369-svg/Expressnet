@@ -606,6 +606,16 @@ def tenant_uses_daraja(tenant):
     return bool(selected) and daraja_is_configured(tenant, selected)
 
 
+def selected_daraja_method(tenant, requested_method=None):
+    tenant = tenant or {}
+    requested = str(requested_method or "").strip().lower()
+    if requested in {"daraja_paybill", "daraja_buygoods"}:
+        return requested if daraja_is_configured(tenant, requested) else ""
+    methods = tenant.get("payment_methods") if isinstance(tenant.get("payment_methods"), list) else []
+    selected = next((str(item).strip().lower() for item in methods if str(item).strip().lower() in {"daraja_paybill", "daraja_buygoods"}), "")
+    return selected if selected and daraja_is_configured(tenant, selected) else ""
+
+
 def daraja_base_url(tenant):
     environment = str((tenant or {}).get("daraja_environment") or "production").strip().lower()
     return "https://api.safaricom.co.ke" if environment == "production" else "https://sandbox.safaricom.co.ke"
