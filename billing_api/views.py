@@ -37,7 +37,7 @@ from .services import (
     create_ppp_profile,
     configure_router_port,
     create_paystack_subaccount,
-    tenant_uses_daraja,
+    selected_daraja_method,
     initiate_daraja_payment,
     make_daraja_callback_token,
     verify_daraja_callback_token,
@@ -968,7 +968,8 @@ def captive_portal_pay(request, tenant_id):
     data = body(request)
     try:
         response = public_pay(request, tenant_id)
-    except Exception:
+    except Exception as exc:
+        logger.exception("Captive portal payment failed before provider response tenant=%s error=%s", tenant_id, exc)
         return _html_page("Payment unavailable", "<main><div class='alert'>Payment could not be started. Please try again or contact the provider.</div></main>", 503)
     payload = getattr(response, "data", {}) or {}
     if response.status_code >= 400:
@@ -1037,8 +1038,8 @@ def _public_pay_impl(request, tenant_id):
         mac_address = normalize_mac(data.get("mac_address"))
         if not mac_address:
             return ok({"message": "Enter a valid TV MAC address"}, 400)
-    configured_methods = tenant.get("payment_methods") if isinstance(tenant.get("payment_methods"), list) else []
-    uses_daraja = tenant_uses_daraja(tenant)
+    daraja_method = selected_daraja_method(tenant, data.get("payment_method"))
+    uses_daraja = bool(daraja_method)
     payment_ref = ref(f"tenants/{tenant_id}/payments").push(
         {
             "customer_id": customer.get("id") if customer else None,
@@ -1060,13 +1061,11 @@ def _public_pay_impl(request, tenant_id):
             "dst": dst,
             "source": "customer_portal",
             "provider": "mpesa" if uses_daraja else "paystack",
+            "payment_method": daraja_method or "paystack",
         }
     )
     try:
         if uses_daraja:
-            daraja_method = str(data.get("payment_method") or next((item for item in configured_methods if str(item).startswith("daraja_")), "")).strip().lower()
-            if daraja_method not in {"daraja_paybill", "daraja_buygoods"}:
-                daraja_method = "daraja_buygoods" if tenant.get("daraja_till_number") else "daraja_paybill"
             checkout = initiate_daraja_payment(
                 tenant,
                 payment_ref.key,
