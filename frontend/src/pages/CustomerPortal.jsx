@@ -6,6 +6,7 @@ import axios from 'axios';
 
 const publicApi = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
+  headers: { 'X-Requested-With': 'XMLHttpRequest' },
 });
 
 function submitRouterLogin(routerIp, username, password, linkLogin = '', dst = '') {
@@ -267,7 +268,7 @@ export default function CustomerPortal() {
     event.preventDefault();
     setRecovering(true);
     try {
-      const { data } = await publicApi.post(`/public/${tenantId}/voucher-login`, { code: voucherCode, router_ip: routerContext.ip });
+      const { data } = await publicApi.post(`/public/${tenantId}/voucher-login`, { code: voucherCode, router_ip: routerContext.ip, link_login: routerContext.linkLogin, dst: routerContext.dst });
       setVoucherAccess(data);
       if (!submitRouterLogin(data.router_ip, data.username, data.password, data.link_login || routerContext.linkLogin, data.dst || routerContext.dst)) toast.success('Voucher accepted. Connect through the Hotspot login page.');
     } catch (err) { toast.error(err.response?.data?.message || 'Voucher login failed'); }
@@ -278,7 +279,7 @@ export default function CustomerPortal() {
     event.preventDefault();
     setRecovering(true);
     try {
-      const { data } = await publicApi.post(`/public/${tenantId}/voucher-login`, { username: accessUsername, password: accessPassword, router_ip: routerContext.ip });
+      const { data } = await publicApi.post(`/public/${tenantId}/voucher-login`, { username: accessUsername, password: accessPassword, router_ip: routerContext.ip, link_login: routerContext.linkLogin, dst: routerContext.dst });
       setVoucherAccess(data);
       if (!submitRouterLogin(data.router_ip, data.username, data.password, data.link_login || routerContext.linkLogin, data.dst || routerContext.dst)) toast.success('Credentials accepted. Connect through the Hotspot login page.');
     } catch (err) { toast.error(err.response?.data?.message || 'Sign-in failed'); }

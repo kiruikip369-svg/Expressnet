@@ -1257,7 +1257,7 @@ def public_voucher_login(request, tenant_id):
             finally:
                 api.close()
         except Exception as exc:
-            if str(request.content_type or "").lower() != "application/json" and not request.headers.get("X-Requested-With"):
+            if "text/html" in str(request.headers.get("Accept") or "") and not request.headers.get("X-Requested-With"):
                 return _html_page("Voucher unavailable", f"<main><div class='alert'>Voucher was accepted, but router access could not be prepared: {html.escape(str(exc))}</div><p><a href='/api/captive/{html.escape(str(tenant_id))}'>Back to packages</a></p></main>", 503)
             return ok({"message": f"Voucher was accepted, but router access could not be prepared: {exc}"}, 503)
     elif _router_is_agent_linked(tenant):
@@ -1283,20 +1283,25 @@ def public_voucher_login(request, tenant_id):
     # that submits the actual credentials to the router, rather than JSON.
     # MikroTik submits application/x-www-form-urlencoded and often sends
     # Accept: */*. Do not return JSON for that captive-browser request.
-    content_type = str(request.content_type or "").lower()
+    accept_header = str(request.headers.get("Accept") or "")
     wants_html = (
         not request.headers.get("X-Requested-With")
-        and "application/json" not in content_type
+        and (
+            "text/html" in accept_header
+            or "application/json" not in accept_header
+        )
     )
     if wants_html:
-        router_ip = html.escape(str(result.get("router_ip") or ""), quote=True)
-        login_action = html.escape(str(result.get("link_login") or (f"http://{router_ip}/login" if router_ip else "")), quote=True)
-        username_value = html.escape(str(result.get("username") or ""), quote=True)
-        password_value = html.escape(str(result.get("password") or ""), quote=True)
-        dst_value = html.escape(str(result.get("dst") or "http://connectivitycheck.gstatic.com/generate_204"), quote=True)
-        if not login_action:
+        login_form = _router_login_form_html(
+            result.get("username"),
+            result.get("password"),
+            router_ip=result.get("router_ip"),
+            link_login=result.get("link_login"),
+            dst=result.get("dst"),
+        )
+        if not login_form:
             return _html_page("Voucher accepted", "<main><div class='card'>Voucher accepted. Please open the router login page to connect.</div></main>")
-        return _html_page("Connecting", f"<main><div class='card'>Voucher accepted. Connecting you to the internet...</div><form id='login' method='post' action='{login_action}'><input type='hidden' name='username' value='{username_value}'><input type='hidden' name='password' value='{password_value}'><input type='hidden' name='dst' value='{dst_value}'></form><script>document.getElementById('login').submit();</script><noscript><button form='login' type='submit'>Connect now</button></noscript></main>")
+        return _html_page("Connecting", f"<main><div class='card'>Voucher accepted. Connecting you to the internet...</div>{login_form}</main>")
     return ok(result)
 
 
