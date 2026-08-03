@@ -274,7 +274,7 @@ def _package_sync_script_for_request(request, package):
         ) + script
     return script
 
-
+#u
 def package_duration_label(package):
     delta = package_duration_delta(package)
     total_seconds = int(delta.total_seconds())
