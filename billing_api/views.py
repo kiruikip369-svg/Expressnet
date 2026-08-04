@@ -1253,6 +1253,7 @@ def public_voucher_login(request, tenant_id):
     else:
         voucher = next((item for item in vouchers if str(item.get("username") or "").lower() == username.lower() and str(item.get("password") or "") == password), None)
     if not voucher or voucher.get("status") != "active":
+        logger.info("Voucher login rejected tenant=%s code=%s username=%s reason=invalid_or_inactive", tenant_id, code, username)
         return ok({"message": "Invalid or inactive voucher credentials"}, 401)
     tenant = ref(f"tenants/{tenant_id}").get() or {}
     package = ref(f"tenants/{tenant_id}/packages/{voucher.get('package_id')}").get() if voucher.get("package_id") else None
@@ -1275,9 +1276,19 @@ def public_voucher_login(request, tenant_id):
             pg_customer = upsert_pg_customer(tenant_obj, access_payload)
             if pg_customer:
                 sync_radius_customer(tenant_obj, pg_customer)
+            logger.info(
+                "Voucher login prepared for RADIUS tenant=%s voucher=%s username=%s package=%s",
+                tenant_id,
+                voucher.get("code"),
+                voucher.get("username"),
+                voucher.get("package"),
+            )
         except Exception as exc:
-            logger.warning("Voucher RADIUS sync failed tenant=%s voucher=%s error=%s", tenant_id, voucher.get("code"), exc)
-    if has_mikrotik_credentials(tenant):
+            logger.warning("Voucher RADIUS sync failed tenant=%s voucher=%s error=%s", tenant_id, voucher.get("code"), exc, exc_info=True)
+            return ok({"message": "Voucher was accepted, but RADIUS authentication could not be prepared. Please contact support."}, 503)
+    if tenant.get("radius_enabled"):
+        pass
+    elif has_mikrotik_credentials(tenant):
         try:
             profile_name = str((package or {}).get("name") or voucher.get("package") or "").strip()
             if profile_name:
@@ -1335,6 +1346,14 @@ def public_voucher_login(request, tenant_id):
         )
     )
     if wants_html:
+        logger.info(
+            "Voucher login accepted tenant=%s voucher=%s username=%s mode=%s link_login_present=%s",
+            tenant_id,
+            voucher.get("code"),
+            result.get("username"),
+            "radius" if tenant.get("radius_enabled") else "local_router",
+            bool(result.get("link_login")),
+        )
         login_form = _router_login_form_html(
             result.get("username"),
             result.get("password"),
@@ -2049,6 +2068,67 @@ def _queue_router_command_for_tenant(tenant_id, command_data, tenant_data=None):
         "command_id": command_id,
     })
 
+
+def _tenant_value(tenant, *keys):
+    for key in keys:
+        value = (tenant or {}).get(key)
+        if value not in (None, ""):
+            return str(value).strip()
+    extra = (tenant or {}).get("extra") or {}
+    if isinstance(extra, dict):
+        for key in keys:
+            value = extra.get(key)
+            if value not in (None, ""):
+                return str(value).strip()
+    return ""
+
+
+def _config_value(tenant, env_names, tenant_keys=(), default=""):
+    for name in env_names:
+        value = os.getenv(name)
+        if value not in (None, ""):
+            return str(value).strip()
+    value = _tenant_value(tenant, *tenant_keys)
+    return value if value else default
+
+
+def _wireguard_server_config(tenant):
+    public_key = _config_value(
+        tenant,
+        ("WG_SERVER_PUBLIC_KEY", "WIREGUARD_SERVER_PUBLIC_KEY", "VPN_SERVER_PUBLIC_KEY"),
+        ("wg_server_public_key", "wireguard_server_public_key", "vpn_server_public_key"),
+    )
+    endpoint = _config_value(
+        tenant,
+        ("WG_SERVER_ENDPOINT", "WG_SERVER_PUBLIC_IP", "WIREGUARD_SERVER_ENDPOINT", "WIREGUARD_ENDPOINT", "VPN_SERVER_ENDPOINT"),
+        ("wg_server_endpoint", "wg_server_public_ip", "wireguard_server_endpoint", "vpn_server_endpoint"),
+    )
+    port = _config_value(
+        tenant,
+        ("WG_SERVER_PORT", "WIREGUARD_SERVER_PORT", "WIREGUARD_PORT", "VPN_SERVER_PORT"),
+        ("wg_server_port", "wireguard_server_port", "vpn_server_port"),
+        "51820",
+    )
+    tunnel_ip = _config_value(
+        tenant,
+        ("WG_SERVER_TUNNEL_IP", "WIREGUARD_SERVER_TUNNEL_IP", "VPN_SERVER_TUNNEL_IP"),
+        ("wg_server_tunnel_ip", "wireguard_server_tunnel_ip", "vpn_server_tunnel_ip"),
+        "10.8.0.1",
+    ).split("/")[0]
+    missing = []
+    if not public_key:
+        missing.append("WG_SERVER_PUBLIC_KEY")
+    if not endpoint:
+        missing.append("WG_SERVER_ENDPOINT")
+    return {
+        "public_key": public_key,
+        "endpoint": endpoint,
+        "port": port,
+        "tunnel_ip": tunnel_ip,
+        "missing": missing,
+        "ready": not missing,
+    }
+
 @csrf_exempt
 @api_view(["GET"])
 @tenant_required
@@ -2085,6 +2165,7 @@ def router_provision_command(request):
     script_url = f"{public_base_url(request)}/api/router/provision/{token}"
     callback_url = f"{public_base_url(request)}/api/router/provision/{token}/complete"
     script_host = urlparse(script_url).netloc.split("@")[-1].split(":")[0]
+    wg_config = _wireguard_server_config(request.tenant)
     # NOTE: the imported .rsc script (router_provision_script) already performs
     # the full device/interface/profile snapshot AND calls the /complete
     # callback internally. Do not duplicate that work here — doing so doubles
@@ -2101,6 +2182,13 @@ def router_provision_command(request):
         "script_url": script_url,
         "script_host": script_host,
         "callback_url": callback_url,
+        "vpn_ready": wg_config["ready"],
+        "missing_vpn_settings": wg_config["missing"],
+        "vpn_message": (
+            "WireGuard server configuration is ready."
+            if wg_config["ready"]
+            else "WireGuard is not configured; Expressnet will provision the router automatically using cloud agent mode."
+        ),
         "expires_in_minutes": 15,
         "expires_at": expires_at.isoformat(),
     })
@@ -2284,15 +2372,16 @@ def router_provision_script(request, token):
     package_profile_ids = [str(pkg.get("id")) for pkg in tenant_packages if pkg.get("id")]
     snapshot_script = _router_snapshot_fetch_script(snapshot_url)
 
-    wg_server_public_key = str(os.getenv("WG_SERVER_PUBLIC_KEY") or tenant.get("wg_server_public_key") or "").strip()
-    wg_server_endpoint = str(os.getenv("WG_SERVER_ENDPOINT") or os.getenv("WG_SERVER_PUBLIC_IP") or tenant.get("wg_server_endpoint") or "").strip()
-    wg_server_port = str(os.getenv("WG_SERVER_PORT") or tenant.get("wg_server_port") or "51820").strip()
-    wg_server_tunnel_ip = str(os.getenv("WG_SERVER_TUNNEL_IP") or tenant.get("wg_server_tunnel_ip") or "10.8.0.1").strip().split("/")[0]
-    wg_router_tunnel_ip = str(tenant.get("wg_tunnel_ip") or os.getenv("WG_ROUTER_TUNNEL_IP") or "10.8.0.2/24").strip()
+    wg_config = _wireguard_server_config(tenant)
+    vpn_peer_enabled = bool(wg_config["ready"])
+    wg_server_public_key = wg_config["public_key"]
+    wg_server_endpoint = wg_config["endpoint"]
+    wg_server_port = wg_config["port"]
+    wg_server_tunnel_ip = wg_config["tunnel_ip"]
+    wg_router_tunnel_ip = str(tenant.get("wg_tunnel_ip") or os.getenv("WG_ROUTER_TUNNEL_IP") or os.getenv("WIREGUARD_ROUTER_TUNNEL_IP") or "10.8.0.2/24").strip()
     wg_router_api_ip = wg_router_tunnel_ip.split("/", 1)[0]
     wg_router_private_key = str(tenant.get("wg_private_key") or "").strip()
-    vpn_peer_enabled = bool(wg_server_public_key and wg_server_endpoint)
-    callback_url = f"{callback_base_url}?vpn=1&vpn_peer={'1' if vpn_peer_enabled else '0'}&hotspot=1"
+    callback_url = f"{callback_base_url}?vpn={'1' if vpn_peer_enabled else '0'}&vpn_peer={'1' if vpn_peer_enabled else '0'}&hotspot=1"
     callback_join = "&" if "?" in callback_url else "?"
     bridge_name = mikrotik_managed_bridge_name(tenant)
     wan_interface = str(os.getenv("MIKROTIK_WAN_INTERFACE") or tenant.get("mikrotik_wan_interface") or "ether1").strip()
@@ -2311,7 +2400,7 @@ def router_provision_script(request, token):
         f""":do {{ /interface wireguard peers remove [find comment="billing-saas server peer"] }} on-error={{}}
         :do {{ /interface wireguard peers add interface=wg-saas public-key="{_rsc_escape(wg_server_public_key)}" endpoint-address="{_rsc_escape(wg_server_endpoint)}" endpoint-port={_rsc_escape(wg_server_port)} allowed-address={_rsc_escape(wg_server_tunnel_ip)}/32 persistent-keepalive=25s comment="billing-saas server peer" }} on-error={{ :log warning "Billing SaaS: WireGuard peer setup failed" }}"""
         if vpn_peer_enabled
-        else ':log warning "Billing SaaS: WireGuard peer skipped because WG_SERVER_PUBLIC_KEY or WG_SERVER_ENDPOINT is not configured";'
+        else ""
     )
     vpn_script = f"""
         :log info "Billing SaaS: configuring WireGuard VPN";
@@ -2325,15 +2414,67 @@ def router_provision_script(request, token):
         :do {{ /ip firewall filter remove [find comment="billing-saas allow api over vpn"] }} on-error={{}}
         :do {{ /ip firewall filter add chain=input action=accept in-interface=wg-saas protocol=tcp dst-port=8728 comment="billing-saas allow api over vpn" }} on-error={{}}
         """
+    if not vpn_peer_enabled:
+        vpn_script = (
+            ':log info "Billing SaaS: WireGuard server settings not found; using automatic agent mode";\n'
+            ':do { /interface wireguard remove [find name="wg-saas"] } on-error={}\n'
+            ':do { /ip firewall filter remove [find comment="billing-saas allow api over vpn"] } on-error={}\n'
+            ':do { /ip firewall filter remove [find comment="billing-saas allow radius"] } on-error={}\n'
+        )
+
+    radius_shared_secret = ""
+    if vpn_peer_enabled:
+        from .models import RadiusNasClient
+        tenant_obj = Tenant.objects.get(pk=tenant_id)
+        existing_extra = tenant_obj.extra or {}
+        radius_shared_secret = existing_extra.get("radius_shared_secret_pending") or RadiusNasClient.generate_secret()
+        tenant_obj.extra = {**existing_extra, "radius_shared_secret_pending": radius_shared_secret}
+        tenant_obj.save(update_fields=["extra"])
+
+    radius_script = (
+        f"""
+        :log info "Billing SaaS: configuring RADIUS for PPPoE and Hotspot";
+        :do {{ /radius add service=ppp,hotspot address={_rsc_escape(wg_server_tunnel_ip)} secret="{_rsc_escape(radius_shared_secret)}" protocol=udp authentication-port=1812 accounting-port=1813 src-address={_rsc_escape(wg_router_api_ip)} comment="billing-saas radius" }} on-error={{ /radius set [find address={_rsc_escape(wg_server_tunnel_ip)}] service=ppp,hotspot protocol=udp authentication-port=1812 accounting-port=1813 secret="{_rsc_escape(radius_shared_secret)}" src-address={_rsc_escape(wg_router_api_ip)} comment="billing-saas radius" }}
+        :do {{ /radius incoming set accept=yes port=3799 }} on-error={{ :log warning "Billing SaaS: RADIUS incoming (CoA) setup failed" }}
+        /ppp aaa set use-radius=yes accounting=yes interim-update=5m;
+        :do {{ /ip hotspot profile set [find name="billing-saas-captive"] use-radius=yes radius-accounting=yes }} on-error={{ :log warning "Billing SaaS: hotspot RADIUS setup failed" }}
+        :do {{ /ip firewall filter remove [find comment="billing-saas allow radius"] }} on-error={{}}
+        :do {{ /ip firewall filter add chain=input in-interface=wg-saas protocol=udp dst-port=1812,1813,3799 action=accept comment="billing-saas allow radius" }} on-error={{ :log warning "Billing SaaS: RADIUS firewall rule failed" }}
+        """
+        if vpn_peer_enabled
+        else """
+        :log info "Billing SaaS: using local Hotspot authentication with cloud agent sync";
+        :do { /radius remove [find comment="billing-saas radius"] } on-error={}
+        /ppp aaa set use-radius=no accounting=no;
+        :do { /ip hotspot profile set [find name="billing-saas-captive"] use-radius=no radius-accounting=no } on-error={}
+        :do { /ip firewall filter remove [find comment="billing-saas allow radius"] } on-error={}
+        """
+    )
+    hotspot_radius_flags = "yes" if vpn_peer_enabled else "no"
+    api_vpn_firewall_script = (
+        ':do { /ip firewall filter remove [find comment="billing-saas allow api over vpn only"] } on-error={}\n'
+        ':do { /ip firewall filter add chain=input action=accept in-interface=wg-saas protocol=tcp dst-port=8728 comment="billing-saas allow api over vpn only" } on-error={}\n'
+        if vpn_peer_enabled
+        else ':do { /ip firewall filter remove [find comment="billing-saas allow api over vpn only"] } on-error={}\n'
+    )
+    provisioning_callback_script = (
+        f""":local billingWgPub "";
+        :do {{ :set billingWgPub [/interface wireguard get [find name=wg-saas] public-key] }} on-error={{}}
+        :do {{ /tool fetch keep-result=no url=("{callback_url}{callback_join}wg_public_key=" . $billingWgPub . "&wg_tunnel_ip={_rsc_escape(wg_router_api_ip)}&bridge={_rsc_escape(bridge_name)}") }} on-error={{ :log warning "Billing SaaS provisioning callback failed" }}"""
+        if vpn_peer_enabled
+        else f':do {{ /tool fetch keep-result=no url=("{callback_url}{callback_join}bridge={_rsc_escape(bridge_name)}") }} on-error={{ :log warning "Billing SaaS provisioning callback failed" }}'
+    )
 
     try:
         ref(f"tenants/{tenant_id}").update({
             "mikrotik_provisioning_status": "script_downloaded",
             "mikrotik_script_downloaded_at": iso_now(),
-            "mikrotik_vpn_enabled": True,
+            "mikrotik_vpn_enabled": vpn_peer_enabled,
             "mikrotik_vpn_peer_enabled": vpn_peer_enabled,
-            "mikrotik_vpn_tunnel_ip": wg_router_tunnel_ip,
-            "mikrotik_host": wg_router_api_ip,
+            "mikrotik_vpn_status": "configured" if vpn_peer_enabled else "agent_mode",
+            "mikrotik_vpn_peer_status": "configured" if vpn_peer_enabled else "agent_mode",
+            "mikrotik_vpn_tunnel_ip": wg_router_tunnel_ip if vpn_peer_enabled else "",
+            "mikrotik_host": wg_router_api_ip if vpn_peer_enabled else tenant.get("mikrotik_host", ""),
             "mikrotik_port": int(tenant.get("mikrotik_port") or 8728),
             "mikrotik_bridge_name": bridge_name,
             "mikrotik_wan_interface": wan_interface,
@@ -2350,10 +2491,12 @@ def router_provision_script(request, token):
             ref(f"tenants/{tenant_id}").update({
                 "mikrotik_provisioning_status": "script_downloaded",
                 "mikrotik_script_downloaded_at": iso_now(),
-                "mikrotik_vpn_enabled": True,
+                "mikrotik_vpn_enabled": vpn_peer_enabled,
                 "mikrotik_vpn_peer_enabled": vpn_peer_enabled,
-                "mikrotik_vpn_tunnel_ip": wg_router_tunnel_ip,
-                "mikrotik_host": wg_router_api_ip,
+                "mikrotik_vpn_status": "configured" if vpn_peer_enabled else "agent_mode",
+                "mikrotik_vpn_peer_status": "configured" if vpn_peer_enabled else "agent_mode",
+                "mikrotik_vpn_tunnel_ip": wg_router_tunnel_ip if vpn_peer_enabled else "",
+                "mikrotik_host": wg_router_api_ip if vpn_peer_enabled else tenant.get("mikrotik_host", ""),
                 "mikrotik_port": int(tenant.get("mikrotik_port") or 8728),
                 "mikrotik_bridge_name": bridge_name,
                 "mikrotik_wan_interface": wan_interface,
@@ -2409,16 +2552,6 @@ def router_provision_script(request, token):
         }}
         """
 
-    # Generate RADIUS shared secret for this tenant — persist to Postgres
-    # (same store that router_provision_complete reads from) so the secret
-    # survives across re-provisions and is available to the callback.
-    from .models import RadiusNasClient
-    tenant_obj = Tenant.objects.get(pk=tenant_id)
-    existing_extra = tenant_obj.extra or {}
-    radius_shared_secret = existing_extra.get("radius_shared_secret_pending") or RadiusNasClient.generate_secret()
-    tenant_obj.extra = {**existing_extra, "radius_shared_secret_pending": radius_shared_secret}
-    tenant_obj.save(update_fields=["extra"])
-
     script = f""":log info "Billing SaaS provisioning started";
         :local billingVer [/system resource get version];
         :local billingVerNum $billingVer;
@@ -2428,8 +2561,7 @@ def router_provision_script(request, token):
         :local billingMajor 0;
         :if ([:len $billingDot1] > 0) do={{ :set billingMajor [:tonum [:pick $billingVerNum 0 $billingDot1]] }} else={{ :set billingMajor [:tonum $billingVerNum] }}
         :if ($billingMajor < 7) do={{
-            :do {{ /tool fetch keep-result=no url=("{callback_url}{callback_join}status=unsupported&reason=" . "RouterOS_" . $billingVerNum . "_requires_7_or_later_for_WireGuard") }} on-error={{}}
-            :error ("Billing SaaS: RouterOS " . $billingVer . " is not supported -- version 7.0 or later is required for WireGuard.");
+            :log warning ("Billing SaaS: RouterOS " . $billingVer . " detected; WireGuard VPN will be skipped if unsupported.");
         }}
         {vpn_script}
         :log info "Billing SaaS: creating LAN bridge (no ports attached yet -- assign ports from the dashboard)";
@@ -2453,8 +2585,7 @@ def router_provision_script(request, token):
         :do {{ /ip service set api disabled=no }} on-error={{}}
         :do {{ /ip firewall filter remove [find comment="billing-saas allow established"] }} on-error={{}}
         :do {{ /ip firewall filter add chain=input action=accept connection-state=established,related comment="billing-saas allow established" }} on-error={{}}
-        :do {{ /ip firewall filter remove [find comment="billing-saas allow api over vpn only"] }} on-error={{}}
-        :do {{ /ip firewall filter add chain=input action=accept in-interface=wg-saas protocol=tcp dst-port=8728 comment="billing-saas allow api over vpn only" }} on-error={{}}
+        {api_vpn_firewall_script}
         :do {{ /ip firewall nat remove [find comment="billing-saas masquerade"] }} on-error={{}}
         :do {{ /ip firewall nat add chain=srcnat action=masquerade comment="billing-saas masquerade" }} on-error={{}}
         :do {{ /ip firewall filter remove [find comment="billing-saas allow hotspot dns"] }} on-error={{}}
@@ -2473,16 +2604,10 @@ def router_provision_script(request, token):
         :delay 3s;
         :log info "Billing SaaS: creating default PPPoE server on managed bridge";
         :do {{ /interface pppoe-server server add service-name="billing-default-pppoe" interface=$billingBridge default-profile=default one-session-per-host=yes disabled=no comment="billing-saas default pppoe server" }} on-error={{ :log warning "Billing SaaS: PPPoE server creation failed" }}
-        :log info "Billing SaaS: configuring RADIUS for PPPoE";
-        :do {{ /radius add service=ppp,hotspot address={_rsc_escape(wg_server_tunnel_ip)} secret="{_rsc_escape(radius_shared_secret)}" protocol=udp authentication-port=1812 accounting-port=1813 src-address={_rsc_escape(wg_router_api_ip)} comment="billing-saas radius" }} on-error={{ /radius set [find address={_rsc_escape(wg_server_tunnel_ip)}] service=ppp,hotspot protocol=udp authentication-port=1812 accounting-port=1813 secret="{_rsc_escape(radius_shared_secret)}" src-address={_rsc_escape(wg_router_api_ip)} comment="billing-saas radius" }}
-        :do {{ /radius incoming set accept=yes port=3799 }} on-error={{ :log warning "Billing SaaS: RADIUS incoming (CoA) setup failed" }}
-        /ppp aaa set use-radius=yes accounting=yes interim-update=5m;
-        :do {{ /ip hotspot profile set [find name="billing-saas-captive"] use-radius=yes radius-accounting=yes }} on-error={{ :log warning "Billing SaaS: hotspot RADIUS setup failed" }}
-        :do {{ /ip firewall filter remove [find comment="billing-saas allow radius"] }} on-error={{}}
-        :do {{ /ip firewall filter add chain=input in-interface=wg-saas protocol=udp dst-port=1812,1813,3799 action=accept comment="billing-saas allow radius" }} on-error={{ :log warning "Billing SaaS: RADIUS firewall rule failed" }}
+        {radius_script}
         :foreach s in=[/ppp secret find] do={{ :if ([/ppp secret get $s comment] != "billing-saas-managed") do={{ :do {{ /ppp secret remove $s }} on-error={{}} }} }}
         :log info "Billing SaaS: configuring captive portal (empty page until a port is assigned)";
-        :do {{ /ip hotspot profile add name=billing-saas-captive hotspot-address={_rsc_escape(lan_gateway)} dns-name="" login-by=http-chap,http-pap use-radius=yes radius-accounting=yes html-directory=hotspot }} on-error={{ /ip hotspot profile set [find name=billing-saas-captive] hotspot-address={_rsc_escape(lan_gateway)} dns-name="" login-by=http-chap,http-pap use-radius=yes radius-accounting=yes html-directory=hotspot }}
+        :do {{ /ip hotspot profile add name=billing-saas-captive hotspot-address={_rsc_escape(lan_gateway)} dns-name="" login-by=http-chap,http-pap use-radius={hotspot_radius_flags} radius-accounting={hotspot_radius_flags} html-directory=hotspot }} on-error={{ /ip hotspot profile set [find name=billing-saas-captive] hotspot-address={_rsc_escape(lan_gateway)} dns-name="" login-by=http-chap,http-pap use-radius={hotspot_radius_flags} radius-accounting={hotspot_radius_flags} html-directory=hotspot }}
         :do {{ /interface wireless security-profiles add name="billing-saas-open" mode=none authentication-types="" wpa-pre-shared-key="" wpa2-pre-shared-key="" supplicant-identity="billing-saas" }} on-error={{ /interface wireless security-profiles set [find name="billing-saas-open"] mode=none authentication-types="" wpa-pre-shared-key="" wpa2-pre-shared-key="" supplicant-identity="billing-saas" }}
         :do {{ /interface wireless set [find name="wlan1"] security-profile="billing-saas-open" disabled=no }} on-error={{ :log warning "Billing SaaS: wlan1 open hotspot profile failed" }}
         :do {{ /ip hotspot user profile add name=billing-saas-unpaid shared-users=1 keepalive-timeout=2m status-autorefresh=1m }} on-error={{}}
@@ -2512,9 +2637,7 @@ def router_provision_script(request, token):
         {interface_report_loop}
         {profile_and_server_report_loop}
         {snapshot_script}
-        :local billingWgPub "";
-        :do {{ :set billingWgPub [/interface wireguard get [find name=wg-saas] public-key] }} on-error={{}}
-        :do {{ /tool fetch keep-result=no url=("{callback_url}{callback_join}wg_public_key=" . $billingWgPub . "&wg_tunnel_ip={_rsc_escape(wg_router_api_ip)}&bridge={_rsc_escape(bridge_name)}") }} on-error={{ :log warning "Billing SaaS provisioning callback failed" }}
+        {provisioning_callback_script}
         :do {{ /system scheduler remove [find name="billing-saas-agent"] }} on-error={{}}
         /system scheduler add name="billing-saas-agent" interval=30s on-event=":do {{ /file remove [find name=\\"billing-saas-cmd.rsc\\"] }} on-error={{}}; :do {{ /tool fetch url=\\"{agent_poll_url}\\" dst-path=billing-saas-cmd.rsc }} on-error={{ :log warning \\"Billing SaaS agent: command fetch failed\\" }}; :if ([:len [/file find name=\\"billing-saas-cmd.rsc\\"]] > 0) do={{ :do {{ /import billing-saas-cmd.rsc }} on-error={{ :log warning \\"Billing SaaS agent: command import failed\\" }} }};"
         :log info "Billing SaaS provisioning complete. No customer ports were moved; assign Hotspot or PPPoE ports from the dashboard.";
@@ -2694,8 +2817,8 @@ def router_provision_complete(request, token):
         "mikrotik_detected_identity": str(request.GET.get("identity") or "").strip(),
         "mikrotik_detected_version": str(request.GET.get("version") or "").strip(),
         "mikrotik_detected_board": str(request.GET.get("board") or "").strip(),
-        "mikrotik_vpn_status": "configured" if str(request.GET.get("vpn") or "").lower() in {"1", "true", "yes"} else "callback_received",
-        "mikrotik_vpn_peer_status": "configured" if str(request.GET.get("vpn_peer") or "").lower() in {"1", "true", "yes"} else "missing_server_peer_config",
+        "mikrotik_vpn_status": "configured" if str(request.GET.get("vpn") or "").lower() in {"1", "true", "yes"} else "agent_mode",
+        "mikrotik_vpn_peer_status": "configured" if str(request.GET.get("vpn_peer") or "").lower() in {"1", "true", "yes"} else "agent_mode",
         "mikrotik_hotspot_status": "configured" if str(request.GET.get("hotspot") or "").lower() in {"1", "true", "yes"} else "callback_received",
     }
     wg_public_key = str(request.GET.get("wg_public_key") or "").strip().replace(" ", "+")
@@ -3686,7 +3809,7 @@ def activate_paid_access(tenant, payment_id, payment, phone, payment_code):
             from .radius_provisioning import sync_radius_customer, upsert_pg_customer
 
             tenant_obj = Tenant.objects.get(pk=tenant_id)
-            upsert_pg_customer(
+            pg_customer = upsert_pg_customer(
                 tenant_obj,
                 {
                     "name": (customer or {}).get("name") or phone or username,
@@ -3696,11 +3819,24 @@ def activate_paid_access(tenant, payment_id, payment, phone, payment_code):
                     "package": package_for_access,
                     "service_type": service_type,
                     "status": "active",
+                    "expiry_date": expiry.isoformat(),
+                    "last_payment_id": payment_id,
+                    "last_payment_code": payment_code,
                 },
             )
-            sync_radius_customer(tenant_obj, {"username": username, "password": password})
-        except Exception:
-            pass
+            sync_radius_customer(tenant_obj, pg_customer or {"username": username, "password": password})
+            logger.info(
+                "Paid access prepared for RADIUS tenant=%s payment=%s username=%s service=%s package=%s expires_at=%s",
+                tenant_id,
+                payment_id,
+                username,
+                service_type,
+                package_for_access,
+                expiry.isoformat(),
+            )
+        except Exception as exc:
+            logger.warning("Paid access RADIUS sync failed tenant=%s payment=%s username=%s error=%s", tenant_id, payment_id, username, exc, exc_info=True)
+            raise
     router_access_status = "active"
     router_access_error = None
     access_payload = {
@@ -3715,7 +3851,16 @@ def activate_paid_access(tenant, payment_id, payment, phone, payment_code):
         "status": "active",
         "speed": (pkg or {}).get("speed"),
     }
-    if has_mikrotik_credentials(tenant):
+    if tenant.get("radius_enabled") and service_type in {"hotspot", "pppoe"}:
+        router_access_status = "radius_ready"
+        router_access_error = None
+        logger.info(
+            "Paid access activation delegated to RADIUS tenant=%s payment=%s username=%s; MikroTik will create Hotspot session on login",
+            tenant_id,
+            payment_id,
+            username,
+        )
+    elif has_mikrotik_credentials(tenant):
         try:
             if service_type == "hotspot" and pkg:
                 create_hotspot_profile(tenant, pkg["name"], pkg.get("speed"), duration_seconds)

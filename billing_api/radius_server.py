@@ -10,6 +10,7 @@ Run via:  python manage.py runradius
 
 import logging
 import os
+import secrets
 import threading
 import time
 from datetime import timedelta
@@ -27,6 +28,7 @@ logger = logging.getLogger(__name__)
 # RADIUS attribute constants used for MikroTik vendor-specific attributes
 MIKROTIK_VENDOR_ID = 14988
 ATTR_MIKROTIK_RATE_LIMIT = "Mikrotik-Rate-Limit"
+ATTR_MIKROTIK_GROUP = "Mikrotik-Group"
 
 # Standard RADIUS attribute names expected from pyrad dictionary
 ATTR_USER_NAME = "User-Name"
@@ -37,6 +39,8 @@ ATTR_ACCT_STATUS_TYPE = "Acct-Status-Type"
 ATTR_ACCT_SESSION_ID = "Acct-Session-Id"
 ATTR_ACCT_INPUT_OCTETS = "Acct-Input-Octets"
 ATTR_ACCT_OUTPUT_OCTETS = "Acct-Output-Octets"
+ATTR_ACCT_INPUT_GIGAWORDS = "Acct-Input-Gigawords"
+ATTR_ACCT_OUTPUT_GIGAWORDS = "Acct-Output-Gigawords"
 ATTR_ACCT_SESSION_TIME = "Acct-Session-Time"
 ATTR_FRAMED_IP_ADDRESS = "Framed-IP-Address"
 ATTR_SESSION_TIMEOUT = "Session-Timeout"
@@ -44,6 +48,7 @@ ATTR_IDLE_TIMEOUT = "Idle-Timeout"
 ATTR_TERMINATE_CAUSE = "Acct-Terminate-Cause"
 ATTR_SERVICE_TYPE = "Service-Type"
 ATTR_MIKROTIK_TOTAL_LIMIT = "Mikrotik-Total-Limit"
+ATTR_MIKROTIK_TOTAL_LIMIT_GIGAWORDS = "Mikrotik-Total-Limit-Gigawords"
 ATTR_MIKROTIK_RECV_LIMIT = "Mikrotik-Recv-Limit"
 ATTR_MIKROTIK_XMIT_LIMIT = "Mikrotik-Xmit-Limit"
 
@@ -98,6 +103,10 @@ def _reject(server, pkt, reason, **metadata):
     reply = server.CreateReplyPacket(pkt, **{"Reply-Message": str(reason)})
     reply.code = pyrad.packet.AccessReject
     return reply.SendTo(pkt.source)
+
+
+def _request_id():
+    return secrets.token_hex(4)
 
 
 def _parse_datetime(value):
@@ -165,6 +174,7 @@ def _package_policy(package):
         elif package.duration_days:
             session_timeout = int(timedelta(days=package.duration_days).total_seconds())
     return {
+        "profile": package.name,
         "rate_limit": normalize_rate_limit(package.speed or "") if package.speed else None,
         "session_timeout": session_timeout,
         "idle_timeout": _positive_int(extra.get("idle_timeout"), extra.get("idle_timeout_seconds"), 300),
@@ -172,10 +182,18 @@ def _package_policy(package):
     }
 
 
+def _usage_bytes(tenant, username):
+    totals = RadiusSession.objects.filter(tenant=tenant, customer__username=username).values("input_octets", "output_octets")
+    return sum(int(row["input_octets"] or 0) + int(row["output_octets"] or 0) for row in totals)
+
+
+def _customer_usage_bytes(customer):
+    return _usage_bytes(customer.tenant, customer.username)
+
+
 def _voucher_usage_bytes(voucher):
     username = voucher.username or voucher.code
-    totals = RadiusSession.objects.filter(tenant=voucher.tenant, customer__username=username).values("input_octets", "output_octets")
-    return sum(int(row["input_octets"] or 0) + int(row["output_octets"] or 0) for row in totals)
+    return _usage_bytes(voucher.tenant, username)
 
 
 def _find_voucher(tenant, username, password):
@@ -228,6 +246,42 @@ def _validate_voucher(voucher, pkt, password):
     return True, "accepted", policy
 
 
+def _validate_customer(customer):
+    if not customer:
+        return False, "customer not found", {}
+    if customer.status != "active":
+        return False, f"user is {customer.status or 'inactive'}", {}
+    expires_at = _parse_datetime(customer.expiry_date)
+    if expires_at and timezone.now() >= expires_at:
+        customer.status = "expired"
+        customer.save(update_fields=["status", "updated_at"])
+        return False, "paid access expired", {}
+    package = InternetPackage.objects.filter(tenant=customer.tenant, name=customer.package, is_active=True).first()
+    policy = _package_policy(package)
+    used_bytes = _customer_usage_bytes(customer)
+    if policy.get("data_quota") and used_bytes >= policy["data_quota"]:
+        customer.status = "expired"
+        customer.save(update_fields=["status", "updated_at"])
+        return False, "paid access data quota exhausted", policy
+    policy["data_quota_remaining"] = max(0, int(policy["data_quota"] - used_bytes)) if policy.get("data_quota") else None
+    policy["used_bytes"] = used_bytes
+    return True, "accepted", policy
+
+
+def _add_mikrotik_limit(reply, attr_name, gigaword_attr_name, value, username):
+    if not value or value <= 0:
+        return
+    try:
+        value = int(value)
+        low = value % (2 ** 32)
+        high = value // (2 ** 32)
+        reply.AddAttribute(attr_name, str(low))
+        if high and gigaword_attr_name:
+            reply.AddAttribute(gigaword_attr_name, str(high))
+    except Exception:
+        logger.warning("RADIUS: could not add %s=%s for user=%s", attr_name, value, username, exc_info=True)
+
+
 def _customer_from_voucher(voucher):
     username = voucher.username or voucher.code
     password = voucher.password or voucher.code
@@ -254,6 +308,7 @@ class BillingRadiusServer(Server):
 
     def HandleAuthPacket(self, pkt):
         """Process an Access-Request from a MikroTik NAS."""
+        rid = _request_id()
         nas_ip = pkt.source[0]
         username = str(_attr(pkt, ATTR_USER_NAME, "") or "").strip()
         password = ""
@@ -264,42 +319,52 @@ class BillingRadiusServer(Server):
             logger.debug("RADIUS password decrypt skipped: user=%s nas=%s error=%s", username, nas_ip, exc)
 
         logger.info(
-            "RADIUS Access-Request: user=%s nas=%s called=%s service=%s",
+            "RADIUS[%s] Access-Request received user=%s nas_source=%s nas_ip_attr=%s called=%s service=%s framed_ip=%s",
+            rid,
             username,
             nas_ip,
+            _attr(pkt, ATTR_NAS_IP_ADDRESS, ""),
             _attr(pkt, ATTR_CALLED_STATION_ID, ""),
             _attr(pkt, ATTR_SERVICE_TYPE, ""),
+            _attr(pkt, ATTR_FRAMED_IP_ADDRESS, ""),
         )
 
         if not username:
-            return _reject(self, pkt, "missing username", nas_ip=nas_ip)
+            return _reject(self, pkt, "missing username", nas_ip=nas_ip, request_id=rid)
 
         # 1. Look up NAS client to validate shared secret
         try:
-            nas_client = RadiusNasClient.objects.select_related("tenant").get(nas_ip=nas_ip)
+            nas_candidates = [nas_ip]
+            nas_attr = str(_attr(pkt, ATTR_NAS_IP_ADDRESS, "") or "").strip()
+            if nas_attr and nas_attr not in nas_candidates:
+                nas_candidates.append(nas_attr)
+            nas_client = RadiusNasClient.objects.select_related("tenant").filter(nas_ip__in=nas_candidates).first()
+            if not nas_client:
+                raise RadiusNasClient.DoesNotExist()
         except RadiusNasClient.DoesNotExist:
-            return _reject(self, pkt, "unknown NAS", username=username, nas_ip=nas_ip)
+            return _reject(self, pkt, "unknown NAS", username=username, nas_ip=nas_ip, request_id=rid)
 
         tenant = nas_client.tenant
+        logger.info("RADIUS[%s] NAS matched tenant=%s nas_client=%s identifier=%s", rid, tenant.id, nas_client.nas_ip, nas_client.identifier)
 
         customer = Customer.objects.filter(tenant=tenant, username=username).first()
         source = "customer"
         policy = {}
         if customer:
-            if customer.status != "active":
-                return _reject(self, pkt, f"user is {customer.status or 'inactive'}", username=username, nas_ip=nas_ip)
+            accepted, reason, policy = _validate_customer(customer)
+            if not accepted:
+                return _reject(self, pkt, reason, username=username, nas_ip=nas_ip, request_id=rid, source="paid_user", customer_id=customer.id)
             radius_secret = customer.radius_secret or customer.password or ""
             if not radius_secret:
-                return _reject(self, pkt, "user has no RADIUS secret", username=username, nas_ip=nas_ip)
+                return _reject(self, pkt, "user has no RADIUS secret", username=username, nas_ip=nas_ip, request_id=rid, customer_id=customer.id)
             if not _password_matches(pkt, password, radius_secret):
-                return _reject(self, pkt, "password mismatch", username=username, nas_ip=nas_ip)
-            package = InternetPackage.objects.filter(tenant=tenant, name=customer.package).first()
-            policy = _package_policy(package)
+                return _reject(self, pkt, "password mismatch", username=username, nas_ip=nas_ip, request_id=rid, customer_id=customer.id)
+            source = "paid_user" if customer.last_payment_id else "customer"
         else:
             voucher = _find_voucher(tenant, username, password)
             accepted, reason, policy = _validate_voucher(voucher, pkt, password)
             if not accepted:
-                return _reject(self, pkt, reason, username=username, nas_ip=nas_ip, source="voucher")
+                return _reject(self, pkt, reason, username=username, nas_ip=nas_ip, request_id=rid, source="voucher")
             customer = _customer_from_voucher(voucher)
             source = "voucher"
 
@@ -308,37 +373,45 @@ class BillingRadiusServer(Server):
         })
 
         rate_limit = policy.get("rate_limit")
+        profile = policy.get("profile") or customer.package if customer else ""
         session_timeout = policy.get("session_timeout")
         idle_timeout = policy.get("idle_timeout")
         data_quota = policy.get("data_quota_remaining") or policy.get("data_quota")
+
+        if profile:
+            try:
+                reply.AddAttribute(ATTR_MIKROTIK_GROUP, str(profile))
+            except Exception:
+                logger.warning("RADIUS[%s] Could not add Mikrotik-Group=%s for user=%s", rid, profile, username, exc_info=True)
 
         if rate_limit:
             try:
                 reply.AddAttribute(ATTR_MIKROTIK_RATE_LIMIT, rate_limit)
             except Exception:
-                logger.warning("Could not add Mikrotik-Rate-Limit attribute for user %s", username)
+                logger.warning("RADIUS[%s] Could not add Mikrotik-Rate-Limit attribute for user %s", rid, username, exc_info=True)
 
         if session_timeout and session_timeout > 0:
             reply.AddAttribute(ATTR_SESSION_TIMEOUT, str(session_timeout))
         if idle_timeout and idle_timeout > 0:
             reply.AddAttribute(ATTR_IDLE_TIMEOUT, str(idle_timeout))
         if data_quota and data_quota > 0:
-            try:
-                reply.AddAttribute(ATTR_MIKROTIK_TOTAL_LIMIT, str(int(data_quota)))
-            except Exception:
-                logger.warning("Could not add Mikrotik-Total-Limit attribute for user %s", username)
+            _add_mikrotik_limit(reply, ATTR_MIKROTIK_TOTAL_LIMIT, ATTR_MIKROTIK_TOTAL_LIMIT_GIGAWORDS, int(data_quota), username)
 
         logger.info(
-            "RADIUS Access-Accept: user=%s tenant=%s nas=%s source=%s rate_limit=%s session_timeout=%s idle_timeout=%s data_quota=%s customer_id=%s",
+            "RADIUS[%s] Access-Accept sent user=%s tenant=%s nas=%s source=%s profile=%s rate_limit=%s session_timeout=%s idle_timeout=%s data_quota=%s used_bytes=%s customer_id=%s note=%s",
+            rid,
             username,
             tenant.id,
             nas_ip,
             source,
+            profile,
             rate_limit,
             session_timeout,
             idle_timeout,
             data_quota,
+            policy.get("used_bytes"),
             customer.id if customer else None,
+            "MikroTik keeps DHCP IP and creates Hotspot session after Access-Accept",
         )
         return reply.SendTo(pkt.source)
 
@@ -376,8 +449,8 @@ class BillingRadiusServer(Server):
             reply.code = pyrad.packet.AccountingResponse
             return reply.SendTo(pkt.source)
 
-        input_octets = int(_attr(pkt, ATTR_ACCT_INPUT_OCTETS, 0) or 0)
-        output_octets = int(_attr(pkt, ATTR_ACCT_OUTPUT_OCTETS, 0) or 0)
+        input_octets = int(_attr(pkt, ATTR_ACCT_INPUT_OCTETS, 0) or 0) + (int(_attr(pkt, ATTR_ACCT_INPUT_GIGAWORDS, 0) or 0) * (2 ** 32))
+        output_octets = int(_attr(pkt, ATTR_ACCT_OUTPUT_OCTETS, 0) or 0) + (int(_attr(pkt, ATTR_ACCT_OUTPUT_GIGAWORDS, 0) or 0) * (2 ** 32))
         framed_ip = _attr(pkt, ATTR_FRAMED_IP_ADDRESS, "") or None
         terminate_cause = _attr(pkt, ATTR_TERMINATE_CAUSE, "") or ""
         service_type = customer.service_type or ""

@@ -13,6 +13,8 @@ ATTRIBUTE Acct-Output-Octets 43 integer
 ATTRIBUTE Acct-Session-Id 44 string
 ATTRIBUTE Acct-Session-Time 46 integer
 ATTRIBUTE Acct-Terminate-Cause 49 string
+ATTRIBUTE Acct-Input-Gigawords 52 integer
+ATTRIBUTE Acct-Output-Gigawords 53 integer
 
 VALUE Service-Type Framed-User 2
 VALUE Acct-Status-Type Start 1
@@ -23,6 +25,10 @@ VENDOR Mikrotik 14988
 BEGIN-VENDOR Mikrotik
 ATTRIBUTE Mikrotik-Recv-Limit 1 integer
 ATTRIBUTE Mikrotik-Xmit-Limit 2 integer
+ATTRIBUTE Mikrotik-Group 3 string
 ATTRIBUTE Mikrotik-Rate-Limit 8 string
+ATTRIBUTE Mikrotik-Recv-Limit-Gigawords 14 integer
+ATTRIBUTE Mikrotik-Xmit-Limit-Gigawords 15 integer
 ATTRIBUTE Mikrotik-Total-Limit 17 integer
+ATTRIBUTE Mikrotik-Total-Limit-Gigawords 18 integer
 END-VENDOR Mikrotik

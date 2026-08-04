@@ -21,6 +21,10 @@ def upsert_pg_customer(tenant_obj, customer_data):
     username = customer_data.get("username")
     if not username:
         return None
+    extra_updates = {}
+    for key in ("expiry_date", "last_payment_id", "last_payment_code", "auto_reconnect", "provisioning_status", "provisioning_message"):
+        if key in customer_data:
+            extra_updates[key] = customer_data.get(key)
     customer, _ = Customer.objects.update_or_create(
         tenant=tenant_obj, username=username,
         defaults={
@@ -30,6 +34,7 @@ def upsert_pg_customer(tenant_obj, customer_data):
             "package": customer_data.get("package") or customer_data.get("package_name") or "",
             "service_type": customer_data.get("service_type") or "pppoe",
             "status": customer_data.get("status") or "inactive",
+            **extra_updates,
         },
     )
     return customer
@@ -47,6 +52,7 @@ def upsert_pg_package(tenant_obj, package_data):
             "duration_days": int(package_data.get("duration_days") or 1),
             "price": float(package_data.get("price") or 0),
             "is_active": package_data.get("is_active") is not False,
+            "extra": package_data.get("extra") or {},
         },
     )
     return package
