@@ -1810,7 +1810,7 @@ def _build_port_command_script(interface_name, service_type, profile_name, porta
         f'  :do {{ /interface wireless security-profiles add name="billing-saas-open" mode=none authentication-types="" wpa-pre-shared-key="" wpa2-pre-shared-key="" supplicant-identity="billing-saas" }} on-error={{ /interface wireless security-profiles set [find name="billing-saas-open"] mode=none authentication-types="" wpa-pre-shared-key="" wpa2-pre-shared-key="" supplicant-identity="billing-saas" }}; '
         f'  :do {{ /interface wireless set [find name="{interface_name}"] security-profile="billing-saas-open" disabled=no }} on-error={{}}; '
         f'  :local billingHs [/ip hotspot find interface="{bridge_name}"]; '
-        f'  :if ([:len $billingHs] > 0) do={{ /ip hotspot set $billingHs name="billing-hotspot-{interface_name}" profile="billing-saas-captive" disabled=no comment="billing-saas captive portal: {portal_comment}" }} else={{ /ip hotspot add name="billing-hotspot-{interface_name}" interface="{bridge_name}" profile="billing-saas-captive" disabled=no comment="billing-saas captive portal: {portal_comment}" }}; '
+        f'  :if ([:len $billingHs] > 0) do={{ /ip hotspot set $billingHs name="billing-hotspot-{interface_name}" profile="billing-saas-captive" disabled=no }} else={{ /ip hotspot add name="billing-hotspot-{interface_name}" interface="{bridge_name}" profile="billing-saas-captive" disabled=no }}; '
     )
 
     cleanup_block = ':log info "Billing SaaS: preserving existing PPP secrets and Hotspot users"; '

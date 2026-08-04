@@ -2588,7 +2588,7 @@ def router_provision_script(request, token):
 
     pppoe_script = f"""
         :log info "Billing SaaS Step 8: provisioning PPPoE service without mixing Hotspot profiles";
-        :do {{ /interface pppoe-server server add service-name="billing-default-pppoe" interface=$billingBridge default-profile=default one-session-per-host=yes disabled=no comment="billing-saas default pppoe server" }} on-error={{ /interface pppoe-server server set [find service-name="billing-default-pppoe"] interface=$billingBridge default-profile=default one-session-per-host=yes disabled=no comment="billing-saas default pppoe server" }}
+        :do {{ /interface pppoe-server server add service-name="billing-default-pppoe" interface=$billingBridge default-profile=default one-session-per-host=yes disabled=no }} on-error={{ /interface pppoe-server server set [find service-name="billing-default-pppoe"] interface=$billingBridge default-profile=default one-session-per-host=yes disabled=no }}
     """
 
     script = f""":log info "Billing SaaS Step 1: provisioning token validated by Expressnet server";
@@ -2608,7 +2608,7 @@ def router_provision_script(request, token):
         :do {{ /interface list member add list=LAN interface=$billingBridge comment="billing-saas captive LAN" }} on-error={{ /interface list member set [find interface=$billingBridge] list=LAN comment="billing-saas captive LAN" }}
         :do {{ /ip address add address={_rsc_escape(lan_cidr)} interface=$billingBridge comment="billing-saas bridge gateway" }} on-error={{ /ip address set [find comment="billing-saas bridge gateway"] address={_rsc_escape(lan_cidr)} interface=$billingBridge }}
         :do {{ /ip pool add name=billing-saas-dhcp ranges={_rsc_escape(dhcp_pool)} }} on-error={{ /ip pool set [find name=billing-saas-dhcp] ranges={_rsc_escape(dhcp_pool)} }}
-        :do {{ /ip dhcp-server add name=billing-saas-dhcp interface=$billingBridge address-pool=billing-saas-dhcp disabled=no lease-time=1d comment="billing-saas managed dhcp" }} on-error={{ /ip dhcp-server set [find name=billing-saas-dhcp] interface=$billingBridge address-pool=billing-saas-dhcp disabled=no lease-time=1d comment="billing-saas managed dhcp" }}
+        :do {{ /ip dhcp-server add name=billing-saas-dhcp interface=$billingBridge address-pool=billing-saas-dhcp disabled=no lease-time=1d }} on-error={{ /ip dhcp-server set [find name=billing-saas-dhcp] interface=$billingBridge address-pool=billing-saas-dhcp disabled=no lease-time=1d }}
         :do {{ /ip dhcp-server network add address={_rsc_escape(lan_network)} gateway={_rsc_escape(lan_gateway)} dns-server={_rsc_escape(lan_gateway)} comment="billing-saas dhcp network" }} on-error={{ /ip dhcp-server network set [find comment="billing-saas dhcp network"] address={_rsc_escape(lan_network)} gateway={_rsc_escape(lan_gateway)} dns-server={_rsc_escape(lan_gateway)} }}
         :log info "Billing SaaS: configuring only Expressnet-managed firewall and NAT rules";
         /ip service enable api;
@@ -2638,7 +2638,7 @@ def router_provision_script(request, token):
         :do {{ /interface wireless security-profiles add name="billing-saas-open" mode=none authentication-types="" wpa-pre-shared-key="" wpa2-pre-shared-key="" supplicant-identity="billing-saas" }} on-error={{ /interface wireless security-profiles set [find name="billing-saas-open"] mode=none authentication-types="" wpa-pre-shared-key="" wpa2-pre-shared-key="" supplicant-identity="billing-saas" }}
         :do {{ /interface wireless set [find name="wlan1"] security-profile="billing-saas-open" disabled=no }} on-error={{ :log warning "Billing SaaS: wlan1 open hotspot profile failed" }}
         :do {{ /ip hotspot user profile add name=billing-saas-unpaid shared-users=1 keepalive-timeout=2m status-autorefresh=1m }} on-error={{}}
-        :do {{ /ip hotspot add name=billing-saas-hotspot interface=$billingBridge address-pool=billing-saas-dhcp profile=billing-saas-captive disabled=no comment="billing-saas managed hotspot" }} on-error={{ /ip hotspot set [find name=billing-saas-hotspot] interface=$billingBridge address-pool=billing-saas-dhcp profile=billing-saas-captive disabled=no comment="billing-saas managed hotspot" }}
+        :do {{ /ip hotspot add name=billing-saas-hotspot interface=$billingBridge address-pool=billing-saas-dhcp profile=billing-saas-captive disabled=no }} on-error={{ /ip hotspot set [find name=billing-saas-hotspot] interface=$billingBridge address-pool=billing-saas-dhcp profile=billing-saas-captive disabled=no }}
         :do {{ /ip hotspot set [find name=billing-saas-hotspot] disabled=no }} on-error={{}}
         :if ([:len [/ip hotspot find name=billing-saas-hotspot profile=billing-saas-captive disabled=no]] = 0) do={{ :log error "Billing SaaS: managed Hotspot server missing after provisioning"; :error "Managed Hotspot server missing after provisioning" }}
         :do {{ /ip hotspot walled-garden remove [find comment="billing-saas captive portal access"] }} on-error={{}}
