@@ -1187,8 +1187,8 @@ def mikrotik_managed_bridge_name(tenant=None):
     return str(
         os.getenv("MIKROTIK_BRIDGE_NAME")
         or (tenant or {}).get("mikrotik_bridge_name")
-        or "billing-bridge"
-    ).strip() or "billing-bridge"
+        or "Expressnet-bridge"
+    ).strip() or "Expressnet-bridge"
 
 
 def upsert_router_item(api, path, match_fields, fields):
@@ -1533,7 +1533,7 @@ def ensure_hotspot_captive_portal(tenant, base_url=None):
 
     portal_url = captive_portal_url(tenant, base_url)
     portal_host = captive_portal_host(tenant, base_url)
-    profile_name = "billing-saas-captive"
+    profile_name = "Expressnet-profile"
     api = router_connect(tenant)
     try:
         try:
@@ -1546,13 +1546,13 @@ def ensure_hotspot_captive_portal(tenant, base_url=None):
             {"name": profile_name},
             {
                 "name": profile_name,
-                "hotspot-address": "192.168.88.1",
-                "dns-name": "",
-                "login-by": "http-pap,http-chap",
+                "hotspot-address": "172.31.0.1",
+                "dns-name": "hot.spot",
+                "login-by": "cookie,http-pap,trial,mac-cookie",
                 "use-radius": "yes",
                 "radius-accounting": "yes",
-                "html-directory": "hotspot",
-                "comment": f"billing-saas captive portal: {portal_url}",
+                "html-directory": "Expressnet-hotspot",
+                "comment": f"Expressnet captive portal: {portal_url}",
             },
         )
         for host in walled_garden_hosts(tenant, portal_host):
@@ -1754,7 +1754,7 @@ def configure_router_port(tenant, interface_name, service_type, profile_name="de
             return {"created": True, "service_type": service_type, "interface": interface_name, "bound_interface": bind_interface, "note": bridge_note}
 
         captive = ensure_hotspot_captive_portal(tenant, base_url) or {}
-        hotspot_profile = captive.get("profile") or "billing-saas-captive"
+        hotspot_profile = captive.get("profile") or "Expressnet-profile"
         api.path("interface").update(**{".id": interface[".id"], "comment": f"billing-saas:hotspot:portal={captive.get('portal_url') or ''}".strip()})
         
         servers = list(api.path("ip", "hotspot").select())
@@ -1801,8 +1801,8 @@ def _build_port_command_script(interface_name, service_type, profile_name, porta
             f':do {{ /ip firewall filter add chain=input action=accept in-interface="{_rsc_escape(bridge_name)}" protocol=tcp dst-port=53 place-before=[find comment="defconf: drop all not coming from LAN"] comment="billing-saas allow hotspot dns" }} on-error={{ /ip firewall filter add chain=input action=accept in-interface="{_rsc_escape(bridge_name)}" protocol=tcp dst-port=53 comment="billing-saas allow hotspot dns" }}; '
             f':do {{ /ip firewall filter add chain=input action=accept in-interface="{_rsc_escape(bridge_name)}" protocol=udp dst-port=67,68 place-before=[find comment="defconf: drop all not coming from LAN"] comment="billing-saas allow hotspot dhcp" }} on-error={{ /ip firewall filter add chain=input action=accept in-interface="{_rsc_escape(bridge_name)}" protocol=udp dst-port=67,68 comment="billing-saas allow hotspot dhcp" }}; '
             f':do {{ /ip firewall filter add chain=input action=accept in-interface="{_rsc_escape(bridge_name)}" protocol=tcp dst-port=64872-64875 place-before=[find comment="defconf: drop all not coming from LAN"] comment="billing-saas allow hotspot web-proxy" }} on-error={{ /ip firewall filter add chain=input action=accept in-interface="{_rsc_escape(bridge_name)}" protocol=tcp dst-port=64872-64875 comment="billing-saas allow hotspot web-proxy" }}; '
-            f':do {{ /ip hotspot profile add name="billing-saas-captive" hotspot-address=192.168.88.1 dns-name="" login-by=http-pap,http-chap use-radius=yes radius-accounting=yes html-directory=hotspot comment="billing-saas captive portal: {portal_comment}" }} '
-            f'on-error={{ /ip hotspot profile set [find name="billing-saas-captive"] hotspot-address=192.168.88.1 dns-name="" login-by=http-pap,http-chap use-radius=yes radius-accounting=yes html-directory=hotspot comment="billing-saas captive portal: {portal_comment}" }}; '
+            f':do {{ /ip hotspot profile add name="Expressnet-profile" hotspot-address=172.31.0.1 dns-name=hot.spot login-by=cookie,http-pap,trial,mac-cookie use-radius=yes html-directory=Expressnet-hotspot radius-interim-update=10m comment="Expressnet captive portal: {portal_comment}" }} '
+            f'on-error={{ /ip hotspot profile set [find name="Expressnet-profile"] hotspot-address=172.31.0.1 dns-name=hot.spot login-by=cookie,http-pap,trial,mac-cookie use-radius=yes html-directory=Expressnet-hotspot radius-interim-update=10m comment="Expressnet captive portal: {portal_comment}" }}; '
             + "".join(
                 f':do {{ /ip hotspot walled-garden add action=allow dst-host="{_rsc_escape(h)}" comment="billing-saas captive portal access" }} on-error={{ :log warning "Billing SaaS: walled-garden add failed" }}; '
                 for h in walled_garden_hosts(tenant, portal_host)
@@ -1830,7 +1830,7 @@ def _build_port_command_script(interface_name, service_type, profile_name, porta
         f'  :do {{ /interface wireless security-profiles add name="billing-saas-open" mode=none authentication-types="" wpa-pre-shared-key="" wpa2-pre-shared-key="" supplicant-identity="billing-saas" }} on-error={{ /interface wireless security-profiles set [find name="billing-saas-open"] mode=none authentication-types="" wpa-pre-shared-key="" wpa2-pre-shared-key="" supplicant-identity="billing-saas" }}; '
         f'  :do {{ /interface wireless set [find name="{interface_name}"] security-profile="billing-saas-open" disabled=no }} on-error={{}}; '
         f'  :local billingHs [/ip hotspot find interface="{bridge_name}"]; '
-        f'  :if ([:len $billingHs] > 0) do={{ /ip hotspot set $billingHs name="billing-hotspot-{interface_name}" profile="billing-saas-captive" disabled=no }} else={{ /ip hotspot add name="billing-hotspot-{interface_name}" interface="{bridge_name}" profile="billing-saas-captive" disabled=no }}; '
+        f'  :if ([:len $billingHs] > 0) do={{ /ip hotspot set $billingHs name="Expressnet-hotspot" profile="Expressnet-profile" disabled=no }} else={{ /ip hotspot add name="Expressnet-hotspot" interface="{bridge_name}" profile="Expressnet-profile" disabled=no }}; '
     )
 
     cleanup_block = ':log info "Billing SaaS: preserving existing PPP secrets and Hotspot users"; '

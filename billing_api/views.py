@@ -1592,8 +1592,8 @@ def customer_hotspot_portal(request):
             "portal_url": portal_url,
             "fallback_portal_url": portal_url,
             "hotspot_url": portal_url,
-            "hotspot_profile": "billing-saas-captive",
-            "description": "Assign the customer-facing router port as Hotspot. The billing-saas-captive profile redirects unpaid users to this portal so they can select a package and pay before access is activated.",
+            "hotspot_profile": "Expressnet-profile",
+            "description": "Assign the customer-facing router port as Hotspot. The Expressnet-profile redirects unpaid users to this portal so they can select a package and pay before access is activated.",
         }
     )
 
@@ -1834,7 +1834,7 @@ def _queue_router_port_command(request, interface_name, service_type, profile_na
     if service_type == "both":
         script = (
             _build_port_command_script(interface_name, "pppoe", profile_name, None, bridge_name)
-            + _build_port_command_script(interface_name, "hotspot", "billing-saas-captive", portal_url, bridge_name)
+            + _build_port_command_script(interface_name, "hotspot", "Expressnet-profile", portal_url, bridge_name)
         )
     else:
         script = _build_port_command_script(interface_name, service_type, profile_name, portal_url, bridge_name)
@@ -2097,23 +2097,25 @@ def _wireguard_server_config(tenant):
         tenant,
         ("WG_SERVER_PUBLIC_KEY", "WIREGUARD_SERVER_PUBLIC_KEY", "VPN_SERVER_PUBLIC_KEY"),
         ("wg_server_public_key", "wireguard_server_public_key", "vpn_server_public_key"),
+        "KOt1dcW3fSwwBy8qPuc2Z4/aiu7jN1dSdG48W0wGAQ0=",
     )
     endpoint = _config_value(
         tenant,
         ("WG_SERVER_ENDPOINT", "WG_SERVER_PUBLIC_IP", "WIREGUARD_SERVER_ENDPOINT", "WIREGUARD_ENDPOINT", "VPN_SERVER_ENDPOINT"),
         ("wg_server_endpoint", "wg_server_public_ip", "wireguard_server_endpoint", "vpn_server_endpoint"),
+        "vpn.Expressnetbilling.com",
     )
     port = _config_value(
         tenant,
         ("WG_SERVER_PORT", "WIREGUARD_SERVER_PORT", "WIREGUARD_PORT", "VPN_SERVER_PORT"),
         ("wg_server_port", "wireguard_server_port", "vpn_server_port"),
-        "51820",
+        "443",
     )
     tunnel_ip = _config_value(
         tenant,
         ("WG_SERVER_TUNNEL_IP", "WIREGUARD_SERVER_TUNNEL_IP", "VPN_SERVER_TUNNEL_IP"),
         ("wg_server_tunnel_ip", "wireguard_server_tunnel_ip", "vpn_server_tunnel_ip"),
-        "10.8.0.1",
+        "10.9.0.1",
     ).split("/")[0]
     missing = []
     if not public_key:
@@ -2144,7 +2146,7 @@ def _radius_server_config(tenant, wg_config=None):
     )
     if not server_ip and wg_config.get("ready"):
         server_ip = wg_config.get("tunnel_ip") or ""
-        source_ip = source_ip or str((tenant or {}).get("wg_tunnel_ip") or os.getenv("WG_ROUTER_TUNNEL_IP") or os.getenv("WIREGUARD_ROUTER_TUNNEL_IP") or "10.8.0.2/24").split("/", 1)[0]
+        source_ip = source_ip or str((tenant or {}).get("wg_tunnel_ip") or os.getenv("WG_ROUTER_TUNNEL_IP") or os.getenv("WIREGUARD_ROUTER_TUNNEL_IP") or "10.9.202.70/16").split("/", 1)[0]
     auth_port = _config_value(tenant, ("RADIUS_AUTH_PORT",), ("radius_auth_port",), "1812")
     acct_port = _config_value(tenant, ("RADIUS_ACCT_PORT",), ("radius_acct_port",), "1813")
     return {
@@ -2404,48 +2406,55 @@ def router_provision_script(request, token):
     wg_server_endpoint = wg_config["endpoint"]
     wg_server_port = wg_config["port"]
     wg_server_tunnel_ip = wg_config["tunnel_ip"]
-    wg_router_tunnel_ip = str(tenant.get("wg_tunnel_ip") or os.getenv("WG_ROUTER_TUNNEL_IP") or os.getenv("WIREGUARD_ROUTER_TUNNEL_IP") or "10.8.0.2/24").strip()
+    wg_router_tunnel_ip = str(tenant.get("wg_tunnel_ip") or os.getenv("WG_ROUTER_TUNNEL_IP") or os.getenv("WIREGUARD_ROUTER_TUNNEL_IP") or "10.9.202.70/16").strip()
     wg_router_api_ip = wg_router_tunnel_ip.split("/", 1)[0]
     wg_router_private_key = str(tenant.get("wg_private_key") or "").strip()
     callback_url = f"{callback_base_url}?vpn={'1' if vpn_peer_enabled else '0'}&vpn_peer={'1' if vpn_peer_enabled else '0'}&radius={'1' if radius_enabled_for_router else '0'}&hotspot=1"
     callback_join = "&" if "?" in callback_url else "?"
     bridge_name = mikrotik_managed_bridge_name(tenant)
     wan_interface = str(os.getenv("MIKROTIK_WAN_INTERFACE") or tenant.get("mikrotik_wan_interface") or "ether1").strip()
-    lan_cidr = str(os.getenv("MIKROTIK_LAN_CIDR") or tenant.get("mikrotik_lan_cidr") or "192.168.88.1/24").strip()
+    lan_cidr = str(os.getenv("MIKROTIK_LAN_CIDR") or tenant.get("mikrotik_lan_cidr") or "172.31.0.1/16").strip()
     lan_gateway = lan_cidr.split("/", 1)[0]
-    lan_network = str(os.getenv("MIKROTIK_LAN_NETWORK") or tenant.get("mikrotik_lan_network") or "192.168.88.0/24").strip()
-    dhcp_pool = str(os.getenv("MIKROTIK_DHCP_POOL") or tenant.get("mikrotik_dhcp_pool") or "192.168.88.10-192.168.88.254").strip()
-    hotspot_dns_name = str(os.getenv("MIKROTIK_HOTSPOT_DNS_NAME") or tenant.get("mikrotik_hotspot_dns_name") or "").strip()
+    lan_network = str(os.getenv("MIKROTIK_LAN_NETWORK") or tenant.get("mikrotik_lan_network") or "172.31.0.0/16").strip()
+    dhcp_pool = str(os.getenv("MIKROTIK_DHCP_POOL") or tenant.get("mikrotik_dhcp_pool") or "172.31.0.2-172.31.255.254").strip()
+    hotspot_dns_name = str(os.getenv("MIKROTIK_HOTSPOT_DNS_NAME") or tenant.get("mikrotik_hotspot_dns_name") or "hot.spot").strip()
+    hotspot_profile_name = "Expressnet-profile"
+    hotspot_server_name = "Expressnet-hotspot"
+    hotspot_pool_name = "Expressnet-pool"
+    ppp_profile_name = "INTERNET"
+    pppoe_service_name = "Expressnet-pppoe"
+    wireguard_name = "Expressnet-wireguard"
+    radius_comment = "Expressnet radius"
+    radius_fallback_ip = str(os.getenv("RADIUS_FALLBACK_IP") or tenant.get("radius_fallback_ip") or "142.93.39.55").strip()
 
     vpn_private_key_set = (
-        f':do {{ /interface wireguard set [find name="wg-saas"] private-key="{_rsc_escape(wg_router_private_key)}" }} on-error={{}}\n'
+        f':do {{ /interface wireguard set [find name="{wireguard_name}"] private-key="{_rsc_escape(wg_router_private_key)}" }} on-error={{}}\n'
         if wg_router_private_key
         else ""
     )
     vpn_peer_script = (
-        f""":do {{ /interface wireguard peers remove [find comment="billing-saas server peer"] }} on-error={{}}
-        :do {{ /interface wireguard peers add interface=wg-saas public-key="{_rsc_escape(wg_server_public_key)}" endpoint-address="{_rsc_escape(wg_server_endpoint)}" endpoint-port={_rsc_escape(wg_server_port)} allowed-address={_rsc_escape(wg_server_tunnel_ip)}/32 persistent-keepalive=25s comment="billing-saas server peer" }} on-error={{ :log warning "Billing SaaS: WireGuard peer setup failed" }}"""
+        f""":do {{ /interface wireguard peers remove [find name="peer1"] }} on-error={{}}
+        :do {{ /interface wireguard peers add name=peer1 interface={wireguard_name} public-key="{_rsc_escape(wg_server_public_key)}" endpoint-address="{_rsc_escape(wg_server_endpoint)}" endpoint-port={_rsc_escape(wg_server_port)} allowed-address=0.0.0.0/0 persistent-keepalive=15s }} on-error={{ :log warning "Expressnet: WireGuard peer setup failed"; :error "WireGuard peer setup failed" }}"""
         if vpn_peer_enabled
         else ""
     )
     vpn_script = f"""
         :log info "Billing SaaS: configuring WireGuard VPN";
-        :do {{ /interface wireguard add name=wg-saas listen-port=13231 mtu=1420 comment="billing-saas vpn" }} on-error={{}}
+        :do {{ /interface wireguard add name={wireguard_name} listen-port=19923 mtu=1360 }} on-error={{ /interface wireguard set [find name={wireguard_name}] listen-port=19923 mtu=1360 }}
         {vpn_private_key_set}
-        :do {{ /ip address remove [find comment="billing-saas vpn ip"] }} on-error={{}}
-        :do {{ /ip address add address={_rsc_escape(wg_router_tunnel_ip)} interface=wg-saas comment="billing-saas vpn ip" }} on-error={{}}
+        :do {{ /ip address remove [find interface={wireguard_name}] }} on-error={{}}
+        :do {{ /ip address add address={_rsc_escape(wg_router_tunnel_ip)} interface={wireguard_name} }} on-error={{ :log warning "Expressnet: WireGuard address setup failed"; :error "WireGuard address setup failed" }}
         {vpn_peer_script}
-        :do {{ /ip firewall filter remove [find comment="billing-saas allow wireguard"] }} on-error={{}}
-        :do {{ /ip firewall filter add chain=input action=accept protocol=udp dst-port=13231 comment="billing-saas allow wireguard" }} on-error={{}}
-        :do {{ /ip firewall filter remove [find comment="billing-saas allow api over vpn"] }} on-error={{}}
-        :do {{ /ip firewall filter add chain=input action=accept in-interface=wg-saas protocol=tcp dst-port=8728 comment="billing-saas allow api over vpn" }} on-error={{}}
+        :do {{ /ip firewall filter remove [find comment="Expressnet WireGuard hub"] }} on-error={{}}
+        :do {{ /ip firewall filter add chain=input action=accept src-address={_rsc_escape(wg_server_tunnel_ip)} comment="Expressnet WireGuard hub" }} on-error={{}}
+        :do {{ /ip firewall filter add chain=output action=accept dst-address={_rsc_escape(wg_server_tunnel_ip)} comment="Expressnet WireGuard hub" }} on-error={{}}
         """
     if not vpn_peer_enabled:
         missing = ", ".join(wg_config["missing"] or ["server VPN settings"])
         logger.warning("MikroTik provisioning tenant=%s WireGuard unavailable because %s is missing; radius_ready=%s", tenant_id, missing, radius_enabled_for_router)
         vpn_script = (
             ':log info "Billing SaaS: using automatic local agent mode";\n'
-            ':do { /interface wireguard remove [find name="wg-saas"] } on-error={}\n'
+            f':do {{ /interface wireguard remove [find name="{wireguard_name}"] }} on-error={{}}\n'
             ':do { /ip firewall filter remove [find comment="billing-saas allow api over vpn"] } on-error={}\n'
             ':do { /ip firewall filter remove [find comment="billing-saas allow api over vpn only"] } on-error={}\n'
             ':do { /ip firewall filter remove [find comment="billing-saas allow radius"] } on-error={}\n'
@@ -2456,12 +2465,12 @@ def router_provision_script(request, token):
     # so a dropped tunnel self-heals instead of silently orphaning RADIUS/API access.
     watchdog_script = (
         f"""
-        :do {{ /system scheduler remove [find name="billing-saas-wg-watchdog"] }} on-error={{}}
-        /system scheduler add name="billing-saas-wg-watchdog" interval=1m comment="Billing SaaS WireGuard watchdog. Do not delete." on-event=":if ([/ping {_rsc_escape(wg_server_tunnel_ip)} count=10 interval=1s]=0) do={{/interface wireguard disable [find name=\\"wg-saas\\"];:delay 2s;/interface wireguard enable [find name=\\"wg-saas\\"];:log info \\"Billing SaaS: bounced unreachable tunnel\\"}}"
+        :do {{ /system scheduler remove [find name="Expressnet-wg-watchdog"] }} on-error={{}}
+        /system scheduler add name="Expressnet-wg-watchdog" interval=1m comment="Expressnet WireGuard watchdog. Do not delete." on-event=":if ([/ping {_rsc_escape(wg_server_tunnel_ip)} count=10 interval=1s]=0) do={{/interface wireguard disable [find name=\\"{wireguard_name}\\"];:delay 2s;/interface wireguard enable [find name=\\"{wireguard_name}\\"];:log info \\"Expressnet-wg-watchdog: bounced unreachable tunnel\\"}}"
         """
         if vpn_peer_enabled
         else (
-            ':do { /system scheduler remove [find name="billing-saas-wg-watchdog"] } on-error={}\n'
+            ':do { /system scheduler remove [find name="Expressnet-wg-watchdog"] } on-error={}\n'
             ':log info "Billing SaaS: WireGuard watchdog skipped, agent mode active";'
         )
     )
@@ -2476,29 +2485,29 @@ def router_provision_script(request, token):
         tenant_obj.save(update_fields=["extra"])
 
     radius_script = f"""
-        :log info "Billing SaaS: configuring RADIUS client for Hotspot and PPPoE";
-        :do {{ /radius add service=hotspot,ppp address={_rsc_escape(radius_config["server_ip"])} secret="{_rsc_escape(radius_shared_secret)}" protocol=udp authentication-port={_rsc_escape(radius_config["auth_port"])} accounting-port={_rsc_escape(radius_config["acct_port"])}{f' src-address={_rsc_escape(radius_config["source_ip"])}' if radius_config.get("source_ip") else ''} comment="billing-saas radius" }} on-error={{ /radius set [find comment="billing-saas radius"] service=hotspot,ppp address={_rsc_escape(radius_config["server_ip"])} secret="{_rsc_escape(radius_shared_secret)}" protocol=udp authentication-port={_rsc_escape(radius_config["auth_port"])} accounting-port={_rsc_escape(radius_config["acct_port"])}{f' src-address={_rsc_escape(radius_config["source_ip"])}' if radius_config.get("source_ip") else ''} comment="billing-saas radius" }}
-        :if ([:len [/radius find comment="billing-saas radius"]] = 0) do={{ :log error "Billing SaaS: RADIUS client missing after configuration"; :error "RADIUS client missing after configuration" }}
-        :do {{ /radius incoming set accept=yes port=3799 }} on-error={{ :log warning "Billing SaaS: RADIUS incoming (CoA) setup failed" }}
-        /ppp aaa set use-radius=yes accounting=yes interim-update=5m;
-        :log info "Billing SaaS: RADIUS client configured; Hotspot authentication/accounting will use RADIUS";
-        :do {{ /ip firewall filter remove [find comment="billing-saas allow radius"] }} on-error={{}}
-        :do {{ /ip firewall filter add chain=input in-interface=wg-saas protocol=udp dst-port=1812,1813,3799 action=accept comment="billing-saas allow radius" }} on-error={{ :log warning "Billing SaaS: RADIUS firewall rule failed" }}
+        :log info "Expressnet: configuring RADIUS client for Hotspot and PPPoE";
+        :do {{ /radius remove [find comment="{radius_comment}"] }} on-error={{}}
+        :do {{ /radius add service=ppp,hotspot address={_rsc_escape(radius_config["server_ip"])} secret="{_rsc_escape(radius_shared_secret)}" timeout=3s comment="{radius_comment}" }} on-error={{ :log warning "Expressnet: primary RADIUS setup failed"; :error "Primary RADIUS setup failed" }}
+        :do {{ /radius add service=ppp,hotspot address={_rsc_escape(radius_fallback_ip)} secret="{_rsc_escape(radius_shared_secret)}" realm={_rsc_escape(wg_router_api_ip)} timeout=3s comment="{radius_comment}" }} on-error={{ :log warning "Expressnet: fallback RADIUS setup failed" }}
+        :if ([:len [/radius find comment="{radius_comment}"]] = 0) do={{ :log error "Expressnet: RADIUS client missing after configuration"; :error "RADIUS client missing after configuration" }}
+        :do {{ /radius incoming set accept=yes port=1700 }} on-error={{ :log warning "Expressnet: RADIUS incoming setup failed" }}
+        /ppp aaa set use-radius=yes interim-update=1h;
+        :log info "Expressnet: RADIUS client configured";
         """
     if not radius_enabled_for_router:
         radius_script = """
         :log info "Billing SaaS: RADIUS server IP unavailable; using local Hotspot users synced by cloud agent";
-        :do { /radius remove [find comment="billing-saas radius"] } on-error={}
+        :do { /radius remove [find comment="Expressnet radius"] } on-error={}
         /ppp aaa set use-radius=no accounting=no;
-        :do { /ip hotspot profile set [find name="billing-saas-captive"] use-radius=no radius-accounting=no } on-error={}
+        :do { /ip hotspot profile set [find name="Expressnet-profile"] use-radius=no } on-error={}
         :do { /ip firewall filter remove [find comment="billing-saas allow radius"] } on-error={}
         """
     hotspot_radius_flags = "yes" if radius_enabled_for_router else "no"
     api_vpn_firewall_script = (
-        ':do { /ip firewall filter remove [find comment="billing-saas allow api over vpn only"] } on-error={}\n'
-        ':do { /ip firewall filter add chain=input action=accept in-interface=wg-saas protocol=tcp dst-port=8728 comment="billing-saas allow api over vpn only" } on-error={}\n'
+        f':do {{ /ip firewall filter remove [find comment="Expressnet allow api over vpn only"] }} on-error={{}}\n'
+        f':do {{ /ip firewall filter add chain=input action=accept in-interface={wireguard_name} protocol=tcp dst-port=8728 comment="Expressnet allow api over vpn only" }} on-error={{}}\n'
         if vpn_peer_enabled
-        else ':do { /ip firewall filter remove [find comment="billing-saas allow api over vpn only"] } on-error={}\n'
+        else ':do { /ip firewall filter remove [find comment="Expressnet allow api over vpn only"] } on-error={}\n'
     )
 
     # --- Extracted from field export: /ip service set api address=10.9.0.1/32 ---
@@ -2507,7 +2516,7 @@ def router_provision_script(request, token):
     # API can't be reached from the open hotspot bridge — only from LAN or the VPN tunnel.
     mgmt_lockdown_script = f"""
         :log info "Billing SaaS: locking down management plane";
-        :do {{ /ip service set api address={_rsc_escape(wg_router_api_ip + '/32') if vpn_peer_enabled else '0.0.0.0/0'} }} on-error={{ :log warning "Billing SaaS: api service lockdown failed" }}
+        :do {{ /ip service set api address={_rsc_escape(wg_server_tunnel_ip + '/32') if vpn_peer_enabled else '0.0.0.0/0'} }} on-error={{ :log warning "Billing SaaS: api service lockdown failed" }}
         :do {{ /ip service set api-ssl disabled=yes }} on-error={{}}
         :do {{ /ip service set telnet disabled=yes }} on-error={{}}
         :do {{ /ip service set ftp disabled=yes }} on-error={{}}
@@ -2516,7 +2525,7 @@ def router_provision_script(request, token):
         """
 
     provisioning_callback_script = f""":local billingWgPub "";
-        :do {{ :set billingWgPub [/interface wireguard get [find name=wg-saas] public-key] }} on-error={{}}
+        :do {{ :set billingWgPub [/interface wireguard get [find name={wireguard_name}] public-key] }} on-error={{}}
         :do {{ /tool fetch keep-result=no url=("{callback_url}{callback_join}wg_public_key=" . $billingWgPub . "&wg_tunnel_ip={_rsc_escape(wg_router_api_ip)}&bridge={_rsc_escape(bridge_name)}") }} on-error={{ :log warning "Billing SaaS provisioning callback failed" }}"""
     if not vpn_peer_enabled:
         provisioning_callback_script = f':do {{ /tool fetch keep-result=no url=("{callback_url}{callback_join}bridge={_rsc_escape(bridge_name)}&mode=agent") }} on-error={{ :log warning "Billing SaaS provisioning callback failed" }}'
@@ -2525,16 +2534,16 @@ def router_provision_script(request, token):
         :local billingVpnPing 0;
         :do {{ :set billingVpnPing [/ping {_rsc_escape(wg_server_tunnel_ip)} count=3 interval=1s] }} on-error={{ :log warning "Billing SaaS: VPN ping failed" }}
         :if ($billingVpnPing = 0) do={{ :log warning "Billing SaaS: VPN server did not respond to ping; RADIUS may be unreachable until the tunnel is up" }} else={{ :log info ("Billing SaaS: VPN ping replies=" . $billingVpnPing) }}
-        :local billingPeerId [/interface wireguard peers find comment="billing-saas server peer"];
+        :local billingPeerId [/interface wireguard peers find name=peer1];
         :if ([:len $billingPeerId] > 0) do={{ :log info ("Billing SaaS: WireGuard peer configured, last-handshake=" . [/interface wireguard peers get $billingPeerId last-handshake]) }} else={{ :log warning "Billing SaaS: WireGuard peer not found after setup" }}
     """
     if not vpn_peer_enabled:
         vpn_health_script = ':log info "Billing SaaS Step 5: VPN health check skipped; local agent mode is active";'
     verification_script = """
-        :log info ("Billing SaaS verify: /radius count=" . [:len [/radius find comment="billing-saas radius"]]);
-        :if ([:len [/radius find comment="billing-saas radius"]] = 0) do={ :log error "Billing SaaS verify failed: /radius print has no billing-saas radius client"; :error "RADIUS client missing" }
-        :log info ("Billing SaaS verify: hotspot profile use-radius=" . [/ip hotspot profile get [find name=billing-saas-captive] use-radius] . " radius-accounting=" . [/ip hotspot profile get [find name=billing-saas-captive] radius-accounting]);
-        :if ([/ip hotspot profile get [find name=billing-saas-captive] use-radius] != "yes") do={ :log error "Billing SaaS verify failed: /ip hotspot profile use-radius is not yes"; :error "Hotspot profile use-radius is not yes" }
+        :log info ("Expressnet verify: /radius count=" . [:len [/radius find comment="Expressnet radius"]]);
+        :if ([:len [/radius find comment="Expressnet radius"]] = 0) do={ :log error "Expressnet verify failed: /radius print has no Expressnet radius client"; :error "RADIUS client missing" }
+        :log info ("Expressnet verify: hotspot profile use-radius=" . [/ip hotspot profile get [find name=Expressnet-profile] use-radius]);
+        :if ([/ip hotspot profile get [find name=Expressnet-profile] use-radius] != "yes") do={ :log error "Expressnet verify failed: /ip hotspot profile use-radius is not yes"; :error "Hotspot profile use-radius is not yes" }
         :log info ("Billing SaaS verify: /ip hotspot host count=" . [:len [/ip hotspot host find]]);
         :log info ("Billing SaaS verify: /ip hotspot active count=" . [:len [/ip hotspot active find]]);
         :log info ("Billing SaaS verify: PPP profiles=" . [:len [/ppp profile find]] . " Hotspot user profiles=" . [:len [/ip hotspot user profile find]]);
@@ -2546,12 +2555,12 @@ def router_provision_script(request, token):
     if not vpn_peer_enabled:
         verification_script = """
         :log info "Billing SaaS verify: local agent mode active";
-        :log info ("Billing SaaS verify: hotspot profile use-radius=" . [/ip hotspot profile get [find name=billing-saas-captive] use-radius]);
+        :log info ("Expressnet verify: hotspot profile use-radius=" . [/ip hotspot profile get [find name=Expressnet-profile] use-radius]);
         :log info ("Billing SaaS verify: /ip hotspot host count=" . [:len [/ip hotspot host find]]);
         :log info ("Billing SaaS verify: /ip hotspot active count=" . [:len [/ip hotspot active find]]);
         """
     radius_verify_script = (
-        ':if ([:len [/ip hotspot profile find name=billing-saas-captive use-radius=yes]] = 0) do={ :log error "Billing SaaS: hotspot profile use-radius=yes was not applied"; :error "Hotspot profile use-radius=yes was not applied" }'
+        ':if ([:len [/ip hotspot profile find name=Expressnet-profile use-radius=yes]] = 0) do={ :log error "Expressnet: hotspot profile use-radius=yes was not applied"; :error "Hotspot profile use-radius=yes was not applied" }'
         if radius_enabled_for_router
         else ':log info "Billing SaaS: local Hotspot profile does not use RADIUS because local agent mode is active";'
     )
@@ -2626,9 +2635,11 @@ def router_provision_script(request, token):
             :do {{ :set pr [/ppp profile get $p rate-limit] }} on-error={{}}
             :do {{ /tool fetch keep-result=no url=("{snapshot_pppoe_profile_url}?name=" . $pn . "&rate_limit=" . $pr) }} on-error={{}}
         }}
-        :foreach p in=[/ip hotspot profile find] do={{
-            :local pn [/ip hotspot profile get $p name];
-            :do {{ /tool fetch keep-result=no url=("{snapshot_hotspot_profile_url}?name=" . $pn) }} on-error={{}}
+        :foreach p in=[/ip hotspot user profile find] do={{
+            :local pn [/ip hotspot user profile get $p name];
+            :local pr "";
+            :do {{ :set pr [/ip hotspot user profile get $p rate-limit] }} on-error={{}}
+            :do {{ /tool fetch keep-result=no url=("{snapshot_hotspot_profile_url}?name=" . $pn . "&rate_limit=" . $pr) }} on-error={{}}
         }}
         :foreach s in=[/interface pppoe-server server find] do={{
             :local sn [/interface pppoe-server server get $s service-name];
@@ -2648,7 +2659,8 @@ def router_provision_script(request, token):
 
     pppoe_script = f"""
         :log info "Billing SaaS Step 8: provisioning PPPoE service without mixing Hotspot profiles";
-        :do {{ /interface pppoe-server server add service-name="billing-default-pppoe" interface=$billingBridge default-profile=default one-session-per-host=yes disabled=no }} on-error={{ /interface pppoe-server server set [find service-name="billing-default-pppoe"] interface=$billingBridge default-profile=default one-session-per-host=yes disabled=no }}
+        :do {{ /ppp profile add name="{ppp_profile_name}" local-address={_rsc_escape(lan_gateway)} remote-address={hotspot_pool_name} dns-server=8.8.8.8 only-one=yes comment="Added by Expressnet" }} on-error={{ /ppp profile set [find name="{ppp_profile_name}"] local-address={_rsc_escape(lan_gateway)} remote-address={hotspot_pool_name} dns-server=8.8.8.8 only-one=yes comment="Added by Expressnet" }}
+        :do {{ /interface pppoe-server server add service-name="{pppoe_service_name}" authentication=pap interface=$billingBridge default-profile="{ppp_profile_name}" one-session-per-host=yes disabled=no }} on-error={{ /interface pppoe-server server set [find service-name="{pppoe_service_name}"] authentication=pap interface=$billingBridge default-profile="{ppp_profile_name}" one-session-per-host=yes disabled=no }}
     """
 
     # --- Extracted from field export: /ip firewall address-list + /ip hotspot walled-garden ip
@@ -2656,12 +2668,12 @@ def router_provision_script(request, token):
     # one-time :resolve'd IP). RouterOS re-resolves FQDN address-list entries on its own, so the
     # walled garden survives DNS/IP changes on the portal host without re-provisioning.
     walled_garden_fqdn_script = "".join(
-        f':do {{ /ip firewall address-list add address="{_rsc_escape(h)}" list=billing-saas-portal-ips comment="billing-saas captive portal access" }} on-error={{}}\n'
+        f':do {{ /ip firewall address-list add address="{_rsc_escape(h)}" list=Expressnet-portal-ips comment="Expressnet-hotspot-ip-wg" }} on-error={{}}\n'
         for h in portal_wg_hosts
     ) + """
         :do { /ip hotspot walled-garden ip remove [find comment="billing-saas captive portal access"] } on-error={}
-        :do { /ip hotspot walled-garden ip add action=accept dst-address-list=billing-saas-portal-ips dst-port=80 protocol=tcp comment="billing-saas captive portal access" } on-error={}
-        :do { /ip hotspot walled-garden ip add action=accept dst-address-list=billing-saas-portal-ips dst-port=443 protocol=tcp comment="billing-saas captive portal access" } on-error={}
+        :do { /ip hotspot walled-garden ip add action=accept dst-address-list=Expressnet-portal-ips dst-port=80 protocol=tcp comment=Expressnet-hotspot-ip-wg } on-error={}
+        :do { /ip hotspot walled-garden ip add action=accept dst-address-list=Expressnet-portal-ips dst-port=443 protocol=tcp comment=Expressnet-hotspot-ip-wg } on-error={}
         """
 
     # --- Extracted from field export: /ip firewall raw hotspot-proxy-lockdown + dns-flood-cap ---
@@ -2669,12 +2681,12 @@ def router_provision_script(request, token):
     # DNS queries per-client (100 packets, burst 200, per source IP per minute) before dropping
     # the rest, so a single compromised customer device can't flood the router's DNS/proxy.
     hotspot_abuse_protection_script = """
-        :do { /ip firewall raw remove [find comment~"billing-saas-hotspot"] } on-error={}
-        :do { /ip firewall raw add action=drop chain=prerouting dst-port=64872-64875 in-interface=$billingBridge protocol=tcp comment="billing-saas-hotspot-proxy-lockdown" } on-error={}
-        :do { /ip firewall raw add action=accept chain=prerouting dst-limit=100,200,src-address/1m dst-port=53 in-interface=$billingBridge protocol=udp comment="billing-saas-hotspot-dns-flood-cap" } on-error={}
-        :do { /ip firewall raw add action=drop chain=prerouting dst-port=53 in-interface=$billingBridge protocol=udp comment="billing-saas-hotspot-dns-flood-cap" } on-error={}
-        :do { /ip firewall raw add action=accept chain=prerouting dst-limit=100,200,src-address/1m dst-port=53 in-interface=$billingBridge protocol=tcp comment="billing-saas-hotspot-dns-flood-cap" } on-error={}
-        :do { /ip firewall raw add action=drop chain=prerouting dst-port=53 in-interface=$billingBridge protocol=tcp comment="billing-saas-hotspot-dns-flood-cap" } on-error={}
+        :do { /ip firewall raw remove [find comment~"Expressnet-hotspot"] } on-error={}
+        :do { /ip firewall raw add action=drop chain=prerouting dst-port=64872-64875 in-interface=$billingBridge protocol=tcp comment=Expressnet-hotspot-proxy-lockdown } on-error={}
+        :do { /ip firewall raw add action=accept chain=prerouting dst-limit=100,200,src-address/1m dst-port=53 in-interface=$billingBridge protocol=udp comment=Expressnet-hotspot-dns-flood-cap } on-error={}
+        :do { /ip firewall raw add action=drop chain=prerouting dst-port=53 in-interface=$billingBridge protocol=udp comment=Expressnet-hotspot-dns-flood-cap } on-error={}
+        :do { /ip firewall raw add action=accept chain=prerouting dst-limit=100,200,src-address/1m dst-port=53 in-interface=$billingBridge protocol=tcp comment=Expressnet-hotspot-dns-flood-cap } on-error={}
+        :do { /ip firewall raw add action=drop chain=prerouting dst-port=53 in-interface=$billingBridge protocol=tcp comment=Expressnet-hotspot-dns-flood-cap } on-error={}
         """
 
     script = f""":log info "Billing SaaS Step 1: provisioning token validated by Expressnet server";
@@ -2690,12 +2702,12 @@ def router_provision_script(request, token):
         }}
         :log info "Billing SaaS Step 2: creating bridge, DHCP, IP pool, firewall, and NAT";
         :local billingBridge "{_rsc_escape(bridge_name)}";
-        :do {{ /interface bridge add name=$billingBridge comment="billing-saas managed bridge" }} on-error={{}}
-        :do {{ /interface list member add list=LAN interface=$billingBridge comment="billing-saas captive LAN" }} on-error={{ /interface list member set [find interface=$billingBridge] list=LAN comment="billing-saas captive LAN" }}
-        :do {{ /ip address add address={_rsc_escape(lan_cidr)} interface=$billingBridge comment="billing-saas bridge gateway" }} on-error={{ /ip address set [find comment="billing-saas bridge gateway"] address={_rsc_escape(lan_cidr)} interface=$billingBridge }}
-        :do {{ /ip pool add name=billing-saas-dhcp ranges={_rsc_escape(dhcp_pool)} }} on-error={{ /ip pool set [find name=billing-saas-dhcp] ranges={_rsc_escape(dhcp_pool)} }}
-        :do {{ /ip dhcp-server add name=billing-saas-dhcp interface=$billingBridge address-pool=billing-saas-dhcp disabled=no lease-time=1d }} on-error={{ /ip dhcp-server set [find name=billing-saas-dhcp] interface=$billingBridge address-pool=billing-saas-dhcp disabled=no lease-time=1d }}
-        :do {{ /ip dhcp-server network add address={_rsc_escape(lan_network)} gateway={_rsc_escape(lan_gateway)} dns-server={_rsc_escape(lan_gateway)} comment="billing-saas dhcp network" }} on-error={{ /ip dhcp-server network set [find comment="billing-saas dhcp network"] address={_rsc_escape(lan_network)} gateway={_rsc_escape(lan_gateway)} dns-server={_rsc_escape(lan_gateway)} }}
+        :do {{ /interface bridge add name=$billingBridge comment="Created by Expressnet" }} on-error={{ /interface bridge set [find name=$billingBridge] comment="Created by Expressnet" }}
+        :do {{ /interface list member add list=LAN interface=$billingBridge comment="Added by Expressnet" }} on-error={{ /interface list member set [find interface=$billingBridge] list=LAN comment="Added by Expressnet" }}
+        :do {{ /ip address add address={_rsc_escape(lan_cidr)} interface=$billingBridge comment="Added by Expressnet" }} on-error={{ /ip address set [find comment="Added by Expressnet" interface=$billingBridge] address={_rsc_escape(lan_cidr)} interface=$billingBridge }}
+        :do {{ /ip pool add name={hotspot_pool_name} ranges={_rsc_escape(dhcp_pool)} comment="IP Pool created by Expressnet" }} on-error={{ /ip pool set [find name={hotspot_pool_name}] ranges={_rsc_escape(dhcp_pool)} comment="IP Pool created by Expressnet" }}
+        :do {{ /ip dhcp-server add name=Expressnet-dhcp interface=$billingBridge address-pool={hotspot_pool_name} disabled=no lease-time=4h }} on-error={{ /ip dhcp-server set [find name=Expressnet-dhcp] interface=$billingBridge address-pool={hotspot_pool_name} disabled=no lease-time=4h }}
+        :do {{ /ip dhcp-server network add address={_rsc_escape(lan_network)} gateway={_rsc_escape(lan_gateway)} dns-server=8.8.8.8,8.8.4.4 }} on-error={{ /ip dhcp-server network set [find address={_rsc_escape(lan_network)}] gateway={_rsc_escape(lan_gateway)} dns-server=8.8.8.8,8.8.4.4 }}
         :log info "Billing SaaS: configuring only Expressnet-managed firewall and NAT rules";
         /ip service enable api;
         :do {{ /ip service set api disabled=no }} on-error={{}}
@@ -2717,24 +2729,24 @@ def router_provision_script(request, token):
         :do {{ /system clock set time-zone-name="Africa/Nairobi" }} on-error={{}}
         :log info "Billing SaaS: preparing WAN internet";
         :do {{ /ip dhcp-client add interface="{_rsc_escape(wan_interface)}" add-default-route=yes use-peer-dns=no disabled=no comment="billing-saas wan" }} on-error={{ /ip dhcp-client set [find interface="{_rsc_escape(wan_interface)}"] add-default-route=yes use-peer-dns=no disabled=no comment="billing-saas wan" }}
-        :do {{ /ip dns set servers=1.1.1.1,8.8.8.8 allow-remote-requests=yes }} on-error={{}}
+        :do {{ /ip dns set servers=8.8.8.8,8.8.4.4 allow-remote-requests=yes }} on-error={{}}
         :delay 3s;
         :log info "Billing SaaS: preserving existing PPP secrets and Hotspot users";
         :log info "Billing SaaS Step 3: creating Hotspot and captive portal";
-        :do {{ /ip hotspot profile add name=billing-saas-captive hotspot-address={_rsc_escape(lan_gateway)} dns-name="" login-by=http-chap,http-pap use-radius={hotspot_radius_flags} radius-accounting={hotspot_radius_flags} html-directory=hotspot }} on-error={{ /ip hotspot profile set [find name=billing-saas-captive] hotspot-address={_rsc_escape(lan_gateway)} dns-name="" login-by=http-chap,http-pap use-radius={hotspot_radius_flags} radius-accounting={hotspot_radius_flags} html-directory=hotspot }}
+        :do {{ /ip hotspot profile add name={hotspot_profile_name} hotspot-address={_rsc_escape(lan_gateway)} dns-name="{_rsc_escape(hotspot_dns_name)}" login-by=cookie,http-pap,trial,mac-cookie use-radius={hotspot_radius_flags} radius-interim-update=10m html-directory=Expressnet-hotspot }} on-error={{ /ip hotspot profile set [find name={hotspot_profile_name}] hotspot-address={_rsc_escape(lan_gateway)} dns-name="{_rsc_escape(hotspot_dns_name)}" login-by=cookie,http-pap,trial,mac-cookie use-radius={hotspot_radius_flags} radius-interim-update=10m html-directory=Expressnet-hotspot }}
         :do {{ /interface wireless security-profiles add name="billing-saas-open" mode=none authentication-types="" wpa-pre-shared-key="" wpa2-pre-shared-key="" supplicant-identity="billing-saas" }} on-error={{ /interface wireless security-profiles set [find name="billing-saas-open"] mode=none authentication-types="" wpa-pre-shared-key="" wpa2-pre-shared-key="" supplicant-identity="billing-saas" }}
         :do {{ /interface wireless set [find name="wlan1"] security-profile="billing-saas-open" disabled=no }} on-error={{ :log warning "Billing SaaS: wlan1 open hotspot profile failed" }}
-        :do {{ /ip hotspot user profile add name=billing-saas-unpaid shared-users=1 keepalive-timeout=2m status-autorefresh=1m }} on-error={{}}
-        :do {{ /ip hotspot add name=billing-saas-hotspot interface=$billingBridge address-pool=billing-saas-dhcp profile=billing-saas-captive disabled=no }} on-error={{ /ip hotspot set [find name=billing-saas-hotspot] interface=$billingBridge address-pool=billing-saas-dhcp profile=billing-saas-captive disabled=no }}
-        :do {{ /ip hotspot set [find name=billing-saas-hotspot] disabled=no }} on-error={{}}
-        :if ([:len [/ip hotspot find name=billing-saas-hotspot profile=billing-saas-captive disabled=no]] = 0) do={{ :log error "Billing SaaS: managed Hotspot server missing after provisioning"; :error "Managed Hotspot server missing after provisioning" }}
+        :do {{ /ip hotspot user profile set [find default=yes] idle-timeout=2h shared-users=2 }} on-error={{}}
+        :do {{ /ip hotspot add name={hotspot_server_name} interface=$billingBridge address-pool={hotspot_pool_name} profile={hotspot_profile_name} disabled=no }} on-error={{ /ip hotspot set [find name={hotspot_server_name}] interface=$billingBridge address-pool={hotspot_pool_name} profile={hotspot_profile_name} disabled=no }}
+        :do {{ /ip hotspot set [find name={hotspot_server_name}] disabled=no }} on-error={{}}
+        :if ([:len [/ip hotspot find name={hotspot_server_name} profile={hotspot_profile_name} disabled=no]] = 0) do={{ :log error "Expressnet: managed Hotspot server missing after provisioning"; :error "Managed Hotspot server missing after provisioning" }}
         :do {{ /ip hotspot walled-garden remove [find comment="billing-saas captive portal access"] }} on-error={{}}
         :do {{ /ip hotspot walled-garden ip remove [find comment="billing-saas captive portal access"] }} on-error={{}}
-        :do {{ /ip firewall address-list remove [find list=billing-saas-portal-ips] }} on-error={{}}
+        :do {{ /ip firewall address-list remove [find list=Expressnet-portal-ips] }} on-error={{}}
         {captive_hosts_script}
         {walled_garden_fqdn_script}
         {hotspot_file_script}
-        :if ([:len [/ip hotspot find name=billing-saas-hotspot disabled=no]] = 0) do={{ :log error "Billing SaaS: Hotspot is not running after Step 3"; :error "Hotspot is not running after Step 3" }}
+        :if ([:len [/ip hotspot find name={hotspot_server_name} disabled=no]] = 0) do={{ :log error "Expressnet: Hotspot is not running after Step 3"; :error "Hotspot is not running after Step 3" }}
         :log info "Billing SaaS Step 4: configuring WireGuard and router tunnel keys";
         {vpn_script}
         {watchdog_script}
@@ -2742,7 +2754,7 @@ def router_provision_script(request, token):
         :log info "Billing SaaS Step 6: configuring RADIUS client";
         {radius_script}
         :log info "Billing SaaS Step 7: enabling and verifying Hotspot RADIUS authentication";
-        :do {{ /ip hotspot profile set [find name=billing-saas-captive] use-radius={hotspot_radius_flags} radius-accounting={hotspot_radius_flags} }} on-error={{ :log warning "Billing SaaS: hotspot radius flag update failed" }}
+        :do {{ /ip hotspot profile set [find name={hotspot_profile_name}] use-radius={hotspot_radius_flags} }} on-error={{ :log warning "Expressnet: hotspot radius flag update failed" }}
         {radius_verify_script}
         {pppoe_script}
         :log info "Billing SaaS Step 7b: locking down management plane";
