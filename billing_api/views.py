@@ -2374,14 +2374,6 @@ def router_provision_script(request, token):
 
     wg_config = _wireguard_server_config(tenant)
     vpn_peer_enabled = bool(wg_config["ready"])
-    if not vpn_peer_enabled:
-        missing = ", ".join(wg_config["missing"] or ["WireGuard RADIUS server settings"])
-        message = (
-            "Billing SaaS: RADIUS provisioning requires the server VPN settings. "
-            f"Missing {missing}. Hotspot/PPPoE services were not modified."
-        )
-        logger.error("MikroTik provisioning blocked tenant=%s reason=%s", tenant_id, message)
-        return HttpResponse(f':log error "{_rsc_escape(message)}"; :error "{_rsc_escape(message)}";\n', content_type="text/plain")
     wg_server_public_key = wg_config["public_key"]
     wg_server_endpoint = wg_config["endpoint"]
     wg_server_port = wg_config["port"]
@@ -2422,13 +2414,24 @@ def router_provision_script(request, token):
         :do {{ /ip firewall filter remove [find comment="billing-saas allow api over vpn"] }} on-error={{}}
         :do {{ /ip firewall filter add chain=input action=accept in-interface=wg-saas protocol=tcp dst-port=8728 comment="billing-saas allow api over vpn" }} on-error={{}}
         """
+    if not vpn_peer_enabled:
+        missing = ", ".join(wg_config["missing"] or ["server VPN settings"])
+        logger.warning("MikroTik provisioning tenant=%s using local agent mode because %s is missing", tenant_id, missing)
+        vpn_script = (
+            ':log info "Billing SaaS: using automatic local agent mode";\n'
+            ':do { /interface wireguard remove [find name="wg-saas"] } on-error={}\n'
+            ':do { /ip firewall filter remove [find comment="billing-saas allow api over vpn"] } on-error={}\n'
+            ':do { /ip firewall filter remove [find comment="billing-saas allow api over vpn only"] } on-error={}\n'
+            ':do { /ip firewall filter remove [find comment="billing-saas allow radius"] } on-error={}\n'
+        )
     radius_shared_secret = ""
-    from .models import RadiusNasClient
-    tenant_obj = Tenant.objects.get(pk=tenant_id)
-    existing_extra = tenant_obj.extra or {}
-    radius_shared_secret = existing_extra.get("radius_shared_secret_pending") or RadiusNasClient.generate_secret()
-    tenant_obj.extra = {**existing_extra, "radius_shared_secret_pending": radius_shared_secret}
-    tenant_obj.save(update_fields=["extra"])
+    if vpn_peer_enabled:
+        from .models import RadiusNasClient
+        tenant_obj = Tenant.objects.get(pk=tenant_id)
+        existing_extra = tenant_obj.extra or {}
+        radius_shared_secret = existing_extra.get("radius_shared_secret_pending") or RadiusNasClient.generate_secret()
+        tenant_obj.extra = {**existing_extra, "radius_shared_secret_pending": radius_shared_secret}
+        tenant_obj.save(update_fields=["extra"])
 
     radius_script = f"""
         :log info "Billing SaaS: configuring RADIUS client for Hotspot and PPPoE";
@@ -2440,14 +2443,26 @@ def router_provision_script(request, token):
         :do {{ /ip firewall filter remove [find comment="billing-saas allow radius"] }} on-error={{}}
         :do {{ /ip firewall filter add chain=input in-interface=wg-saas protocol=udp dst-port=1812,1813,3799 action=accept comment="billing-saas allow radius" }} on-error={{ :log warning "Billing SaaS: RADIUS firewall rule failed" }}
         """
-    hotspot_radius_flags = "yes"
+    if not vpn_peer_enabled:
+        radius_script = """
+        :log info "Billing SaaS: RADIUS server settings unavailable; using local Hotspot users synced by cloud agent";
+        :do { /radius remove [find comment="billing-saas radius"] } on-error={}
+        /ppp aaa set use-radius=no accounting=no;
+        :do { /ip hotspot profile set [find name="billing-saas-captive"] use-radius=no radius-accounting=no } on-error={}
+        :do { /ip firewall filter remove [find comment="billing-saas allow radius"] } on-error={}
+        """
+    hotspot_radius_flags = "yes" if vpn_peer_enabled else "no"
     api_vpn_firewall_script = (
         ':do { /ip firewall filter remove [find comment="billing-saas allow api over vpn only"] } on-error={}\n'
         ':do { /ip firewall filter add chain=input action=accept in-interface=wg-saas protocol=tcp dst-port=8728 comment="billing-saas allow api over vpn only" } on-error={}\n'
+        if vpn_peer_enabled
+        else ':do { /ip firewall filter remove [find comment="billing-saas allow api over vpn only"] } on-error={}\n'
     )
     provisioning_callback_script = f""":local billingWgPub "";
         :do {{ :set billingWgPub [/interface wireguard get [find name=wg-saas] public-key] }} on-error={{}}
         :do {{ /tool fetch keep-result=no url=("{callback_url}{callback_join}wg_public_key=" . $billingWgPub . "&wg_tunnel_ip={_rsc_escape(wg_router_api_ip)}&bridge={_rsc_escape(bridge_name)}") }} on-error={{ :log warning "Billing SaaS provisioning callback failed" }}"""
+    if not vpn_peer_enabled:
+        provisioning_callback_script = f':do {{ /tool fetch keep-result=no url=("{callback_url}{callback_join}bridge={_rsc_escape(bridge_name)}&mode=agent") }} on-error={{ :log warning "Billing SaaS provisioning callback failed" }}'
     verification_script = """
         :log info ("Billing SaaS verify: /radius count=" . [:len [/radius find comment="billing-saas radius"]]);
         :if ([:len [/radius find comment="billing-saas radius"]] = 0) do={ :log error "Billing SaaS verify failed: /radius print has no billing-saas radius client"; :error "RADIUS client missing" }
@@ -2461,6 +2476,13 @@ def router_provision_script(request, token):
             :if ([:len [/ip hotspot user profile find name=$pn comment="billing-saas-package"]] > 0) do={ :log warning ("Billing SaaS verify: package name exists in both PPP and Hotspot profile stores: " . $pn) }
         }
     """
+    if not vpn_peer_enabled:
+        verification_script = """
+        :log info "Billing SaaS verify: local agent mode active";
+        :log info ("Billing SaaS verify: hotspot profile use-radius=" . [/ip hotspot profile get [find name=billing-saas-captive] use-radius]);
+        :log info ("Billing SaaS verify: /ip hotspot host count=" . [:len [/ip hotspot host find]]);
+        :log info ("Billing SaaS verify: /ip hotspot active count=" . [:len [/ip hotspot active find]]);
+        """
 
     try:
         ref(f"tenants/{tenant_id}").update({
