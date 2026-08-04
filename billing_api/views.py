@@ -2340,9 +2340,6 @@ def _router_snapshot_fetch_script(snapshot_url):
     """
 
 
-
-
-
 @csrf_exempt
 @api_view(["GET"])
 @permission_classes([AllowAny])  # Safely opens the wall for MikroTik requests
@@ -2377,10 +2374,10 @@ def router_provision_script(request, token):
     app_base_url = public_base_url(request).rstrip("/")
     portal_url = captive_portal_url(tenant, app_base_url)
     portal_host = urlparse(portal_url).netloc.split("@")[-1].split(":")[0]
+    portal_wg_hosts = [h for h in walled_garden_hosts(tenant, portal_host) if h]
     captive_hosts_script = "".join(
         f':do {{ /ip hotspot walled-garden add action=allow dst-host="{_rsc_escape(host)}" comment="billing-saas captive portal access" }} on-error={{}}\n'
-        for host in walled_garden_hosts(tenant, portal_host)
-        if host
+        for host in portal_wg_hosts
     )
     callback_base_url = f"{app_base_url}/api/router/provision/{token}/complete"
     snapshot_url = f"{app_base_url}/api/router/provision/{token}/snapshot"
@@ -2453,6 +2450,22 @@ def router_provision_script(request, token):
             ':do { /ip firewall filter remove [find comment="billing-saas allow api over vpn only"] } on-error={}\n'
             ':do { /ip firewall filter remove [find comment="billing-saas allow radius"] } on-error={}\n'
         )
+
+    # --- Extracted from field export: /system scheduler Expressnet-wg-watchdog ---
+    # Bounces the WireGuard interface if the VPN server stops responding to ping,
+    # so a dropped tunnel self-heals instead of silently orphaning RADIUS/API access.
+    watchdog_script = (
+        f"""
+        :do {{ /system scheduler remove [find name="billing-saas-wg-watchdog"] }} on-error={{}}
+        /system scheduler add name="billing-saas-wg-watchdog" interval=1m comment="Billing SaaS WireGuard watchdog. Do not delete." on-event=":if ([/ping {_rsc_escape(wg_server_tunnel_ip)} count=10 interval=1s]=0) do={{/interface wireguard disable [find name=\\"wg-saas\\"];:delay 2s;/interface wireguard enable [find name=\\"wg-saas\\"];:log info \\"Billing SaaS: bounced unreachable tunnel\\"}}"
+        """
+        if vpn_peer_enabled
+        else (
+            ':do { /system scheduler remove [find name="billing-saas-wg-watchdog"] } on-error={}\n'
+            ':log info "Billing SaaS: WireGuard watchdog skipped, agent mode active";'
+        )
+    )
+
     radius_shared_secret = ""
     if radius_enabled_for_router:
         from .models import RadiusNasClient
@@ -2487,6 +2500,21 @@ def router_provision_script(request, token):
         if vpn_peer_enabled
         else ':do { /ip firewall filter remove [find comment="billing-saas allow api over vpn only"] } on-error={}\n'
     )
+
+    # --- Extracted from field export: /ip service set api address=10.9.0.1/32 ---
+    # Plus /tool mac-server and /tool mac-server mac-winbox restricted to LAN list only.
+    # Locks the router's management plane so Winbox/MAC-Telnet discovery and the RouterOS
+    # API can't be reached from the open hotspot bridge — only from LAN or the VPN tunnel.
+    mgmt_lockdown_script = f"""
+        :log info "Billing SaaS: locking down management plane";
+        :do {{ /ip service set api address={_rsc_escape(wg_router_api_ip + '/32') if vpn_peer_enabled else '0.0.0.0/0'} }} on-error={{ :log warning "Billing SaaS: api service lockdown failed" }}
+        :do {{ /ip service set api-ssl disabled=yes }} on-error={{}}
+        :do {{ /ip service set telnet disabled=yes }} on-error={{}}
+        :do {{ /ip service set ftp disabled=yes }} on-error={{}}
+        :do {{ /tool mac-server set allowed-interface-list=LAN }} on-error={{ :log warning "Billing SaaS: mac-server lockdown failed" }}
+        :do {{ /tool mac-server mac-winbox set allowed-interface-list=LAN }} on-error={{ :log warning "Billing SaaS: mac-winbox lockdown failed" }}
+        """
+
     provisioning_callback_script = f""":local billingWgPub "";
         :do {{ :set billingWgPub [/interface wireguard get [find name=wg-saas] public-key] }} on-error={{}}
         :do {{ /tool fetch keep-result=no url=("{callback_url}{callback_join}wg_public_key=" . $billingWgPub . "&wg_tunnel_ip={_rsc_escape(wg_router_api_ip)}&bridge={_rsc_escape(bridge_name)}") }} on-error={{ :log warning "Billing SaaS provisioning callback failed" }}"""
@@ -2577,7 +2605,6 @@ def router_provision_script(request, token):
         except OperationalError:
             pass
 
-   
     interface_report_loop = f"""
         :log info "Billing SaaS: reporting interfaces";
         :foreach i in=[/interface find] do={{
@@ -2624,6 +2651,32 @@ def router_provision_script(request, token):
         :do {{ /interface pppoe-server server add service-name="billing-default-pppoe" interface=$billingBridge default-profile=default one-session-per-host=yes disabled=no }} on-error={{ /interface pppoe-server server set [find service-name="billing-default-pppoe"] interface=$billingBridge default-profile=default one-session-per-host=yes disabled=no }}
     """
 
+    # --- Extracted from field export: /ip firewall address-list + /ip hotspot walled-garden ip
+    # (Expressnet-portal-ips list of FQDNs, matched by dst-address-list rather than a single
+    # one-time :resolve'd IP). RouterOS re-resolves FQDN address-list entries on its own, so the
+    # walled garden survives DNS/IP changes on the portal host without re-provisioning.
+    walled_garden_fqdn_script = "".join(
+        f':do {{ /ip firewall address-list add address="{_rsc_escape(h)}" list=billing-saas-portal-ips comment="billing-saas captive portal access" }} on-error={{}}\n'
+        for h in portal_wg_hosts
+    ) + """
+        :do { /ip hotspot walled-garden ip remove [find comment="billing-saas captive portal access"] } on-error={}
+        :do { /ip hotspot walled-garden ip add action=accept dst-address-list=billing-saas-portal-ips dst-port=80 protocol=tcp comment="billing-saas captive portal access" } on-error={}
+        :do { /ip hotspot walled-garden ip add action=accept dst-address-list=billing-saas-portal-ips dst-port=443 protocol=tcp comment="billing-saas captive portal access" } on-error={}
+        """
+
+    # --- Extracted from field export: /ip firewall raw hotspot-proxy-lockdown + dns-flood-cap ---
+    # Blocks direct client access to the hotspot's internal proxy port range and rate-limits
+    # DNS queries per-client (100 packets, burst 200, per source IP per minute) before dropping
+    # the rest, so a single compromised customer device can't flood the router's DNS/proxy.
+    hotspot_abuse_protection_script = """
+        :do { /ip firewall raw remove [find comment~"billing-saas-hotspot"] } on-error={}
+        :do { /ip firewall raw add action=drop chain=prerouting dst-port=64872-64875 in-interface=$billingBridge protocol=tcp comment="billing-saas-hotspot-proxy-lockdown" } on-error={}
+        :do { /ip firewall raw add action=accept chain=prerouting dst-limit=100,200,src-address/1m dst-port=53 in-interface=$billingBridge protocol=udp comment="billing-saas-hotspot-dns-flood-cap" } on-error={}
+        :do { /ip firewall raw add action=drop chain=prerouting dst-port=53 in-interface=$billingBridge protocol=udp comment="billing-saas-hotspot-dns-flood-cap" } on-error={}
+        :do { /ip firewall raw add action=accept chain=prerouting dst-limit=100,200,src-address/1m dst-port=53 in-interface=$billingBridge protocol=tcp comment="billing-saas-hotspot-dns-flood-cap" } on-error={}
+        :do { /ip firewall raw add action=drop chain=prerouting dst-port=53 in-interface=$billingBridge protocol=tcp comment="billing-saas-hotspot-dns-flood-cap" } on-error={}
+        """
+
     script = f""":log info "Billing SaaS Step 1: provisioning token validated by Expressnet server";
         :local billingVer [/system resource get version];
         :local billingVerNum $billingVer;
@@ -2658,6 +2711,7 @@ def router_provision_script(request, token):
         :do {{ /ip firewall filter add chain=input action=accept in-interface=$billingBridge protocol=tcp dst-port=53 place-before=[find comment="defconf: drop all not coming from LAN"] comment="billing-saas allow hotspot dns" }} on-error={{ /ip firewall filter add chain=input action=accept in-interface=$billingBridge protocol=tcp dst-port=53 comment="billing-saas allow hotspot dns" }}
         :do {{ /ip firewall filter add chain=input action=accept in-interface=$billingBridge protocol=udp dst-port=67,68 place-before=[find comment="defconf: drop all not coming from LAN"] comment="billing-saas allow hotspot dhcp" }} on-error={{ /ip firewall filter add chain=input action=accept in-interface=$billingBridge protocol=udp dst-port=67,68 comment="billing-saas allow hotspot dhcp" }}
         :do {{ /ip firewall filter add chain=input action=accept in-interface=$billingBridge protocol=tcp dst-port=64872-64875 place-before=[find comment="defconf: drop all not coming from LAN"] comment="billing-saas allow hotspot web-proxy" }} on-error={{ /ip firewall filter add chain=input action=accept in-interface=$billingBridge protocol=tcp dst-port=64872-64875 comment="billing-saas allow hotspot web-proxy" }}
+        {hotspot_abuse_protection_script}
         :do {{ /ip dns static remove [find comment="billing-saas hotspot dns"] }} on-error={{}}
         :do {{ /system ntp client set enabled=yes servers=pool.ntp.org }} on-error={{}}
         :do {{ /system clock set time-zone-name="Africa/Nairobi" }} on-error={{}}
@@ -2676,19 +2730,14 @@ def router_provision_script(request, token):
         :if ([:len [/ip hotspot find name=billing-saas-hotspot profile=billing-saas-captive disabled=no]] = 0) do={{ :log error "Billing SaaS: managed Hotspot server missing after provisioning"; :error "Managed Hotspot server missing after provisioning" }}
         :do {{ /ip hotspot walled-garden remove [find comment="billing-saas captive portal access"] }} on-error={{}}
         :do {{ /ip hotspot walled-garden ip remove [find comment="billing-saas captive portal access"] }} on-error={{}}
+        :do {{ /ip firewall address-list remove [find list=billing-saas-portal-ips] }} on-error={{}}
         {captive_hosts_script}
-        :local billingPortalIp "";
-        :do {{ :set billingPortalIp [:resolve "{portal_host}"] }} on-error={{ :log warning "Billing SaaS portal DNS resolve failed" }}
-        :if ([:len $billingPortalIp] > 0) do={{
-            :do {{ /ip dns static remove [find name="{portal_host}" comment="billing-saas captive portal dns"] }} on-error={{}}
-            :do {{ /ip dns static add name="{portal_host}" address=$billingPortalIp comment="billing-saas captive portal dns" }} on-error={{}}
-            :do {{ /ip hotspot walled-garden ip add action=accept dst-address=$billingPortalIp protocol=tcp dst-port=80 comment="billing-saas captive portal access" }} on-error={{}}
-            :do {{ /ip hotspot walled-garden ip add action=accept dst-address=$billingPortalIp protocol=tcp dst-port=443 comment="billing-saas captive portal access" }} on-error={{}}
-        }}
+        {walled_garden_fqdn_script}
         {hotspot_file_script}
         :if ([:len [/ip hotspot find name=billing-saas-hotspot disabled=no]] = 0) do={{ :log error "Billing SaaS: Hotspot is not running after Step 3"; :error "Hotspot is not running after Step 3" }}
         :log info "Billing SaaS Step 4: configuring WireGuard and router tunnel keys";
         {vpn_script}
+        {watchdog_script}
         {vpn_health_script}
         :log info "Billing SaaS Step 6: configuring RADIUS client";
         {radius_script}
@@ -2696,7 +2745,9 @@ def router_provision_script(request, token):
         :do {{ /ip hotspot profile set [find name=billing-saas-captive] use-radius={hotspot_radius_flags} radius-accounting={hotspot_radius_flags} }} on-error={{ :log warning "Billing SaaS: hotspot radius flag update failed" }}
         {radius_verify_script}
         {pppoe_script}
-        :log info "Billing SaaS: syncing package profiles by service type";
+        :log info "Billing SaaS Step 7b: locking down management plane";
+        {mgmt_lockdown_script}
+        :log info "Billing SaaS Step 8: syncing package profiles by service type";
         {package_profile_script or ':log info "Billing SaaS: no package profiles to sync";'}
         :local billingHsFileCount [:len [/file find name~"hotspot"]];
         :do {{ /tool fetch keep-result=no url=("{snapshot_url}/hotspot-files-check?count=" . $billingHsFileCount) }} on-error={{ :log warning "Billing SaaS: hotspot file count report failed" }}
@@ -2712,6 +2763,8 @@ def router_provision_script(request, token):
         :put "Configuration completed successfully. No customer ports were moved; assign Hotspot or PPPoE ports from the dashboard.";
         """
     return HttpResponse(script, content_type="text/plain")
+
+
 @csrf_exempt
 @api_view(["GET"])
 def router_agent_poll(request, token):
@@ -2804,8 +2857,6 @@ def router_agent_poll(request, token):
         "mikrotik_last_command_delivered_at": delivered_at,
     })
     return HttpResponse("\n".join(lines) + "\n", content_type="text/plain")
-
-
 @csrf_exempt
 @api_view(["GET"])
 def router_agent_ack(request, token, command_id):
