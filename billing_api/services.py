@@ -1769,16 +1769,6 @@ def _build_port_command_script(interface_name, service_type, profile_name, porta
     if portal_url:
         hotspot_file_writes = routeros_hotspot_fetch_script(portal_url)
 
-    # --- Default PPPoE / Hotspot secret cleanup ---
-    # Remove any pre-existing /ppp secret entries that are NOT managed by us
-    ppp_secret_cleanup = (
-        f':foreach s in=[/ppp secret find] do={{ '
-        f'  :if ([/ppp secret get $s comment] != "billing-saas-managed") do={{ '
-        f'    :do {{ /ppp secret remove $s }} on-error={{}} '
-        f'  }} '
-        f'}}; '
-    )
-
     hotspot_setup = ""
     if portal_url:
         hotspot_setup = (
@@ -1823,8 +1813,7 @@ def _build_port_command_script(interface_name, service_type, profile_name, porta
         f'  :if ([:len $billingHs] > 0) do={{ /ip hotspot set $billingHs name="billing-hotspot-{interface_name}" profile="billing-saas-captive" disabled=no comment="billing-saas captive portal: {portal_comment}" }} else={{ /ip hotspot add name="billing-hotspot-{interface_name}" interface="{bridge_name}" profile="billing-saas-captive" disabled=no comment="billing-saas captive portal: {portal_comment}" }}; '
     )
 
-    # --- Default secret cleanup (remove factory defaults so RADIUS is the only auth path) ---
-    cleanup_block = ppp_secret_cleanup
+    cleanup_block = ':log info "Billing SaaS: preserving existing PPP secrets and Hotspot users"; '
 
     return (
         f'/interface bridge port remove [find interface="{interface_name}"]; '
