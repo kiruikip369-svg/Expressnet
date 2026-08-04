@@ -1125,8 +1125,28 @@ def create_hotspot_profile(tenant, name, speed, session_timeout=None):
 
 
 def package_service_type(package):
-    service_type = str((package or {}).get("service_type") or "").strip().lower()
-    return service_type if service_type in {"hotspot", "pppoe"} else "hotspot"
+    raw = str(
+        (package or {}).get("service_type")
+        or (package or {}).get("package_type")
+        or (package or {}).get("type")
+        or ""
+    ).strip().lower()
+    if raw in {"hotspot", "voucher", "wifi"}:
+        return "hotspot"
+    if raw in {"pppoe", "ppp", "broadband"}:
+        return "pppoe"
+
+    # Legacy packages sometimes missed service_type. Do not silently create
+    # PPPoE-looking packages as Hotspot User Profiles. Short hour-based
+    # packages are treated as hotspot; otherwise default to PPPoE.
+    duration_unit = str((package or {}).get("duration_unit") or "").strip().lower()
+    try:
+        duration_hours = float((package or {}).get("duration_hours") or 0)
+    except (TypeError, ValueError):
+        duration_hours = 0
+    if duration_unit == "hours" or (duration_hours and duration_hours < 24):
+        return "hotspot"
+    return "pppoe"
 
 
 def captive_portal_url(tenant, base_url=None):
