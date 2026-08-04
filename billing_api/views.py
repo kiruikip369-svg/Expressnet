@@ -1464,7 +1464,7 @@ def customer_add(request):
         return ok({"message": "Name, phone, username, password, and package are required"}, 400)
     if any(str(c.get("username", "")).lower() == str(data["username"]).lower() for c in list_children(f"tenants/{request.tenant['id']}/customers")):
         return ok({"message": "A customer with this username already exists"}, 409)
-    service_type = str(data.get("service_type") or "pppoe").strip().lower()
+    service_type = str(data.get("service_type") or "hotspot").strip().lower()
     if service_type not in {"pppoe", "hotspot"}:
         return ok({"message": "Customer service type must be PPPoE or Hotspot"}, 400)
     provision = data.get("provision_mikrotik", True)
@@ -1538,7 +1538,7 @@ def customer_provision(request, customer_id):
         return ok({"message": "Customer not found"}, 404)
     if not has_mikrotik_credentials(request.tenant) and not _router_is_agent_linked(request.tenant):
         return ok({"message": "Link a MikroTik router before provisioning customers"}, 400)
-    service_type = customer.get("service_type") or "pppoe"
+    service_type = customer.get("service_type") or "hotspot"
     pkg = find_child_by_field(f"tenants/{request.tenant['id']}/packages", "name", customer.get("package"))
     provisioning_status = "queued"
     provisioning_message = f"{service_type.upper()} access queued for MikroTik sync"
@@ -1912,9 +1912,9 @@ def router_delete(request):
 
 def _customer_secret_script(customer):
     """Generate an .rsc snippet that upserts a single customer into /ppp secret or /ip hotspot user."""
-    service_type = customer.get("service_type") or "pppoe"
+    service_type = customer.get("service_type") or "hotspot"
     if service_type not in {"pppoe", "hotspot"}:
-        service_type = "pppoe"
+        service_type = "hotspot"
     username = _rsc_escape(customer.get("username") or "")
     password = _rsc_escape(customer.get("password") or "")
     profile = _rsc_escape(customer.get("package") or customer.get("package_name") or "default")
@@ -2008,6 +2008,7 @@ def _package_profile_script(package):
             f':if ([:len [/ppp profile find name="{name}"]] = 0) do={{ :error "PPPoE profile missing after sync: {name}" }};'
         )
     return (
+        f':do {{ /ppp profile remove [find name="{name}" comment="billing-saas-package"] }} on-error={{}};'
         f':do {{ '
         f':if ([:len [/ip hotspot user profile find name="{name}"]] = 0) do={{'
         f' /ip hotspot user profile add name="{name}"{rate_limit_field}{session_timeout_field} }} '

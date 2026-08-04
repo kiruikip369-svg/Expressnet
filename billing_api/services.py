@@ -1121,7 +1121,19 @@ def create_ppp_profile(tenant, name, speed, session_timeout=None):
 
 
 def create_hotspot_profile(tenant, name, speed, session_timeout=None):
-    return upsert_router_profile(tenant, ("ip", "hotspot", "user", "profile"), name, speed, session_timeout)
+    result = upsert_router_profile(tenant, ("ip", "hotspot", "user", "profile"), name, speed, session_timeout)
+    if has_mikrotik_credentials(tenant):
+        api = router_connect(tenant)
+        try:
+            for item in api.path("ppp", "profile").select():
+                if item.get("name") == name and item.get("comment") == "billing-saas-package" and item.get(".id"):
+                    try:
+                        api.path("ppp", "profile").remove(item[".id"])
+                    except Exception:
+                        pass
+        finally:
+            api.close()
+    return result
 
 
 def package_service_type(package):
@@ -1136,9 +1148,8 @@ def package_service_type(package):
     if raw in {"pppoe", "ppp", "broadband"}:
         return "pppoe"
 
-    # Legacy packages sometimes missed service_type. Do not silently create
-    # PPPoE-looking packages as Hotspot User Profiles. Short hour-based
-    # packages are treated as hotspot; otherwise default to PPPoE.
+    # Legacy packages often missed service_type even though this product sells
+    # Hotspot vouchers by default. Only explicit PPP/PPPoE values go to /ppp.
     duration_unit = str((package or {}).get("duration_unit") or "").strip().lower()
     try:
         duration_hours = float((package or {}).get("duration_hours") or 0)
@@ -1146,7 +1157,7 @@ def package_service_type(package):
         duration_hours = 0
     if duration_unit == "hours" or (duration_hours and duration_hours < 24):
         return "hotspot"
-    return "pppoe"
+    return "hotspot"
 
 
 def captive_portal_url(tenant, base_url=None):
@@ -1381,7 +1392,12 @@ def routeros_hotspot_fetch_script(portal_url, log_prefix="Billing SaaS"):
         if skip_warning:
             src_url = f"{src_url}{'&' if '?' in src_url else '?'}{skip_warning}"
         src = _rsc_escape(src_url)
-        for target_name in (f"hotspot/{page}", f"flash/hotspot/{page}"):
+        for target_name in (
+            f"Expressnet-hotspot/{page}",
+            f"flash/Expressnet-hotspot/{page}",
+            f"hotspot/{page}",
+            f"flash/hotspot/{page}",
+        ):
             dst = _rsc_escape(target_name)
             # Retry-once with 3s delay — a flaky first connection silently
             # leaves the captive portal broken until the next full re-sync.
@@ -1400,6 +1416,13 @@ def routeros_hotspot_fetch_script(portal_url, log_prefix="Billing SaaS"):
 def ensure_hotspot_login_redirect(api, portal_url):
     fallback_redirect_html = hotspot_redirect_html(portal_url)
     files_to_push = {
+        "Expressnet-hotspot/login.html": expressnet_hotspot_file_html("login.html", portal_url) or hotspot_login_redirect_html(portal_url),
+        "Expressnet-hotspot/alogin.html": expressnet_hotspot_file_html("alogin.html", portal_url) or hotspot_alogin_redirect_html(portal_url),
+        "Expressnet-hotspot/redirect.html": expressnet_hotspot_file_html("redirect.html", portal_url) or fallback_redirect_html,
+        "Expressnet-hotspot/error.html": expressnet_hotspot_file_html("error.html", portal_url) or hotspot_error_redirect_html(portal_url),
+        "Expressnet-hotspot/status.html": expressnet_hotspot_file_html("status.html", portal_url) or fallback_redirect_html,
+        "Expressnet-hotspot/rlogin.html": expressnet_hotspot_file_html("rlogin.html", portal_url) or fallback_redirect_html,
+        "Expressnet-hotspot/radvert.html": expressnet_hotspot_file_html("radvert.html", portal_url) or fallback_redirect_html,
         "hotspot/login.html": expressnet_hotspot_file_html("login.html", portal_url) or hotspot_login_redirect_html(portal_url),
         "hotspot/alogin.html": expressnet_hotspot_file_html("alogin.html", portal_url) or hotspot_alogin_redirect_html(portal_url),
         "hotspot/redirect.html": expressnet_hotspot_file_html("redirect.html", portal_url) or fallback_redirect_html,
@@ -1720,11 +1743,35 @@ def configure_router_port(tenant, interface_name, service_type, profile_name="de
         # 1. Remove the interface from any existing bridge
         _remove_port_from_any_bridge(api, interface_name)
 
-        # 2. Shift the interface into the billing-saas managed bridge
+        # 2. Shift the interface into the Expressnet managed bridge
         managed_bridge = mikrotik_managed_bridge_name(tenant)
         existing_bridges = list(api.path("interface", "bridge").select())
         if not any(b.get("name") == managed_bridge for b in existing_bridges):
-            api.path("interface", "bridge").add(name=managed_bridge, comment="billing-saas managed bridge")
+            api.path("interface", "bridge").add(name=managed_bridge, comment="Created by Expressnet")
+        upsert_router_item(
+            api,
+            ("ip", "pool"),
+            {"name": "Expressnet-pool"},
+            {"name": "Expressnet-pool", "ranges": "172.31.0.2-172.31.255.254", "comment": "IP Pool created by Expressnet"},
+        )
+        upsert_router_item(
+            api,
+            ("ip", "address"),
+            {"interface": managed_bridge, "comment": "Added by Expressnet"},
+            {"address": "172.31.0.1/16", "interface": managed_bridge, "comment": "Added by Expressnet"},
+        )
+        upsert_router_item(
+            api,
+            ("ip", "dhcp-server"),
+            {"name": "Expressnet-dhcp"},
+            {"name": "Expressnet-dhcp", "interface": managed_bridge, "address-pool": "Expressnet-pool", "lease-time": "4h", "disabled": "no"},
+        )
+        upsert_router_item(
+            api,
+            ("ip", "dhcp-server", "network"),
+            {"address": "172.31.0.0/16"},
+            {"address": "172.31.0.0/16", "gateway": "172.31.0.1", "dns-server": "8.8.8.8,8.8.4.4"},
+        )
 
         # Add the target interface to our managed bridge
         api.path("interface", "bridge", "port").add(bridge=managed_bridge, interface=interface_name)
@@ -1734,16 +1781,17 @@ def configure_router_port(tenant, interface_name, service_type, profile_name="de
         if service_type == "hotspot":
             wireless_security_profile = _clear_wireless_password_for_hotspot(api, interface_name)
 
-        bridge_note = f"Interface '{interface_name}' successfully moved into billing-saas managed bridge '{managed_bridge}'."
+        bridge_note = f"Interface '{interface_name}' successfully moved into Expressnet managed bridge '{managed_bridge}'."
 
         if service_type == "pppoe":
             api.path("interface").update(**{".id": interface[".id"], "comment": f"billing-saas:{service_type}:profile={profile_name or 'default'}"})
             servers = list(api.path("interface", "pppoe-server", "server").select())
             existing = next((item for item in servers if item.get("interface") == bind_interface), None)
             fields = {
-                "service-name": f"billing-{interface_name}",
+                "service-name": "Expressnet-pppoe",
                 "interface": bind_interface,
-                "default-profile": profile_name or "default",
+                "default-profile": profile_name or "INTERNET",
+                "authentication": "pap",
                 "one-session-per-host": "yes",
                 "disabled": "no",
             }
@@ -1760,11 +1808,12 @@ def configure_router_port(tenant, interface_name, service_type, profile_name="de
         servers = list(api.path("ip", "hotspot").select())
         existing = next((item for item in servers if item.get("interface") == bind_interface), None)
         fields = {
-            "name": f"billing-hotspot-{interface_name}",
+            "name": "Expressnet-hotspot",
             "interface": bind_interface,
+            "address-pool": "Expressnet-pool",
             "profile": hotspot_profile,
             "disabled": "no",
-            "comment": f"billing-saas captive portal: {captive.get('portal_url') or ''}".strip(),
+            "comment": f"Expressnet captive portal: {captive.get('portal_url') or ''}".strip(),
         }
         if existing and existing.get(".id"):
             api.path("ip", "hotspot").update(**{".id": existing[".id"], **fields})
@@ -1830,14 +1879,18 @@ def _build_port_command_script(interface_name, service_type, profile_name, porta
         f'  :do {{ /interface wireless security-profiles add name="billing-saas-open" mode=none authentication-types="" wpa-pre-shared-key="" wpa2-pre-shared-key="" supplicant-identity="billing-saas" }} on-error={{ /interface wireless security-profiles set [find name="billing-saas-open"] mode=none authentication-types="" wpa-pre-shared-key="" wpa2-pre-shared-key="" supplicant-identity="billing-saas" }}; '
         f'  :do {{ /interface wireless set [find name="{interface_name}"] security-profile="billing-saas-open" disabled=no }} on-error={{}}; '
         f'  :local billingHs [/ip hotspot find interface="{bridge_name}"]; '
-        f'  :if ([:len $billingHs] > 0) do={{ /ip hotspot set $billingHs name="Expressnet-hotspot" profile="Expressnet-profile" disabled=no }} else={{ /ip hotspot add name="Expressnet-hotspot" interface="{bridge_name}" profile="Expressnet-profile" disabled=no }}; '
+        f'  :if ([:len $billingHs] > 0) do={{ /ip hotspot set $billingHs name="Expressnet-hotspot" address-pool=Expressnet-pool profile="Expressnet-profile" disabled=no }} else={{ /ip hotspot add name="Expressnet-hotspot" interface="{bridge_name}" address-pool=Expressnet-pool profile="Expressnet-profile" disabled=no }}; '
     )
 
     cleanup_block = ':log info "Billing SaaS: preserving existing PPP secrets and Hotspot users"; '
 
     return (
         f'/interface bridge port remove [find interface="{interface_name}"]; '
-        f':if ([:len [/interface bridge find name="{bridge_name}"]] = 0) do={{ /interface bridge add name="{bridge_name}" comment="billing-saas managed bridge" }}; '
+        f':if ([:len [/interface bridge find name="{bridge_name}"]] = 0) do={{ /interface bridge add name="{bridge_name}" comment="Created by Expressnet" }}; '
+        f':do {{ /ip pool add name=Expressnet-pool ranges=172.31.0.2-172.31.255.254 comment="IP Pool created by Expressnet" }} on-error={{ /ip pool set [find name=Expressnet-pool] ranges=172.31.0.2-172.31.255.254 comment="IP Pool created by Expressnet" }}; '
+        f':do {{ /ip address add address=172.31.0.1/16 interface="{bridge_name}" comment="Added by Expressnet" }} on-error={{ /ip address set [find interface="{bridge_name}" comment="Added by Expressnet"] address=172.31.0.1/16 interface="{bridge_name}" }}; '
+        f':do {{ /ip dhcp-server add name=Expressnet-dhcp interface="{bridge_name}" address-pool=Expressnet-pool lease-time=4h disabled=no }} on-error={{ /ip dhcp-server set [find name=Expressnet-dhcp] interface="{bridge_name}" address-pool=Expressnet-pool lease-time=4h disabled=no }}; '
+        f':do {{ /ip dhcp-server network add address=172.31.0.0/16 gateway=172.31.0.1 dns-server=8.8.8.8,8.8.4.4 }} on-error={{ /ip dhcp-server network set [find address=172.31.0.0/16] gateway=172.31.0.1 dns-server=8.8.8.8,8.8.4.4 }}; '
         f'/interface bridge port add bridge="{bridge_name}" interface="{interface_name}"; '
         f':do {{ /interface set [find name="{interface_name}"] comment="billing-saas:{service_type}:portal={portal_comment}" }} on-error={{ :log warning "Billing SaaS: failed to set interface comment" }}; '
         f'{cleanup_block}'
@@ -1850,7 +1903,7 @@ def _build_port_command_script(interface_name, service_type, profile_name, porta
 
 
 def upsert_customer_access(tenant, customer, disabled=False):
-    service_type = customer.get("service_type") or "pppoe"
+    service_type = customer.get("service_type") or "hotspot"
     if not has_mikrotik_credentials(tenant):
         return None
     api = router_connect(tenant)
