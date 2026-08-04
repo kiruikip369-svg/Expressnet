@@ -2463,6 +2463,16 @@ def router_provision_script(request, token):
         :do {{ /tool fetch keep-result=no url=("{callback_url}{callback_join}wg_public_key=" . $billingWgPub . "&wg_tunnel_ip={_rsc_escape(wg_router_api_ip)}&bridge={_rsc_escape(bridge_name)}") }} on-error={{ :log warning "Billing SaaS provisioning callback failed" }}"""
     if not vpn_peer_enabled:
         provisioning_callback_script = f':do {{ /tool fetch keep-result=no url=("{callback_url}{callback_join}bridge={_rsc_escape(bridge_name)}&mode=agent") }} on-error={{ :log warning "Billing SaaS provisioning callback failed" }}'
+    vpn_health_script = f"""
+        :log info "Billing SaaS Step 5: verifying VPN connectivity";
+        :local billingVpnPing 0;
+        :do {{ :set billingVpnPing [/ping {_rsc_escape(wg_server_tunnel_ip)} count=3 interval=1s] }} on-error={{ :log warning "Billing SaaS: VPN ping failed" }}
+        :if ($billingVpnPing = 0) do={{ :log warning "Billing SaaS: VPN server did not respond to ping; RADIUS may be unreachable until the tunnel is up" }} else={{ :log info ("Billing SaaS: VPN ping replies=" . $billingVpnPing) }}
+        :local billingPeerId [/interface wireguard peers find comment="billing-saas server peer"];
+        :if ([:len $billingPeerId] > 0) do={{ :log info ("Billing SaaS: WireGuard peer configured, last-handshake=" . [/interface wireguard peers get $billingPeerId last-handshake]) }} else={{ :log warning "Billing SaaS: WireGuard peer not found after setup" }}
+    """
+    if not vpn_peer_enabled:
+        vpn_health_script = ':log info "Billing SaaS Step 5: VPN health check skipped; local agent mode is active";'
     verification_script = """
         :log info ("Billing SaaS verify: /radius count=" . [:len [/radius find comment="billing-saas radius"]]);
         :if ([:len [/radius find comment="billing-saas radius"]] = 0) do={ :log error "Billing SaaS verify failed: /radius print has no billing-saas radius client"; :error "RADIUS client missing" }
@@ -2483,6 +2493,11 @@ def router_provision_script(request, token):
         :log info ("Billing SaaS verify: /ip hotspot host count=" . [:len [/ip hotspot host find]]);
         :log info ("Billing SaaS verify: /ip hotspot active count=" . [:len [/ip hotspot active find]]);
         """
+    radius_verify_script = (
+        ':if ([:len [/ip hotspot profile find name=billing-saas-captive use-radius=yes]] = 0) do={ :log error "Billing SaaS: hotspot profile use-radius=yes was not applied"; :error "Hotspot profile use-radius=yes was not applied" }'
+        if vpn_peer_enabled
+        else ':log info "Billing SaaS: local Hotspot profile does not use RADIUS because local agent mode is active";'
+    )
 
     try:
         ref(f"tenants/{tenant_id}").update({
@@ -2571,7 +2586,12 @@ def router_provision_script(request, token):
         }}
         """
 
-    script = f""":log info "Billing SaaS provisioning started";
+    pppoe_script = f"""
+        :log info "Billing SaaS Step 8: provisioning PPPoE service without mixing Hotspot profiles";
+        :do {{ /interface pppoe-server server add service-name="billing-default-pppoe" interface=$billingBridge default-profile=default one-session-per-host=yes disabled=no comment="billing-saas default pppoe server" }} on-error={{ /interface pppoe-server server set [find service-name="billing-default-pppoe"] interface=$billingBridge default-profile=default one-session-per-host=yes disabled=no comment="billing-saas default pppoe server" }}
+    """
+
+    script = f""":log info "Billing SaaS Step 1: provisioning token validated by Expressnet server";
         :local billingVer [/system resource get version];
         :local billingVerNum $billingVer;
         :local billingSpaceIdx [:find $billingVer " "];
@@ -2582,8 +2602,7 @@ def router_provision_script(request, token):
         :if ($billingMajor < 7) do={{
             :log warning ("Billing SaaS: RouterOS " . $billingVer . " detected; WireGuard VPN will be skipped if unsupported.");
         }}
-        {vpn_script}
-        :log info "Billing SaaS: ensuring managed LAN bridge and DHCP without deleting existing services";
+        :log info "Billing SaaS Step 2: creating bridge, DHCP, IP pool, firewall, and NAT";
         :local billingBridge "{_rsc_escape(bridge_name)}";
         :do {{ /interface bridge add name=$billingBridge comment="billing-saas managed bridge" }} on-error={{}}
         :do {{ /interface list member add list=LAN interface=$billingBridge comment="billing-saas captive LAN" }} on-error={{ /interface list member set [find interface=$billingBridge] list=LAN comment="billing-saas captive LAN" }}
@@ -2613,13 +2632,9 @@ def router_provision_script(request, token):
         :do {{ /ip dhcp-client add interface="{_rsc_escape(wan_interface)}" add-default-route=yes use-peer-dns=no disabled=no comment="billing-saas wan" }} on-error={{ /ip dhcp-client set [find interface="{_rsc_escape(wan_interface)}"] add-default-route=yes use-peer-dns=no disabled=no comment="billing-saas wan" }}
         :do {{ /ip dns set servers=1.1.1.1,8.8.8.8 allow-remote-requests=yes }} on-error={{}}
         :delay 3s;
-        :log info "Billing SaaS: ensuring default PPPoE server on managed bridge without touching other PPPoE services";
-        :do {{ /interface pppoe-server server add service-name="billing-default-pppoe" interface=$billingBridge default-profile=default one-session-per-host=yes disabled=no comment="billing-saas default pppoe server" }} on-error={{ /interface pppoe-server server set [find service-name="billing-default-pppoe"] interface=$billingBridge default-profile=default one-session-per-host=yes disabled=no comment="billing-saas default pppoe server" }}
-        {radius_script}
         :log info "Billing SaaS: preserving existing PPP secrets and Hotspot users";
-        :log info "Billing SaaS: configuring captive portal (empty page until a port is assigned)";
+        :log info "Billing SaaS Step 3: creating Hotspot and captive portal";
         :do {{ /ip hotspot profile add name=billing-saas-captive hotspot-address={_rsc_escape(lan_gateway)} dns-name="" login-by=http-chap,http-pap use-radius={hotspot_radius_flags} radius-accounting={hotspot_radius_flags} html-directory=hotspot }} on-error={{ /ip hotspot profile set [find name=billing-saas-captive] hotspot-address={_rsc_escape(lan_gateway)} dns-name="" login-by=http-chap,http-pap use-radius={hotspot_radius_flags} radius-accounting={hotspot_radius_flags} html-directory=hotspot }}
-        :if ([:len [/ip hotspot profile find name=billing-saas-captive use-radius=yes]] = 0) do={{ :log error "Billing SaaS: hotspot profile use-radius=yes was not applied"; :error "Hotspot profile use-radius=yes was not applied" }}
         :do {{ /interface wireless security-profiles add name="billing-saas-open" mode=none authentication-types="" wpa-pre-shared-key="" wpa2-pre-shared-key="" supplicant-identity="billing-saas" }} on-error={{ /interface wireless security-profiles set [find name="billing-saas-open"] mode=none authentication-types="" wpa-pre-shared-key="" wpa2-pre-shared-key="" supplicant-identity="billing-saas" }}
         :do {{ /interface wireless set [find name="wlan1"] security-profile="billing-saas-open" disabled=no }} on-error={{ :log warning "Billing SaaS: wlan1 open hotspot profile failed" }}
         :do {{ /ip hotspot user profile add name=billing-saas-unpaid shared-users=1 keepalive-timeout=2m status-autorefresh=1m }} on-error={{}}
@@ -2638,10 +2653,21 @@ def router_provision_script(request, token):
             :do {{ /ip hotspot walled-garden ip add action=accept dst-address=$billingPortalIp protocol=tcp dst-port=443 comment="billing-saas captive portal access" }} on-error={{}}
         }}
         {hotspot_file_script}
-        :log info "Billing SaaS: syncing package profiles";
+        :if ([:len [/ip hotspot find name=billing-saas-hotspot disabled=no]] = 0) do={{ :log error "Billing SaaS: Hotspot is not running after Step 3"; :error "Hotspot is not running after Step 3" }}
+        :log info "Billing SaaS Step 4: configuring WireGuard and router tunnel keys";
+        {vpn_script}
+        {vpn_health_script}
+        :log info "Billing SaaS Step 6: configuring RADIUS client";
+        {radius_script}
+        :log info "Billing SaaS Step 7: enabling and verifying Hotspot RADIUS authentication";
+        :do {{ /ip hotspot profile set [find name=billing-saas-captive] use-radius={hotspot_radius_flags} radius-accounting={hotspot_radius_flags} }} on-error={{ :log warning "Billing SaaS: hotspot radius flag update failed" }}
+        {radius_verify_script}
+        {pppoe_script}
+        :log info "Billing SaaS Step 8: syncing package profiles by service type";
         {package_profile_script or ':log info "Billing SaaS: no package profiles to sync";'}
         :local billingHsFileCount [:len [/file find name~"hotspot"]];
         :do {{ /tool fetch keep-result=no url=("{snapshot_url}/hotspot-files-check?count=" . $billingHsFileCount) }} on-error={{ :log warning "Billing SaaS: hotspot file count report failed" }}
+        :log info "Billing SaaS Step 9: running health checks and returning provisioning report";
         {interface_report_loop}
         {profile_and_server_report_loop}
         {snapshot_script}
