@@ -2870,6 +2870,7 @@ def router_agent_poll(request, token):
         "mikrotik_last_command_delivered_at": delivered_at,
     })
     return HttpResponse("\n".join(lines) + "\n", content_type="text/plain")
+
 @csrf_exempt
 @api_view(["GET"])
 def router_agent_ack(request, token, command_id):
