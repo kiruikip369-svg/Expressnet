@@ -1529,8 +1529,8 @@ def ensure_hotspot_captive_portal(tenant, base_url=None):
                 "hotspot-address": "192.168.88.1",
                 "dns-name": "",
                 "login-by": "http-pap,http-chap",
-                "use-radius": "no",
-                "radius-accounting": "no",
+                "use-radius": "yes",
+                "radius-accounting": "yes",
                 "html-directory": "hotspot",
                 "comment": f"billing-saas captive portal: {portal_url}",
             },
@@ -1791,8 +1791,8 @@ def _build_port_command_script(interface_name, service_type, profile_name, porta
             f':do {{ /ip firewall filter add chain=input action=accept in-interface="{_rsc_escape(bridge_name)}" protocol=tcp dst-port=53 place-before=[find comment="defconf: drop all not coming from LAN"] comment="billing-saas allow hotspot dns" }} on-error={{ /ip firewall filter add chain=input action=accept in-interface="{_rsc_escape(bridge_name)}" protocol=tcp dst-port=53 comment="billing-saas allow hotspot dns" }}; '
             f':do {{ /ip firewall filter add chain=input action=accept in-interface="{_rsc_escape(bridge_name)}" protocol=udp dst-port=67,68 place-before=[find comment="defconf: drop all not coming from LAN"] comment="billing-saas allow hotspot dhcp" }} on-error={{ /ip firewall filter add chain=input action=accept in-interface="{_rsc_escape(bridge_name)}" protocol=udp dst-port=67,68 comment="billing-saas allow hotspot dhcp" }}; '
             f':do {{ /ip firewall filter add chain=input action=accept in-interface="{_rsc_escape(bridge_name)}" protocol=tcp dst-port=64872-64875 place-before=[find comment="defconf: drop all not coming from LAN"] comment="billing-saas allow hotspot web-proxy" }} on-error={{ /ip firewall filter add chain=input action=accept in-interface="{_rsc_escape(bridge_name)}" protocol=tcp dst-port=64872-64875 comment="billing-saas allow hotspot web-proxy" }}; '
-            f':do {{ /ip hotspot profile add name="billing-saas-captive" hotspot-address=192.168.88.1 dns-name="" login-by=http-pap,http-chap use-radius=no radius-accounting=no html-directory=hotspot comment="billing-saas captive portal: {portal_comment}" }} '
-            f'on-error={{ /ip hotspot profile set [find name="billing-saas-captive"] hotspot-address=192.168.88.1 dns-name="" login-by=http-pap,http-chap use-radius=no radius-accounting=no html-directory=hotspot comment="billing-saas captive portal: {portal_comment}" }}; '
+            f':do {{ /ip hotspot profile add name="billing-saas-captive" hotspot-address=192.168.88.1 dns-name="" login-by=http-pap,http-chap use-radius=yes radius-accounting=yes html-directory=hotspot comment="billing-saas captive portal: {portal_comment}" }} '
+            f'on-error={{ /ip hotspot profile set [find name="billing-saas-captive"] hotspot-address=192.168.88.1 dns-name="" login-by=http-pap,http-chap use-radius=yes radius-accounting=yes html-directory=hotspot comment="billing-saas captive portal: {portal_comment}" }}; '
             + "".join(
                 f':do {{ /ip hotspot walled-garden add action=allow dst-host="{_rsc_escape(h)}" comment="billing-saas captive portal access" }} on-error={{ :log warning "Billing SaaS: walled-garden add failed" }}; '
                 for h in walled_garden_hosts(tenant, portal_host)

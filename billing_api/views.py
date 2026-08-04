@@ -897,7 +897,51 @@ def captive_portal_page(request, tenant_id):
         else:
             package_html = "<div class='alert'>No packages are configured yet. Please contact the provider.</div>"
 
-    voucher_html = f"""
+    link_login = str(request.GET.get("link_login") or request.GET.get("link-login") or "").strip()
+    dst_value = str(request.GET.get("dst") or request.GET.get("link-orig") or "").strip()
+    if link_login:
+        escaped_link_login = html.escape(link_login, quote=True)
+        escaped_dst = html.escape(dst_value, quote=True)
+        voucher_html = f"""
+      <div class="card">
+        <strong>Use a voucher</strong>
+        <p class="muted">Enter the voucher code provided by your provider.</p>
+        <form id="voucher-radius-login" method="post" action="{escaped_link_login}">
+          <input id="voucher-code" required placeholder="Voucher code" autocomplete="one-time-code">
+          <input id="voucher-username" name="username" type="hidden">
+          <input id="voucher-password" name="password" type="hidden">
+          <input name="dst" type="hidden" value="{escaped_dst}">
+          <input name="popup" type="hidden" value="false">
+          <button type="submit">Login with voucher</button>
+        </form>
+        <p class="muted">Already bought a package? Sign in with the username and password sent to you.</p>
+        <form method="post" action="{escaped_link_login}">
+          <input name="dst" type="hidden" value="{escaped_dst}">
+          <input name="popup" type="hidden" value="false">
+          <div style="display:flex;flex-direction;row; align-items:center;justify-content:center;justify-content:space-around;">
+          <input name="username" required placeholder="Username">
+          <input name="password" required type="password" placeholder="Password">
+          </div>
+          <button type="submit">Sign in</button>
+        </form>
+        <script>
+        (function(){{
+          var form = document.getElementById('voucher-radius-login');
+          var code = document.getElementById('voucher-code');
+          var username = document.getElementById('voucher-username');
+          var password = document.getElementById('voucher-password');
+          if (form && code && username && password) {{
+            form.addEventListener('submit', function() {{
+              username.value = code.value;
+              password.value = code.value;
+            }});
+          }}
+        }})();
+        </script>
+      </div>
+    """
+    else:
+        voucher_html = f"""
       <div class="card">
         <strong>Use a voucher</strong>
         <p class="muted">Enter the voucher code provided by your provider.</p>
@@ -2430,15 +2474,15 @@ def router_provision_script(request, token):
         :log info "Billing SaaS: creating default PPPoE server on managed bridge";
         :do {{ /interface pppoe-server server add service-name="billing-default-pppoe" interface=$billingBridge default-profile=default one-session-per-host=yes disabled=no comment="billing-saas default pppoe server" }} on-error={{ :log warning "Billing SaaS: PPPoE server creation failed" }}
         :log info "Billing SaaS: configuring RADIUS for PPPoE";
-        :do {{ /radius add service=ppp address={_rsc_escape(wg_server_tunnel_ip)} secret="{_rsc_escape(radius_shared_secret)}" protocol=udp authentication-port=1812 accounting-port=1813 src-address={_rsc_escape(wg_router_api_ip)} comment="billing-saas radius" }} on-error={{ /radius set [find address={_rsc_escape(wg_server_tunnel_ip)}] service=ppp protocol=udp authentication-port=1812 accounting-port=1813 secret="{_rsc_escape(radius_shared_secret)}" src-address={_rsc_escape(wg_router_api_ip)} comment="billing-saas radius" }}
+        :do {{ /radius add service=ppp,hotspot address={_rsc_escape(wg_server_tunnel_ip)} secret="{_rsc_escape(radius_shared_secret)}" protocol=udp authentication-port=1812 accounting-port=1813 src-address={_rsc_escape(wg_router_api_ip)} comment="billing-saas radius" }} on-error={{ /radius set [find address={_rsc_escape(wg_server_tunnel_ip)}] service=ppp,hotspot protocol=udp authentication-port=1812 accounting-port=1813 secret="{_rsc_escape(radius_shared_secret)}" src-address={_rsc_escape(wg_router_api_ip)} comment="billing-saas radius" }}
         :do {{ /radius incoming set accept=yes port=3799 }} on-error={{ :log warning "Billing SaaS: RADIUS incoming (CoA) setup failed" }}
         /ppp aaa set use-radius=yes accounting=yes interim-update=5m;
-        :do {{ /ip hotspot profile set [find name="billing-saas-captive"] use-radius=no radius-accounting=no }} on-error={{ :log warning "Billing SaaS: hotspot local auth setup failed" }}
+        :do {{ /ip hotspot profile set [find name="billing-saas-captive"] use-radius=yes radius-accounting=yes }} on-error={{ :log warning "Billing SaaS: hotspot RADIUS setup failed" }}
         :do {{ /ip firewall filter remove [find comment="billing-saas allow radius"] }} on-error={{}}
         :do {{ /ip firewall filter add chain=input in-interface=wg-saas protocol=udp dst-port=1812,1813,3799 action=accept comment="billing-saas allow radius" }} on-error={{ :log warning "Billing SaaS: RADIUS firewall rule failed" }}
         :foreach s in=[/ppp secret find] do={{ :if ([/ppp secret get $s comment] != "billing-saas-managed") do={{ :do {{ /ppp secret remove $s }} on-error={{}} }} }}
         :log info "Billing SaaS: configuring captive portal (empty page until a port is assigned)";
-        :do {{ /ip hotspot profile add name=billing-saas-captive hotspot-address={_rsc_escape(lan_gateway)} dns-name="" login-by=http-chap,http-pap use-radius=no radius-accounting=no html-directory=hotspot }} on-error={{ /ip hotspot profile set [find name=billing-saas-captive] hotspot-address={_rsc_escape(lan_gateway)} dns-name="" login-by=http-chap,http-pap use-radius=no radius-accounting=no html-directory=hotspot }}
+        :do {{ /ip hotspot profile add name=billing-saas-captive hotspot-address={_rsc_escape(lan_gateway)} dns-name="" login-by=http-chap,http-pap use-radius=yes radius-accounting=yes html-directory=hotspot }} on-error={{ /ip hotspot profile set [find name=billing-saas-captive] hotspot-address={_rsc_escape(lan_gateway)} dns-name="" login-by=http-chap,http-pap use-radius=yes radius-accounting=yes html-directory=hotspot }}
         :do {{ /interface wireless security-profiles add name="billing-saas-open" mode=none authentication-types="" wpa-pre-shared-key="" wpa2-pre-shared-key="" supplicant-identity="billing-saas" }} on-error={{ /interface wireless security-profiles set [find name="billing-saas-open"] mode=none authentication-types="" wpa-pre-shared-key="" wpa2-pre-shared-key="" supplicant-identity="billing-saas" }}
         :do {{ /interface wireless set [find name="wlan1"] security-profile="billing-saas-open" disabled=no }} on-error={{ :log warning "Billing SaaS: wlan1 open hotspot profile failed" }}
         :do {{ /ip hotspot user profile add name=billing-saas-unpaid shared-users=1 keepalive-timeout=2m status-autorefresh=1m }} on-error={{}}
