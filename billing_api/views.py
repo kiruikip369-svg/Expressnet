@@ -2575,7 +2575,7 @@ def router_provision_script(request, token):
         :log info ("Expressnet verify: /radius count=" . [:len [/radius find comment="Expressnet radius"]]);
         :if ([:len [/radius find comment="Expressnet radius"]] = 0) do={ :log error "Expressnet verify failed: /radius print has no Expressnet radius client"; :error "RADIUS client missing" }
         :log info ("Expressnet verify: hotspot profile use-radius=" . [/ip hotspot profile get [find name=Expressnet-profile] use-radius]);
-        :if ([/ip hotspot profile get [find name=Expressnet-profile] use-radius] != "yes") do={ :log error "Expressnet verify failed: /ip hotspot profile use-radius is not yes"; :error "Hotspot profile use-radius is not yes" }
+        :if ([/ip hotspot profile get [find name=Expressnet-profile] use-radius] != "yes") do={ :log warning "Expressnet verify warning: /ip hotspot profile use-radius is not yes; continuing with local synced Hotspot users until RADIUS is confirmed" }
         :log info ("Billing SaaS verify: /ip hotspot host count=" . [:len [/ip hotspot host find]]);
         :log info ("Billing SaaS verify: /ip hotspot active count=" . [:len [/ip hotspot active find]]);
         :log info ("Billing SaaS verify: PPP profiles=" . [:len [/ppp profile find]] . " Hotspot user profiles=" . [:len [/ip hotspot user profile find]]);
