@@ -736,7 +736,7 @@ def _router_connection_status(tenant, live=False):
     return "offline"
 
 
-def _router_login_form_html(username, password, router_ip="", link_login="", dst=""):
+def _router_login_form_html(username, password, router_ip="", link_login="", dst="", delay_ms=800):
     router_ip_value = str(router_ip or "").strip()
     login_action_value = str(link_login or "").strip() or (f"http://{router_ip_value}/login" if router_ip_value else "")
     if not login_action_value:
@@ -745,14 +745,34 @@ def _router_login_form_html(username, password, router_ip="", link_login="", dst
     password_value = html.escape(str(password or ""), quote=True)
     action_value = html.escape(login_action_value, quote=True)
     dst_value = html.escape(str(dst or "http://connectivitycheck.gstatic.com/generate_204"), quote=True)
+    try:
+        delay_ms = max(0, int(delay_ms))
+    except (TypeError, ValueError):
+        delay_ms = 800
     return (
         f"<form id='login' method='post' action='{action_value}'>"
         f"<input type='hidden' name='username' value='{username_value}'>"
         f"<input type='hidden' name='password' value='{password_value}'>"
         f"<input type='hidden' name='dst' value='{dst_value}'>"
         "</form>"
-        "<script>document.getElementById('login').submit();</script>"
+        f"<script>setTimeout(function(){{document.getElementById('login').submit();}}, {delay_ms});</script>"
         "<noscript><button form='login' type='submit'>Connect now</button></noscript>"
+    )
+
+
+def _is_captive_form_request(request, data=None):
+    data = data or {}
+    content_type = str(request.META.get("CONTENT_TYPE") or "").lower()
+    return (
+        request.method.upper() == "POST"
+        and (
+            "application/x-www-form-urlencoded" in content_type
+            or "multipart/form-data" in content_type
+            or data.get("link_login")
+            or data.get("link-login")
+            or data.get("router_ip")
+            or data.get("ip")
+        )
     )
 
 
@@ -1288,6 +1308,7 @@ def public_voucher_login(request, tenant_id):
         return ok({"message": "Invalid, inactive, or expired hotspot credentials"}, 401)
 
     access_payload["duration_seconds"] = int(package_duration_delta(package).total_seconds()) if package else None
+    router_status = "radius_ready" if tenant.get("radius_enabled") else "pending"
     if tenant.get("radius_enabled"):
         try:
             from .radius_provisioning import sync_radius_customer, upsert_pg_customer
@@ -1306,13 +1327,14 @@ def public_voucher_login(request, tenant_id):
         except Exception as exc:
             logger.warning("Captive RADIUS sync failed tenant=%s kind=%s credential=%s error=%s", tenant_id, credential_kind, credential_label, exc, exc_info=True)
             return ok({"message": "Credentials were accepted, but authentication could not be prepared. Please contact support."}, 503)
-    elif has_mikrotik_credentials(tenant):
+    if has_mikrotik_credentials(tenant):
         try:
             profile_name = str((package or {}).get("name") or access_payload.get("package") or "").strip()
             if profile_name:
                 create_hotspot_profile({"id": tenant_id, **tenant}, profile_name, (package or {}).get("speed"), access_payload.get("duration_seconds"))
             upsert_customer_access({"id": tenant_id, **tenant}, access_payload, disabled=False)
             set_customer_enabled({"id": tenant_id, **tenant}, access_payload.get("username"), "hotspot", True)
+            router_status = "active"
         except Exception as exc:
             if "text/html" in str(request.headers.get("Accept") or "") and not request.headers.get("X-Requested-With"):
                 return _html_page("Login unavailable", f"<main><div class='alert'>Credentials were accepted, but router access could not be prepared: {html.escape(str(exc))}</div><p><a href='/api/captive/{html.escape(str(tenant_id))}'>Back to portal</a></p></main>", 503)
@@ -1322,6 +1344,7 @@ def public_voucher_login(request, tenant_id):
         if script:
             try:
                 _queue_router_command_for_tenant(tenant_id, {"type": "sync_hotspot_login", "script": script}, tenant)
+                router_status = "queued"
                 if voucher and voucher.get("id"):
                     ref(f"tenants/{tenant_id}/vouchers/{voucher['id']}").update({"router_status": "queued", "router_error": None})
             except Exception as exc:
@@ -1335,7 +1358,7 @@ def public_voucher_login(request, tenant_id):
         "dst": data.get("dst") or data.get("link-orig") or "http://connectivitycheck.gstatic.com/generate_204",
         "package_name": access_payload.get("package"),
         "credential_type": credential_kind,
-        "router_status": (voucher or {}).get("router_status"),
+        "router_status": router_status,
     }
     # Captive requests are browser form posts from MikroTik. Return a page
     # that submits the actual credentials to the router, rather than JSON.
@@ -1343,10 +1366,13 @@ def public_voucher_login(request, tenant_id):
     # Accept: */*. Do not return JSON for that captive-browser request.
     accept_header = str(request.headers.get("Accept") or "")
     wants_html = (
-        not request.headers.get("X-Requested-With")
-        and (
-            "text/html" in accept_header
-            or "application/json" not in accept_header
+        _is_captive_form_request(request, data)
+        or (
+            not request.headers.get("X-Requested-With")
+            and (
+                "text/html" in accept_header
+                or "application/json" not in accept_header
+            )
         )
     )
     if wants_html:
@@ -1364,6 +1390,7 @@ def public_voucher_login(request, tenant_id):
             router_ip=result.get("router_ip"),
             link_login=result.get("link_login"),
             dst=result.get("dst"),
+            delay_ms=12000 if result.get("router_status") == "queued" else 800,
         )
         if not login_form:
             return _html_page("Voucher accepted", "<main><div class='card'>Voucher accepted. Please open the router login page to connect.</div></main>")
@@ -2565,7 +2592,7 @@ def router_provision_script(request, token):
         :log info ("Billing SaaS verify: /ip hotspot active count=" . [:len [/ip hotspot active find]]);
         """
     radius_verify_script = (
-        ':if ([:len [/ip hotspot profile find name=Expressnet-profile use-radius=yes]] = 0) do={ :log error "Expressnet: hotspot profile use-radius=yes was not applied"; :error "Hotspot profile use-radius=yes was not applied" }'
+        ':if ([:len [/ip hotspot profile find name=Expressnet-profile use-radius=yes]] = 0) do={ :log warning "Expressnet: hotspot profile use-radius=yes was not confirmed; local synced users may be used until RADIUS is reachable" } else={ :log info "Expressnet: hotspot profile use-radius=yes confirmed" }'
         if radius_enabled_for_router
         else ':log info "Billing SaaS: local Hotspot profile does not use RADIUS because local agent mode is active";'
     )
@@ -2741,6 +2768,8 @@ def router_provision_script(request, token):
         :do {{ /ip hotspot profile add name={hotspot_profile_name} hotspot-address={_rsc_escape(lan_gateway)} dns-name="{_rsc_escape(hotspot_dns_name)}" login-by=cookie,http-pap,trial,mac-cookie use-radius={hotspot_radius_flags} radius-interim-update=10m html-directory=Expressnet-hotspot }} on-error={{ /ip hotspot profile set [find name={hotspot_profile_name}] hotspot-address={_rsc_escape(lan_gateway)} dns-name="{_rsc_escape(hotspot_dns_name)}" login-by=cookie,http-pap,trial,mac-cookie use-radius={hotspot_radius_flags} radius-interim-update=10m html-directory=Expressnet-hotspot }}
         :do {{ /interface wireless security-profiles add name="billing-saas-open" mode=none authentication-types="" wpa-pre-shared-key="" wpa2-pre-shared-key="" supplicant-identity="billing-saas" }} on-error={{ /interface wireless security-profiles set [find name="billing-saas-open"] mode=none authentication-types="" wpa-pre-shared-key="" wpa2-pre-shared-key="" supplicant-identity="billing-saas" }}
         :do {{ /interface wireless set [find name="wlan1"] security-profile="billing-saas-open" disabled=no }} on-error={{ :log warning "Billing SaaS: wlan1 open hotspot profile failed" }}
+        :do {{ /interface bridge port remove [find interface="wlan1"] }} on-error={{}}
+        :do {{ /interface bridge port add bridge=$billingBridge interface="wlan1" comment="Expressnet hotspot wlan1" }} on-error={{ :do {{ /interface bridge port set [find interface="wlan1"] bridge=$billingBridge disabled=no comment="Expressnet hotspot wlan1" }} on-error={{ :log warning "Billing SaaS: wlan1 bridge assignment failed" }} }}
         :do {{ /ip hotspot user profile set [find default=yes] idle-timeout=2h shared-users=2 }} on-error={{}}
         :do {{ /ip hotspot add name={hotspot_server_name} interface=$billingBridge address-pool={hotspot_pool_name} profile={hotspot_profile_name} disabled=no }} on-error={{ /ip hotspot set [find name={hotspot_server_name}] interface=$billingBridge address-pool={hotspot_pool_name} profile={hotspot_profile_name} disabled=no }}
         :do {{ /ip hotspot set [find name={hotspot_server_name}] disabled=no }} on-error={{}}
@@ -2759,7 +2788,7 @@ def router_provision_script(request, token):
         :log info "Billing SaaS Step 6: configuring RADIUS client";
         {radius_script}
         :log info "Billing SaaS Step 7: enabling and verifying Hotspot RADIUS authentication";
-        :do {{ /ip hotspot profile set [find name={hotspot_profile_name}] use-radius={hotspot_radius_flags} }} on-error={{ :log warning "Expressnet: hotspot radius flag update failed" }}
+        :foreach hp in=[/ip hotspot profile find name={hotspot_profile_name}] do={{ :do {{ /ip hotspot profile set $hp use-radius={hotspot_radius_flags} radius-accounting={hotspot_radius_flags} }} on-error={{ :log warning "Expressnet: hotspot radius flag update failed" }} }}
         {radius_verify_script}
         {pppoe_script}
         :log info "Billing SaaS Step 7b: locking down management plane";
@@ -2775,7 +2804,7 @@ def router_provision_script(request, token):
         {verification_script}
         {provisioning_callback_script}
         :do {{ /system scheduler remove [find name="billing-saas-agent"] }} on-error={{}}
-        /system scheduler add name="billing-saas-agent" interval=30s on-event=":do {{ /file remove [find name=\\"billing-saas-cmd.rsc\\"] }} on-error={{}}; :do {{ /tool fetch url=\\"{agent_poll_url}\\" dst-path=billing-saas-cmd.rsc }} on-error={{ :log warning \\"Billing SaaS agent: command fetch failed\\" }}; :if ([:len [/file find name=\\"billing-saas-cmd.rsc\\"]] > 0) do={{ :do {{ /import billing-saas-cmd.rsc }} on-error={{ :log warning \\"Billing SaaS agent: command import failed\\" }} }};"
+        /system scheduler add name="billing-saas-agent" interval=10s on-event=":do {{ /file remove [find name=\\"billing-saas-cmd.rsc\\"] }} on-error={{}}; :do {{ /tool fetch url=\\"{agent_poll_url}\\" dst-path=billing-saas-cmd.rsc }} on-error={{ :log warning \\"Billing SaaS agent: command fetch failed\\" }}; :if ([:len [/file find name=\\"billing-saas-cmd.rsc\\"]] > 0) do={{ :do {{ /import billing-saas-cmd.rsc }} on-error={{ :log warning \\"Billing SaaS agent: command import failed\\" }} }};"
         :log info "Billing SaaS provisioning complete. No customer ports were moved; assign Hotspot or PPPoE ports from the dashboard.";
         :put "Configuration completed successfully. No customer ports were moved; assign Hotspot or PPPoE ports from the dashboard.";
         """
