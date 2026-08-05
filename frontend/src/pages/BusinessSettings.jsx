@@ -585,6 +585,7 @@ export default function BusinessSettings() {
           <>
             <SettingsShell title="Appearance" description="Configure your system appearance settings.">
               <Field label="System Logo">
+
                 <label className="theme-card-muted flex h-20 cursor-pointer items-center justify-center rounded-lg border text-xs">
                   <ImagePlus size={16} className="mr-2" />
                   {logoUploading ? 'Uploading...' : <>Drag & Drop your files or <span className="theme-text ml-1 font-semibold">Browse</span></>}
@@ -627,7 +628,7 @@ export default function BusinessSettings() {
                         type="button"
                         className={`h-10 rounded-md border text-xs font-semibold transition ${settings.themeMode === mode ? 'border-[var(--dashboard-color)] bg-[var(--dashboard-color)] text-white' : 'theme-card border-[var(--app-border)] hover:bg-[var(--app-panel-muted)]'}`}
                         onClick={() => setSettings((current) => ({ ...current, themeMode: mode, darkMode: mode === 'dark' }))}
-                      >
+                      >                                                                                                                             
                         {label}
                       </button>
                     ))}

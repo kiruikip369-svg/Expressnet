@@ -1145,7 +1145,7 @@ def package_service_type(package):
     ).strip().lower()
     if raw in {"hotspot", "voucher", "wifi"}:
         return "hotspot"
-    if raw in {"pppoe", "ppp", "broadband"}:
+    if raw in {"pppoe", "ppoe", "ppp", "broadband"}:
         return "pppoe"
 
     # Legacy packages often missed service_type even though this product sells

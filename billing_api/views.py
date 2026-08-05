@@ -237,7 +237,7 @@ def package_duration_delta(package):
 
 
 def normalized_package_payload(data):
-    service_type = str((data or {}).get("service_type") or "hotspot").strip().lower()
+    service_type = package_service_type(data or {})
     if service_type not in {"hotspot", "pppoe"}:
         service_type = "hotspot"
     duration_unit = "hours" if str((data or {}).get("duration_unit") or "").lower().startswith("hour") else "days"
@@ -900,44 +900,24 @@ def captive_portal_page(request, tenant_id):
     link_login = str(request.GET.get("link_login") or request.GET.get("link-login") or "").strip()
     dst_value = str(request.GET.get("dst") or request.GET.get("link-orig") or "").strip()
     if link_login:
-        escaped_link_login = html.escape(link_login, quote=True)
-        escaped_dst = html.escape(dst_value, quote=True)
         voucher_html = f"""
       <div class="card">
         <strong>Use a voucher</strong>
         <p class="muted">Enter the voucher code provided by your provider.</p>
-        <form id="voucher-radius-login" method="post" action="{escaped_link_login}">
-          <input id="voucher-code" required placeholder="Voucher code" autocomplete="one-time-code">
-          <input id="voucher-username" name="username" type="hidden">
-          <input id="voucher-password" name="password" type="hidden">
-          <input name="dst" type="hidden" value="{escaped_dst}">
-          <input name="popup" type="hidden" value="false">
+        <form method="post" action="/api/public/{html.escape(str(tenant_id))}/voucher-login">
+          {hidden}
+          <input name="code" required placeholder="Voucher code" autocomplete="one-time-code">
           <button type="submit">Login with voucher</button>
         </form>
         <p class="muted">Already bought a package? Sign in with the username and password sent to you.</p>
-        <form method="post" action="{escaped_link_login}">
-          <input name="dst" type="hidden" value="{escaped_dst}">
-          <input name="popup" type="hidden" value="false">
+        <form method="post" action="/api/public/{html.escape(str(tenant_id))}/voucher-login">
+          {hidden}
           <div style="display:flex;flex-direction;row; align-items:center;justify-content:center;justify-content:space-around;">
           <input name="username" required placeholder="Username">
           <input name="password" required type="password" placeholder="Password">
           </div>
           <button type="submit">Sign in</button>
         </form>
-        <script>
-        (function(){{
-          var form = document.getElementById('voucher-radius-login');
-          var code = document.getElementById('voucher-code');
-          var username = document.getElementById('voucher-username');
-          var password = document.getElementById('voucher-password');
-          if (form && code && username && password) {{
-            form.addEventListener('submit', function() {{
-              username.value = code.value;
-              password.value = code.value;
-            }});
-          }}
-        }})();
-        </script>
       </div>
     """
     else:
@@ -1247,27 +1227,67 @@ def public_voucher_login(request, tenant_id):
     password = str(data.get("password") or "").strip()
     if not code and (not username or not password):
         return ok({"message": "Voucher code is required"}, 400)
+    tenant = ref(f"tenants/{tenant_id}").get() or {}
     vouchers = list_children(f"tenants/{tenant_id}/vouchers")
     if code:
         voucher = next((item for item in vouchers if str(item.get("code") or "").lower() == code.lower()), None)
     else:
         voucher = next((item for item in vouchers if str(item.get("username") or "").lower() == username.lower() and str(item.get("password") or "") == password), None)
-    if not voucher or voucher.get("status") != "active":
-        logger.info("Voucher login rejected tenant=%s code=%s username=%s reason=invalid_or_inactive", tenant_id, code, username)
-        return ok({"message": "Invalid or inactive voucher credentials"}, 401)
-    tenant = ref(f"tenants/{tenant_id}").get() or {}
-    package = ref(f"tenants/{tenant_id}/packages/{voucher.get('package_id')}").get() if voucher.get("package_id") else None
-    access_payload = {
-        "name": voucher.get("username"),
-        "phone": data.get("phone") or "",
-        "username": voucher.get("username"),
-        "password": voucher.get("password"),
-        "package": voucher.get("package"),
-        "package_name": voucher.get("package"),
-        "service_type": "hotspot",
-        "status": "active",
-        "speed": (package or {}).get("speed"),
-    }
+    access_payload = None
+    package = None
+    credential_kind = "voucher"
+    credential_label = code or username
+    if voucher and voucher.get("status") == "active":
+        package = ref(f"tenants/{tenant_id}/packages/{voucher.get('package_id')}").get() if voucher.get("package_id") else None
+        access_payload = {
+            "name": voucher.get("username"),
+            "phone": data.get("phone") or "",
+            "username": voucher.get("username"),
+            "password": voucher.get("password"),
+            "package": voucher.get("package"),
+            "package_name": voucher.get("package"),
+            "service_type": "hotspot",
+            "status": "active",
+            "speed": (package or {}).get("speed"),
+        }
+    elif not code:
+        customer = next(
+            (
+                item
+                for item in list_children(f"tenants/{tenant_id}/customers")
+                if str(item.get("username") or "").lower() == username.lower()
+                and str(item.get("password") or "") == password
+                and str(item.get("service_type") or "hotspot").lower() == "hotspot"
+            ),
+            None,
+        )
+        if customer and customer.get("status") == "active":
+            expiry = parse_date(customer.get("expiry_date"))
+            now = utcnow()
+            if expiry and expiry.tzinfo is None:
+                now = now.replace(tzinfo=None)
+            if expiry and expiry < now:
+                customer = None
+        if customer:
+            package = find_child_by_field(f"tenants/{tenant_id}/packages", "name", customer.get("package"))
+            access_payload = {
+                "name": customer.get("name"),
+                "phone": customer.get("phone") or "",
+                "username": customer.get("username"),
+                "password": customer.get("password"),
+                "package": customer.get("package"),
+                "package_name": customer.get("package"),
+                "service_type": "hotspot",
+                "status": "active",
+                "expiry_date": customer.get("expiry_date"),
+                "speed": (package or {}).get("speed"),
+            }
+            credential_kind = "customer"
+    if not access_payload:
+        logger.info("Captive login rejected tenant=%s kind=%s code=%s username=%s reason=invalid_inactive_or_expired", tenant_id, credential_kind, code, username)
+        return ok({"message": "Invalid, inactive, or expired hotspot credentials"}, 401)
+
+    access_payload["duration_seconds"] = int(package_duration_delta(package).total_seconds()) if package else None
     if tenant.get("radius_enabled"):
         try:
             from .radius_provisioning import sync_radius_customer, upsert_pg_customer
@@ -1277,61 +1297,45 @@ def public_voucher_login(request, tenant_id):
             if pg_customer:
                 sync_radius_customer(tenant_obj, pg_customer)
             logger.info(
-                "Voucher login prepared for RADIUS tenant=%s voucher=%s username=%s package=%s",
+                "Captive login prepared for RADIUS tenant=%s kind=%s username=%s package=%s",
                 tenant_id,
-                voucher.get("code"),
-                voucher.get("username"),
-                voucher.get("package"),
+                credential_kind,
+                access_payload.get("username"),
+                access_payload.get("package"),
             )
         except Exception as exc:
-            logger.warning("Voucher RADIUS sync failed tenant=%s voucher=%s error=%s", tenant_id, voucher.get("code"), exc, exc_info=True)
-            return ok({"message": "Voucher was accepted, but RADIUS authentication could not be prepared. Please contact support."}, 503)
-    if tenant.get("radius_enabled"):
-        pass
+            logger.warning("Captive RADIUS sync failed tenant=%s kind=%s credential=%s error=%s", tenant_id, credential_kind, credential_label, exc, exc_info=True)
+            return ok({"message": "Credentials were accepted, but authentication could not be prepared. Please contact support."}, 503)
     elif has_mikrotik_credentials(tenant):
         try:
-            profile_name = str((package or {}).get("name") or voucher.get("package") or "").strip()
+            profile_name = str((package or {}).get("name") or access_payload.get("package") or "").strip()
             if profile_name:
-                create_hotspot_profile({"id": tenant_id, **tenant}, profile_name, (package or {}).get("speed"))
-            api = router_connect({"id": tenant_id, **tenant})
-            try:
-                users = api.path("ip", "hotspot", "user")
-                existing = next((item for item in users.get() if str(item.get("name") or "") == str(voucher.get("username") or "")), None)
-                fields = {
-                    "name": voucher.get("username"),
-                    "password": voucher.get("password"),
-                    "profile": profile_name or "default",
-                    "disabled": "no",
-                    "comment": f"billing-saas-voucher:{voucher.get('code')}",
-                }
-                if existing and existing.get(".id"):
-                    users.update(**{".id": existing[".id"], **fields})
-                else:
-                    users.add(**fields)
-            finally:
-                api.close()
+                create_hotspot_profile({"id": tenant_id, **tenant}, profile_name, (package or {}).get("speed"), access_payload.get("duration_seconds"))
+            upsert_customer_access({"id": tenant_id, **tenant}, access_payload, disabled=False)
+            set_customer_enabled({"id": tenant_id, **tenant}, access_payload.get("username"), "hotspot", True)
         except Exception as exc:
             if "text/html" in str(request.headers.get("Accept") or "") and not request.headers.get("X-Requested-With"):
-                return _html_page("Voucher unavailable", f"<main><div class='alert'>Voucher was accepted, but router access could not be prepared: {html.escape(str(exc))}</div><p><a href='/api/captive/{html.escape(str(tenant_id))}'>Back to packages</a></p></main>", 503)
-            return ok({"message": f"Voucher was accepted, but router access could not be prepared: {exc}"}, 503)
+                return _html_page("Login unavailable", f"<main><div class='alert'>Credentials were accepted, but router access could not be prepared: {html.escape(str(exc))}</div><p><a href='/api/captive/{html.escape(str(tenant_id))}'>Back to portal</a></p></main>", 503)
+            return ok({"message": f"Credentials were accepted, but router access could not be prepared: {exc}"}, 503)
     elif _router_is_agent_linked(tenant):
-        script = _voucher_hotspot_user_script(voucher, package)
+        script = _customer_secret_script(access_payload)
         if script:
             try:
-                _queue_router_command_for_tenant(tenant_id, {"type": "sync_voucher", "script": script}, tenant)
-                if voucher.get("id"):
+                _queue_router_command_for_tenant(tenant_id, {"type": "sync_hotspot_login", "script": script}, tenant)
+                if voucher and voucher.get("id"):
                     ref(f"tenants/{tenant_id}/vouchers/{voucher['id']}").update({"router_status": "queued", "router_error": None})
             except Exception as exc:
-                logger.warning("Voucher router queue failed tenant=%s voucher=%s error=%s", tenant_id, voucher.get("code"), exc)
+                logger.warning("Captive router queue failed tenant=%s kind=%s credential=%s error=%s", tenant_id, credential_kind, credential_label, exc)
     result = {
         "success": True,
-        "username": voucher.get("username"),
-        "password": voucher.get("password"),
+        "username": access_payload.get("username"),
+        "password": access_payload.get("password"),
         "router_ip": data.get("router_ip") or data.get("ip") or tenant.get("mikrotik_last_seen_ip") or "",
         "link_login": data.get("link_login") or data.get("link-login") or "",
         "dst": data.get("dst") or data.get("link-orig") or "http://connectivitycheck.gstatic.com/generate_204",
-        "package_name": voucher.get("package"),
-        "router_status": voucher.get("router_status"),
+        "package_name": access_payload.get("package"),
+        "credential_type": credential_kind,
+        "router_status": (voucher or {}).get("router_status"),
     }
     # Captive requests are browser form posts from MikroTik. Return a page
     # that submits the actual credentials to the router, rather than JSON.
@@ -1349,7 +1353,7 @@ def public_voucher_login(request, tenant_id):
         logger.info(
             "Voucher login accepted tenant=%s voucher=%s username=%s mode=%s link_login_present=%s",
             tenant_id,
-            voucher.get("code"),
+            (voucher or {}).get("code"),
             result.get("username"),
             "radius" if tenant.get("radius_enabled") else "local_router",
             bool(result.get("link_login")),
