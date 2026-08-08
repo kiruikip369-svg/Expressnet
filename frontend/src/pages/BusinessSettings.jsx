@@ -8,10 +8,7 @@ import {
   Radio,
   RotateCcw,
   Save,
-  ShieldCheck,
-  Trash2,
   Underline,
-  UserPlus,
   Users,
   Eye,
 } from 'lucide-react';
@@ -19,6 +16,7 @@ import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import api from '../api/axios';
 import { DEFAULT_TENANT_THEME, getStoredTenantSettings, storeTenantSettings } from '../utils/theme';
+import TenantUsers from './users';
 
 const tabs = [
   { key: 'general', label: 'General Settings', icon: Radio },
@@ -42,53 +40,6 @@ const initialSettings = {
 };
 
 const colorPresets = ['#fa8200', '#2563eb', '#16a34a', '#dc2626', '#7c3aed', '#0891b2', '#111827', '#f59e0b'];
-
-// Pages a non-admin user can potentially be granted access to. Keep this list
-// in sync with the actual nav/routes of the dashboard app.
-const PERMISSION_PAGES = [
-  { key: 'dashboard', label: 'Dashboard' },
-  { key: 'customers', label: 'Customers' },
-  { key: 'payments', label: 'Payments' },
-  { key: 'pppoe', label: 'PPPoE' },
-  { key: 'hotspot', label: 'Hotspot' },
-  { key: 'routers', label: 'Routers / MikroTik' },
-  { key: 'sms', label: 'SMS' },
-  { key: 'reports', label: 'Reports' },
-  { key: 'settings', label: 'Settings' },
-];
-
-const ACTIONS = [
-  { key: 'view', label: 'View' },
-  { key: 'create', label: 'Create' },
-  { key: 'edit', label: 'Edit' },
-  { key: 'delete', label: 'Delete' },
-];
-
-function buildDefaultPermissions() {
-  return PERMISSION_PAGES.reduce((acc, page) => {
-    acc[page.key] = { access: false, view: false, create: false, edit: false, delete: false };
-    return acc;
-  }, {});
-}
-
-function normalizeMember(raw) {
-  const permissions = buildDefaultPermissions();
-  const incoming = raw.permissions || {};
-  Object.keys(permissions).forEach((key) => {
-    if (incoming[key]) {
-      permissions[key] = { ...permissions[key], ...incoming[key] };
-    }
-  });
-  return {
-    id: raw.id,
-    name: raw.name || raw.full_name || 'Unnamed user',
-    email: raw.email || '',
-    phone: raw.phone || '',
-    role: raw.role || 'staff',
-    status: raw.status || 'active',
-    permissions,
-  };
-}
 
 function fromApi(data) {
   return {
@@ -167,284 +118,6 @@ function Toggle({ checked, label, onChange }) {
   );
 }
 
-function Checkbox({ checked, disabled, onChange }) {
-  return (
-    <input
-      type="checkbox"
-      className="h-4 w-4 rounded accent-[var(--dashboard-color)] disabled:opacity-30"
-      checked={checked}
-      disabled={disabled}
-      onChange={onChange}
-    />
-  );
-}
-
-function UsersAndPermissions() {
-  const [members, setMembers] = useState([]);
-  const [membersLoading, setMembersLoading] = useState(true);
-  const [selectedMemberId, setSelectedMemberId] = useState(null);
-  const [savingPermissions, setSavingPermissions] = useState(false);
-  const [removingId, setRemovingId] = useState(null);
-  const [showInvite, setShowInvite] = useState(false);
-  const [invite, setInvite] = useState({ name: '', email: '', phone: '' });
-  const [inviting, setInviting] = useState(false);
-
-  useEffect(() => {
-    let mounted = true;
-    async function loadMembers() {
-      try {
-        const { data } = await api.get('/team/members');
-        const list = (data.results || data.members || data || []).map(normalizeMember);
-        if (mounted) {
-          setMembers(list);
-          if (list.length) setSelectedMemberId((current) => current || list[0].id);
-        }
-      } catch (error) {
-        toast.error(error.response?.data?.message || 'Failed to load team members');
-      } finally {
-        if (mounted) setMembersLoading(false);
-      }
-    }
-    loadMembers();
-    return () => {
-      mounted = false;
-    };
-  }, []);
-
-  const selectedMember = members.find((member) => member.id === selectedMemberId) || null;
-
-  const updateMemberPermissions = (memberId, updater) => {
-    setMembers((current) =>
-      current.map((member) => (member.id === memberId ? { ...member, permissions: updater(member.permissions) } : member))
-    );
-  };
-
-  const togglePageAccess = (memberId, pageKey) => {
-    updateMemberPermissions(memberId, (permissions) => {
-      const page = permissions[pageKey];
-      const access = !page.access;
-      return {
-        ...permissions,
-        [pageKey]: access ? { ...page, access, view: true } : { access: false, view: false, create: false, edit: false, delete: false },
-      };
-    });
-  };
-
-  const toggleAction = (memberId, pageKey, actionKey) => {
-    updateMemberPermissions(memberId, (permissions) => ({
-      ...permissions,
-      [pageKey]: { ...permissions[pageKey], [actionKey]: !permissions[pageKey][actionKey] },
-    }));
-  };
-
-  const savePermissions = async () => {
-    if (!selectedMember) return;
-    setSavingPermissions(true);
-    try {
-      const { data } = await api.patch(`/team/members/${selectedMember.id}/permissions`, {
-        permissions: selectedMember.permissions,
-      });
-      if (data?.member) {
-        const updated = normalizeMember(data.member);
-        setMembers((current) => current.map((member) => (member.id === updated.id ? updated : member)));
-      }
-      toast.success(data?.message || 'Permissions updated');
-    } catch (error) {
-      toast.error(error.response?.data?.message || 'Failed to update permissions');
-    } finally {
-      setSavingPermissions(false);
-    }
-  };
-
-  const sendInvite = async (event) => {
-    event.preventDefault();
-    if (!invite.name.trim() || !invite.email.trim()) {
-      toast.error('Name and email are required');
-      return;
-    }
-    setInviting(true);
-    try {
-      const { data } = await api.post('/team/invite', invite);
-      const newMember = normalizeMember(data.member || data);
-      setMembers((current) => [...current, newMember]);
-      setSelectedMemberId(newMember.id);
-      setShowInvite(false);
-      setInvite({ name: '', email: '', phone: '' });
-      toast.success(data.message || 'Invite sent');
-    } catch (error) {
-      toast.error(error.response?.data?.message || 'Failed to send invite');
-    } finally {
-      setInviting(false);
-    }
-  };
-
-  const removeMember = async (memberId) => {
-    setRemovingId(memberId);
-    try {
-      await api.delete(`/team/members/${memberId}`);
-      setMembers((current) => current.filter((member) => member.id !== memberId));
-      setSelectedMemberId((current) => (current === memberId ? null : current));
-      toast.success('User removed');
-    } catch (error) {
-      toast.error(error.response?.data?.message || 'Failed to remove user');
-    } finally {
-      setRemovingId(null);
-    }
-  };
-
-  return (
-    <SettingsShell title="Users & Permissions" description="Invite staff and control which pages they can see and what they can do on each page.">
-      <div className="flex items-center justify-between">
-        <p className="theme-muted text-xs">Non-admin users only see pages you grant access to below.</p>
-        <button
-          type="button"
-          className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-[var(--dashboard-color)] px-3 text-xs font-semibold text-white hover:opacity-90"
-          onClick={() => setShowInvite(true)}
-        >
-          <UserPlus size={14} />
-          Invite user
-        </button>
-      </div>
-
-      {membersLoading ? (
-        <div className="theme-muted text-xs">Loading team members...</div>
-      ) : members.length === 0 ? (
-        <div className="theme-card-muted rounded-md border px-4 py-6 text-center text-xs theme-muted">
-          No non-admin users yet. Invite one to set up their page permissions.
-        </div>
-      ) : (
-        <div className="grid gap-5 lg:grid-cols-[220px_1fr]">
-          <div className="space-y-1">
-            {members.map((member) => (
-              <button
-                key={member.id}
-                type="button"
-                className={`flex w-full flex-col items-start gap-0.5 rounded-md border px-3 py-2 text-left text-xs transition ${
-                  selectedMemberId === member.id
-                    ? 'border-[var(--dashboard-color)] bg-[var(--dashboard-color)]/10'
-                    : 'theme-card border-[var(--app-border)] hover:bg-[var(--app-panel-muted)]'
-                }`}
-                onClick={() => setSelectedMemberId(member.id)}
-              >
-                <span className="theme-text font-semibold">{member.name}</span>
-                <span className="theme-muted">{member.email}</span>
-              </button>
-            ))}
-          </div>
-
-          {selectedMember && (
-            <div className="space-y-4">
-              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--app-border)] pb-3">
-                <div>
-                  <p className="theme-text text-sm font-semibold">{selectedMember.name}</p>
-                  <p className="theme-muted text-xs">{selectedMember.email}</p>
-                </div>
-                <button
-                  type="button"
-                  className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-red-900/50 px-3 text-xs font-semibold text-red-400 hover:bg-red-950/30"
-                  onClick={() => removeMember(selectedMember.id)}
-                  disabled={removingId === selectedMember.id}
-                >
-                  <Trash2 size={14} />
-                  {removingId === selectedMember.id ? 'Removing...' : 'Remove user'}
-                </button>
-              </div>
-
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[560px] text-left text-xs">
-                  <thead>
-                    <tr className="theme-muted">
-                      <th className="w-40 pb-2 font-semibold">Page</th>
-                      <th className="pb-2 font-semibold">Access</th>
-                      {ACTIONS.map((action) => (
-                        <th key={action.key} className="pb-2 font-semibold">{action.label}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {PERMISSION_PAGES.map((page) => {
-                      const permission = selectedMember.permissions[page.key];
-                      return (
-                        <tr key={page.key} className="border-t border-[var(--app-border)]">
-                          <td className="theme-text py-2 font-semibold">{page.label}</td>
-                          <td className="py-2">
-                            <Checkbox
-                              checked={permission.access}
-                              onChange={() => togglePageAccess(selectedMember.id, page.key)}
-                            />
-                          </td>
-                          {ACTIONS.map((action) => (
-                            <td key={action.key} className="py-2">
-                              <Checkbox
-                                checked={permission[action.key]}
-                                disabled={!permission.access || action.key === 'view'}
-                                onChange={() => toggleAction(selectedMember.id, page.key, action.key)}
-                              />
-                            </td>
-                          ))}
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-
-              <div className="flex justify-end">
-                <button
-                  type="button"
-                  className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-[var(--dashboard-color)] px-4 text-xs font-semibold text-white hover:opacity-90"
-                  onClick={savePermissions}
-                  disabled={savingPermissions}
-                >
-                  <ShieldCheck size={14} />
-                  {savingPermissions ? 'Saving...' : 'Save permissions'}
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {showInvite && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <form className="theme-card w-full max-w-sm rounded-lg border p-5" onSubmit={sendInvite}>
-            <h3 className="theme-text text-sm font-semibold">Invite user</h3>
-            <p className="theme-muted mt-1 text-xs">They'll get an account with no page access until you set permissions.</p>
-            <div className="mt-4 space-y-3">
-              <Field label="Full name" required>
-                <Input value={invite.name} onChange={(event) => setInvite((current) => ({ ...current, name: event.target.value }))} />
-              </Field>
-              <Field label="Email" required>
-                <Input type="email" value={invite.email} onChange={(event) => setInvite((current) => ({ ...current, email: event.target.value }))} />
-              </Field>
-              <Field label="Phone">
-                <Input value={invite.phone} onChange={(event) => setInvite((current) => ({ ...current, phone: event.target.value }))} />
-              </Field>
-            </div>
-            <div className="mt-5 flex justify-end gap-3">
-              <button
-                type="button"
-                className="theme-card h-9 rounded-md border px-4 text-xs font-semibold"
-                onClick={() => setShowInvite(false)}
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-[var(--dashboard-color)] px-4 text-xs font-semibold text-white hover:opacity-90"
-                disabled={inviting}
-              >
-                <Check size={14} />
-                {inviting ? 'Sending...' : 'Send invite'}
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
-    </SettingsShell>
-  );
-}
-
 export default function BusinessSettings() {
   const [activeTab, setActiveTab] = useState('general');
   const [settings, setSettings] = useState(() => {
@@ -485,7 +158,7 @@ export default function BusinessSettings() {
   };
 
   const save = async (event) => {
-    event.preventDefault();
+    event?.preventDefault();
     setSaving(true);
     try {
       const { data } = await api.patch('/settings/business', toApi(settings));
@@ -548,7 +221,7 @@ export default function BusinessSettings() {
   const showFormActions = activeTab !== 'users';
 
   return (
-    <form className="theme-page min-h-[calc(100vh-96px)] rounded-lg p-4 shadow-sm" onSubmit={save}>
+    <div className="theme-page min-h-[calc(100vh-96px)] rounded-lg p-4 shadow-sm">
       <div className="flex flex-col gap-3 border-b border-[var(--app-border)] pb-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="theme-text text-xl font-semibold">Settings</h1>
@@ -557,7 +230,7 @@ export default function BusinessSettings() {
           </p>
         </div>
         {showFormActions && (
-          <button type="submit" className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-[var(--dashboard-color)] px-4 text-xs font-semibold text-white hover:opacity-90">
+          <button type="button" className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-[var(--dashboard-color)] px-4 text-xs font-semibold text-white hover:opacity-90" onClick={save}>
             <Save size={15} />
             {saving ? 'Saving...' : 'Save changes'}
           </button>
@@ -684,23 +357,25 @@ export default function BusinessSettings() {
           </SettingsShell>
         )}
 
-        {activeTab === 'users' && <UsersAndPermissions />}
+        {activeTab === 'users' && <TenantUsers embedded />}
       </div>
 
-      <div className="mt-6 rounded-lg border border-red-900/60 bg-red-950/30 p-5">
-        <h2 className="text-sm font-semibold text-red-200">Danger Zone</h2>
-        <p className="mt-1 text-xs text-red-100/80">Delete all customers and attempt to remove their MikroTik access records. This cannot be undone.</p>
-        <div className="mt-4 flex flex-col gap-3 md:flex-row">
-          <Input placeholder={`Type ${settings.companyName} to confirm`} value={dangerConfirm} onChange={(event) => setDangerConfirm(event.target.value)} />
-          <button type="button" className="h-10 shrink-0 rounded-md bg-red-600 px-4 text-xs font-semibold text-white hover:bg-red-700" onClick={deleteCustomers}>
-            Delete all customers
-          </button>
+      {activeTab !== 'users' && (
+        <div className="mt-6 rounded-lg border border-red-900/60 bg-red-950/30 p-5">
+          <h2 className="text-sm font-semibold text-red-200">Danger Zone</h2>
+          <p className="mt-1 text-xs text-red-100/80">Delete all customers and attempt to remove their MikroTik access records. This cannot be undone.</p>
+          <div className="mt-4 flex flex-col gap-3 md:flex-row">
+            <Input placeholder={`Type ${settings.companyName} to confirm`} value={dangerConfirm} onChange={(event) => setDangerConfirm(event.target.value)} />
+            <button type="button" className="h-10 shrink-0 rounded-md bg-red-600 px-4 text-xs font-semibold text-white hover:bg-red-700" onClick={deleteCustomers}>
+              Delete all customers
+            </button>
+          </div>
         </div>
-      </div>
+      )}
 
       {showFormActions && (
         <div className="mt-6 flex gap-3">
-          <button type="submit" className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-[var(--dashboard-color)] px-4 text-xs font-semibold text-white hover:opacity-90">
+          <button type="button" className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-[var(--dashboard-color)] px-4 text-xs font-semibold text-white hover:opacity-90" onClick={save}>
             {saving ? 'Saving...' : 'Save changes'}
           </button>
           <button type="button" className="theme-card h-10 rounded-md border px-4 text-xs font-semibold" onClick={() => setSettings(initialSettings)}>
@@ -708,6 +383,6 @@ export default function BusinessSettings() {
           </button>
         </div>
       )}
-    </form>
+    </div>
   );
 }

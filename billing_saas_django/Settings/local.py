@@ -49,6 +49,8 @@ if DATABASE_URL:
             ssl_require=env_bool("DATABASE_SSL_REQUIRE", database_ssl_default),
         )
     }
+    if USE_DJANGO_TENANTS:
+        DATABASES["default"]["ENGINE"] = "django_tenants.postgresql_backend"
 else:
     DATABASES = {
         "default": {
@@ -57,6 +59,8 @@ else:
             "CONN_MAX_AGE": 60,
         }
     }
+    if USE_DJANGO_TENANTS:
+        raise RuntimeError("USE_DJANGO_TENANTS requires PostgreSQL; set DATABASE_URL.")
 
 SECURE_SSL_REDIRECT = env_bool("SECURE_SSL_REDIRECT", False)
 SECURE_HSTS_SECONDS = int(os.getenv("SECURE_HSTS_SECONDS", "0"))

@@ -1,0 +1,2045 @@
+import json
+import html
+import logging
+import os
+import secrets
+from collections import Counter, defaultdict
+from datetime import datetime, timedelta
+from decimal import Decimal
+from io import StringIO
+from pathlib import Path
+from urllib.parse import urlencode, urlparse
+
+import jwt
+from django.conf import settings
+from django.core.files.storage import FileSystemStorage
+from django.core.management import call_command
+from django.core.mail import send_mail
+from django.core.paginator import Paginator
+from django.db import close_old_connections, connection
+from django.db.utils import OperationalError
+from django.db.models import Count, Sum
+from django.http import FileResponse, Http404, HttpResponse
+from django.shortcuts import redirect
+from django.utils import timezone
+from django.views.decorators.csrf import csrf_exempt
+from rest_framework.decorators import api_view, permission_classes, renderer_classes
+from rest_framework.renderers import JSONRenderer
+from rest_framework.response import Response
+from rest_framework.permissions import AllowAny
+
+from billing_api.auth import admin_required, tenant_required
+from billing_api.models import AdminUser, Customer, InternetPackage, Payment, SubscriptionPayment, Tenant, TenantSubscription, Ticket, User
+from billing_api.services import (
+    admin_token,
+    check_password,
+    create_hotspot_profile,
+    create_ppp_profile,
+    configure_router_port,
+    create_paystack_subaccount,
+    selected_daraja_method,
+    initiate_daraja_payment,
+    make_daraja_callback_token,
+    verify_daraja_callback_token,
+    _build_port_command_script,
+    delete_router_customer,
+    captive_portal_url,
+    ensure_hotspot_captive_portal,
+    find_child_by_field,
+    has_mikrotik_credentials,
+    hash_password,
+    hotspot_alogin_redirect_html,
+    expressnet_hotspot_file_html,
+    hotspot_error_redirect_html,
+    hotspot_login_redirect_html,
+    hotspot_redirect_html,
+    routeros_hotspot_fetch_script,
+    initiate_paystack_payment,
+    initiate_daraja_stk,
+    iso_now,
+    walled_garden_hosts,
+    firebase_backup_configured,
+    list_children,
+    mikrotik_managed_bridge_name,
+    normalize_public_url,
+    normalize_phone,
+    normalize_rate_limit,
+    routeros_duration,
+    package_service_type,
+    PaymentProviderError,
+    ref,
+    _rsc_escape,
+    _get_jwt_secret,
+    router_connect,
+    router_interface_status,
+    router_items,
+    send_sms_message,
+    send_whatsapp_message,
+    set_customer_enabled,
+    tenant_token,
+    upsert_customer_access,
+    utcnow,
+    verify_paystack_signature,
+    verify_paystack_transaction,
+    write_audit_log,
+)
+
+logger = logging.getLogger(__name__)
+
+
+DEFAULT_SITE = {
+    "brand_name": "Expressnet",
+    "headline": "Internet billing built for hotspot businesses",
+    "subheadline": "Sell packages, collect Paystack payments, and activate MikroTik users automatically.",
+    "about": "We help hotspot operators manage customers, packages, payments, and access control from one secure platform.",
+    "phone": "+254 701396967/+254 729 281669",
+    "email": "expressnet.support@gmail.com",
+    "location": "Thika , Kenya",
+    "address": "Nairobi, Kenya",
+    "cta_label": "Register your business",
+    "cta_url": "/register",
+}
+MASKED = "••••••••"
+SENSITIVE_FIELDS = {"password", "mikrotik_pass", "paystack_secret_key"}
+
+
+def body(request):
+    if hasattr(request, "data"):
+        if hasattr(request.data, "dict"):
+            return request.data.dict()
+        return request.data if isinstance(request.data, dict) else dict(request.data)
+    if not request.body:
+        return {}
+    try:
+        return json.loads(request.body.decode("utf-8"))
+    except json.JSONDecodeError:
+        return {}
+
+
+def ok(data=None, status=200):
+    return Response(data if data is not None else {}, status=status)
+
+
+def err(message, status=400):
+    return Response({"error": message}, status=status)
+
+
+def admin_notification_recipients():
+    configured = list(getattr(settings, "ADMIN_NOTIFICATION_EMAILS", []))
+    firebase_admins = [admin.get("email") for admin in list_children("admins") if admin.get("email")]
+    django_admins = list(User.objects.filter(is_staff=True, is_active=True).values_list("email", flat=True))
+    return sorted({email for email in [*configured, *firebase_admins, *django_admins] if email})
+
+
+def send_system_email(subject, message, recipients):
+    recipients = [email for email in recipients if email]
+    if not recipients:
+        return 0
+    try:
+        return send_mail(subject, message, settings.DEFAULT_FROM_EMAIL, recipients, fail_silently=True)
+    except Exception:
+        return 0
+
+
+def notify_admins_tenant_signup(tenant_id, tenant):
+    default_dashboard_url = f"/{settings.ADMIN_FRONTEND_PATH}/tenants"
+    dashboard_url = os.getenv("ADMIN_TENANTS_URL", default_dashboard_url)
+    send_system_email(
+        "New tenant account pending activation",
+        (
+            f"A new tenant account is waiting for activation.\n\n"
+            f"Business: {tenant.get('business_name')}\n"
+            f"Owner: {tenant.get('owner_name')}\n"
+            f"Email: {tenant.get('email')}\n"
+            f"Phone: {tenant.get('phone')}\n"
+            f"Tenant ID: {tenant_id}\n\n"
+            f"Review and activate it here: {dashboard_url}"
+        ),
+        admin_notification_recipients(),
+    )
+
+
+def notify_tenant_activated(tenant):
+    send_system_email(
+        "Your Billing SaaS account is active",
+        (
+            f"Hello {tenant.get('owner_name') or tenant.get('business_name')},\n\n"
+            f"Your {tenant.get('business_name') or 'Billing SaaS'} account has been activated. "
+            "You can now sign in and finish setting up your workspace.\n\n"
+            "Login: /login"
+        ),
+        [tenant.get("email")],
+    )
+
+
+def method(request, *allowed):
+    return request.method.upper() in allowed
+
+
+def parse_page(request):
+    try:
+        page = max(1, int(request.GET.get("page", 1)))
+    except (TypeError, ValueError):
+        page = 1
+    try:
+        page_size = min(200, max(1, int(request.GET.get("page_size", 50))))
+    except (TypeError, ValueError):
+        page_size = 50
+    return page, page_size
+
+
+def paginate_items(request, items):
+    page, page_size = parse_page(request)
+    paginator = Paginator(list(items), page_size)
+    current = paginator.get_page(page)
+    path = request.path
+    next_url = f"{path}?page={current.next_page_number()}&page_size={page_size}" if current.has_next() else None
+    prev_url = f"{path}?page={current.previous_page_number()}&page_size={page_size}" if current.has_previous() else None
+    return {"results": list(current.object_list), "count": paginator.count, "pages": paginator.num_pages, "next": next_url, "previous": prev_url}
+
+
+def as_collection_response(request, items):
+    if request.GET.get("all") == "1" or request.GET.get("format") == "legacy":
+        return ok(list(items))
+    return ok(paginate_items(request, items))
+
+
+def parse_date(value):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def payment_date(payment):
+    return parse_date(payment.get("paid_at") or payment.get("initiated_at") or payment.get("created_at"))
+
+
+def package_duration_delta(package):
+    unit = str((package or {}).get("duration_unit") or "").strip().lower()
+    hours = (package or {}).get("duration_hours")
+    if hours not in {None, ""}:
+        try:
+            return timedelta(hours=float(hours))
+        except (TypeError, ValueError):
+            pass
+    if unit in {"hour", "hours"}:
+        try:
+            return timedelta(hours=float((package or {}).get("duration_value") or (package or {}).get("duration_days") or 1))
+        except (TypeError, ValueError):
+            return timedelta(hours=1)
+    try:
+        return timedelta(days=int((package or {}).get("duration_days") or 1))
+    except (TypeError, ValueError):
+        return timedelta(days=1)
+
+
+def normalized_package_payload(data):
+    service_type = package_service_type(data or {})
+    if service_type not in {"hotspot", "pppoe"}:
+        service_type = "hotspot"
+    duration_unit = "hours" if str((data or {}).get("duration_unit") or "").lower().startswith("hour") else "days"
+    if service_type == "pppoe":
+        duration_unit = "days"
+    duration_value = float((data or {}).get("duration_value") or (data or {}).get("duration_hours") or (data or {}).get("duration_days") or 1)
+    if service_type == "pppoe" and duration_value < 1:
+        duration_value = 1
+    duration_days = 1 if duration_unit == "hours" else int(duration_value)
+    duration_hours = duration_value if duration_unit == "hours" else duration_value * 24
+    return {
+        "service_type": service_type,
+        "duration_unit": duration_unit,
+        "duration_value": duration_value,
+        "duration_days": duration_days,
+        "duration_hours": duration_hours,
+    }
+
+
+def sync_package_profile(tenant, package):
+    service_type = package_service_type(package)
+    duration_seconds = int(package_duration_delta(package).total_seconds())
+    if service_type == "pppoe":
+        return create_ppp_profile(tenant, package.get("name"), package.get("speed"), duration_seconds)
+    return create_hotspot_profile(tenant, package.get("name"), package.get("speed"), duration_seconds)
+
+
+def _package_sync_script_for_request(request, package):
+    script = _package_profile_script(package)
+    if script and package_service_type(package) == "hotspot":
+        script = _hotspot_captive_file_script(
+            {"id": request.tenant["id"], **request.tenant},
+            public_base_url(request).rstrip("/"),
+        ) + script
+    return script
+
+#u
+def package_duration_label(package):
+    delta = package_duration_delta(package)
+    total_seconds = int(delta.total_seconds())
+    if total_seconds < 86400:
+        hours = max(1, round(total_seconds / 3600))
+        return f"{hours} hour{'s' if hours != 1 else ''}"
+    days = max(1, round(total_seconds / 86400))
+    return f"{days} day{'s' if days != 1 else ''}"
+
+
+def normalize_mac(value):
+    raw = "".join(ch for ch in str(value or "").upper() if ch in "0123456789ABCDEF")
+    if len(raw) != 12:
+        return ""
+    return ":".join(raw[index : index + 2] for index in range(0, 12, 2))
+
+
+def format_money(value):
+    return float(Decimal(str(value or 0)))
+
+
+def health_payload():
+    checks = {}
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1")
+            cursor.fetchone()
+        checks["db"] = "ok"
+    except Exception as exc:
+        checks["db"] = "error"
+        checks["dbError"] = f"{exc.__class__.__name__}: {str(exc)[:240]}"
+    try:
+        import redis
+        from django.conf import settings as django_settings
+        redis.Redis.from_url(django_settings.REDIS_URL, socket_connect_timeout=0.5, socket_timeout=0.5).ping()
+        checks["redis"] = "ok"
+    except Exception as exc:
+        checks["redis"] = "error"
+        checks["redisError"] = f"{exc.__class__.__name__}: {str(exc)[:160]}"
+    try:
+        checks["firebase"] = "ok" if not firebase_backup_configured() else "ok"
+    except Exception:
+        checks["firebase"] = "error"
+    checks["status"] = "healthy" if checks["db"] == "ok" and checks["redis"] == "ok" else "degraded"
+    return checks
+
+
+def ensure_subscription(tenant, plan="basic"):
+    plan_amounts = {"basic": 1500, "pro": 3500, "enterprise": 8000}
+    now = timezone.now()
+    subscription, _ = TenantSubscription.objects.get_or_create(
+        tenant=tenant,
+        defaults={
+            "plan": plan if plan in plan_amounts else "basic",
+            "amount": plan_amounts.get(plan, 1500),
+            "started_at": now,
+            "expires_at": now + timedelta(days=30),
+        },
+    )
+    return subscription
+
+
+def subscription_payload(subscription, include_payments=False):
+    data = subscription.as_dict()
+    if include_payments:
+        data["payments"] = [payment.as_dict() for payment in subscription.payments.order_by("-paid_at")]
+    return data
+
+
+def record_subscription_payment(subscription, data, admin_email=""):
+    now = timezone.now()
+    current_expiry = subscription.expires_at if subscription.expires_at and subscription.expires_at > now else now
+    period_start = current_expiry
+    period_end = period_start + timedelta(days=subscription.billing_cycle_days)
+    payment = SubscriptionPayment.objects.create(
+        subscription=subscription,
+        amount=Decimal(str(data.get("amount") or subscription.amount or 0)),
+        currency=data.get("currency") or subscription.currency,
+        method=data.get("method") or "manual",
+        reference=data.get("reference") or "",
+        notes=data.get("notes") or "",
+        period_start=period_start,
+        period_end=period_end,
+        recorded_by=admin_email or "",
+    )
+    subscription.last_paid_at = payment.paid_at
+    subscription.expires_at = period_end
+    subscription.save(update_fields=["last_paid_at", "expires_at", "updated_at"])
+    if subscription.tenant.status == "suspended":
+        subscription.tenant.status = "active"
+        subscription.tenant.save(update_fields=["status", "updated_at"])
+    return payment
+
+
+def react_app(request):
+    index = Path(settings.BASE_DIR) / "frontend" / "dist" / "index.html"
+    if not index.exists():
+        raise Http404("Build the React app first with npm --prefix frontend run build")
+    return FileResponse(index.open("rb"), content_type="text/html")
+
+
+def react_asset(request, asset_path):
+    assets_dir = (Path(settings.BASE_DIR) / "frontend" / "dist" / "assets").resolve()
+    requested = (assets_dir / asset_path).resolve()
+    if assets_dir not in requested.parents or not requested.exists() or not requested.is_file():
+        raise Http404("Asset not found")
+    content_types = {
+        ".css": "text/css",
+        ".js": "application/javascript",
+        ".map": "application/json",
+        ".svg": "image/svg+xml",
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+        ".ico": "image/x-icon",
+        ".woff": "font/woff",
+        ".woff2": "font/woff2",
+    }
+    return FileResponse(requested.open("rb"), content_type=content_types.get(requested.suffix.lower(), "application/octet-stream"))
+
+
+def public_base_url(request):
+    host = request.get_host()
+    if "://" in host:
+        host = host.split("://", 1)[1]
+    forwarded_proto = (request.META.get("HTTP_X_FORWARDED_PROTO") or request.scheme or "https").split(",")[0].strip()
+    request_url = normalize_public_url(f"{forwarded_proto}://{host}")
+
+    candidates = [
+        os.getenv("PUBLIC_APP_URL"),
+        os.getenv("PAYSTACK_CALLBACK_BASE_URL"),
+        getattr(settings, "PUBLIC_APP_URL", ""),
+        getattr(settings, "PAYSTACK_CALLBACK_BASE_URL", ""),
+    ]
+    if request_url and "localhost" not in request_url and "127.0.0.1" not in request_url:
+        candidates.insert(0, request_url)
+    if not settings.DEBUG:
+        candidates = [item for item in candidates if item and "localhost" not in item and "127.0.0.1" not in item]
+    configured = next((item for item in candidates if item), "")
+    return normalize_public_url(configured or request_url)
+
+
+def tenant_theme_payload(tenant):
+    return {
+        "business_name": tenant.get("business_name") or "",
+        "owner_name": tenant.get("owner_name") or "",
+        "phone": tenant.get("phone") or "",
+        "support_email": tenant.get("support_email") or tenant.get("email") or "",
+        "theme_color": tenant.get("theme_color") or "#fa8200",
+        "font": tenant.get("font") or "Work Sans",
+        "dark_mode": bool(tenant.get("dark_mode")),
+        "theme_mode": tenant.get("theme_mode") or ("dark" if tenant.get("dark_mode") else "light"),
+        "business_number": tenant.get("business_number") or "",
+        "bank_code": tenant.get("bank_code") or "",
+        "bank_name": tenant.get("bank_name") or "",
+        "bank_account_number": tenant.get("bank_account_number") or "",
+        "payment_methods": tenant.get("payment_methods") if isinstance(tenant.get("payment_methods"), list) else ["bank"],
+        "daraja_consumer_key": tenant.get("daraja_consumer_key") or "",
+        "daraja_consumer_secret": tenant.get("daraja_consumer_secret") or "",
+        "daraja_shortcode": tenant.get("daraja_shortcode") or "",
+        "daraja_passkey": tenant.get("daraja_passkey") or "",
+        "daraja_till_number": tenant.get("daraja_till_number") or "",
+        "daraja_shortcode_type": tenant.get("daraja_shortcode_type") or "CustomerBuyGoodsOnline",
+        "daraja_environment": tenant.get("daraja_environment") or "production",
+        "paystack_subaccount_code": tenant.get("paystack_subaccount_code") or "",
+        "paystack_subaccount_status": tenant.get("paystack_subaccount_status") or "not_created",
+        "paystack_platform_percentage": tenant.get("paystack_platform_percentage") or os.getenv("PAYSTACK_PLATFORM_PERCENTAGE", "1"),
+    }
+
+
+def create_or_update_tenant_subaccount(tenant_id, tenant_data, data):
+    bank_code = str(data.get("bank_code") or tenant_data.get("bank_code") or "").strip()
+    account_number = str(data.get("bank_account_number") or tenant_data.get("bank_account_number") or "").strip()
+    if not bank_code or not account_number:
+        return {"paystack_subaccount_status": "missing_bank_details"}
+
+    subaccount = create_paystack_subaccount(
+        {"id": tenant_id, **tenant_data, **data},
+        bank_code,
+        account_number,
+        business_number=data.get("business_number") or tenant_data.get("business_number"),
+        percentage_charge=data.get("paystack_platform_percentage") or tenant_data.get("paystack_platform_percentage"),
+    )
+    return {
+        "paystack_subaccount_code": subaccount.get("subaccount_code"),
+        "paystack_subaccount_id": subaccount.get("id"),
+        "paystack_subaccount_status": "active",
+        "paystack_subaccount_created_at": iso_now(),
+    }
+
+
+
+
+@csrf_exempt
+@api_view(["GET"])
+def public_tenant(request, tenant_id):
+    tenant = ref(f"tenants/{tenant_id}").get()
+    if not tenant:
+        return ok({"message": "Tenant not found"}, 404)
+    return ok({"id": tenant_id, "business_name": tenant.get("business_name"), "phone": tenant.get("phone"), "status": tenant.get("status"), "logo_url": tenant.get("logo_url") or ""})
+
+
+
+
+def _public_package_payload(pkg):
+    return {
+        **{key: pkg.get(key) for key in ["id", "name", "speed", "duration_days", "duration_unit", "duration_value", "duration_hours", "price", "service_type"]},
+        "service_type": package_service_type(pkg),
+        "duration_label": package_duration_label(pkg),
+    }
+
+
+def _public_packages_for_tenant(tenant_id, requested_service=""):
+    return [
+        _public_package_payload(pkg)
+        for pkg in list_children(f"tenants/{tenant_id}/packages")
+        if pkg.get("is_active") is not False and (requested_service not in {"hotspot", "pppoe"} or package_service_type(pkg) == requested_service)
+    ]
+
+
+def _captive_packages(tenant_id):
+    hotspot_packages = _public_packages_for_tenant(tenant_id, "hotspot")
+    if hotspot_packages:
+        return hotspot_packages
+    return _public_packages_for_tenant(tenant_id)
+
+
+
+@csrf_exempt
+@api_view(["POST"])
+def _public_pay_impl(request, tenant_id):
+    data = body(request)
+    if not data.get("package_id") or not data.get("phone"):
+        return ok({"message": "Package and phone number are required"}, 400)
+    tenant_data = ref(f"tenants/{tenant_id}").get()
+    if not tenant_data:
+        return ok({"message": "Tenant not found"}, 404)
+    if tenant_data.get("status") == "suspended":
+        return ok({"message": "Tenant is not accepting payments"}, 403)
+    pkg = ref(f"tenants/{tenant_id}/packages/{data['package_id']}").get()
+    if not pkg or pkg.get("is_active") is False:
+        return ok({"message": "Package not found"}, 404)
+    tenant = {"id": tenant_id, **tenant_data}
+    phone = normalize_phone(data["phone"])
+    router_ip = str(data.get("ip") or data.get("router_ip") or "").strip()
+    router_mac = str(data.get("mac") or data.get("router_mac") or "").strip()
+    link_login = str(data.get("link_login") or data.get("link-login") or "").strip()
+    dst = str(data.get("dst") or data.get("link-orig") or "").strip()
+    service_type = str(data.get("service_type") or "hotspot").strip().lower()
+    if service_type not in {"hotspot", "pppoe", "tv"}:
+        return ok({"message": "Invalid service type"}, 400)
+    package_type = package_service_type(pkg)
+    if service_type in {"hotspot", "pppoe"} and service_type != package_type:
+        return ok({"message": f"This package is only available for {package_type.upper()} customers"}, 400)
+    if service_type == "tv" and package_type != "hotspot":
+        return ok({"message": "TV MAC access is only available for hotspot packages"}, 400)
+    customer = None
+    mac_address = ""
+    if service_type == "pppoe":
+        username = str(data.get("username") or "").strip()
+        if not username:
+            return ok({"message": "PPPoE username is required"}, 400)
+        customer = next(
+            (
+                item
+                for item in list_children(f"tenants/{tenant_id}/customers")
+                if str(item.get("username") or "").lower() == username.lower()
+            ),
+            None,
+        )
+        if not customer:
+            return ok({"message": "PPPoE account not found. Please contact your ISP."}, 404)
+        phone = normalize_phone(data.get("phone") or customer.get("phone"))
+    elif service_type == "tv":
+        mac_address = normalize_mac(data.get("mac_address"))
+        if not mac_address:
+            return ok({"message": "Enter a valid TV MAC address"}, 400)
+    daraja_method = selected_daraja_method(tenant, data.get("payment_method"))
+    uses_daraja = bool(daraja_method)
+    payment_ref = ref(f"tenants/{tenant_id}/payments").push(
+        {
+            "customer_id": customer.get("id") if customer else None,
+            "customer_name": customer.get("name") if customer else None,
+            "package_id": data["package_id"],
+            "package_name": pkg.get("name"),
+            "amount": float(pkg.get("price") or 0),
+            "payment_code": None,
+            "phone": phone,
+            "status": "pending",
+            "paid_at": None,
+            "initiated_at": iso_now(),
+            "service_type": service_type,
+            "username": customer.get("username") if customer else None,
+            "mac_address": mac_address,
+            "router_ip": router_ip,
+            "router_mac": router_mac,
+            "link_login": link_login,
+            "dst": dst,
+            "source": "customer_portal",
+            "provider": "mpesa" if uses_daraja else "paystack",
+            "payment_method": daraja_method or "paystack",
+        }
+    )
+    try:
+        if uses_daraja:
+            checkout = initiate_daraja_payment(
+                tenant,
+                payment_ref.key,
+                pkg.get("price"),
+                phone,
+                description=f"{pkg.get('name')} internet package",
+                metadata={
+                    "package_id": data["package_id"],
+                    "package_name": pkg.get("name"),
+                    "service_type": service_type,
+                    "username": customer.get("username") if customer else None,
+                    "mac_address": mac_address,
+                    "router_ip": router_ip,
+                    "router_mac": router_mac,
+                    "link_login": link_login,
+                    "dst": dst,
+                },
+                payment_method=daraja_method,
+            )
+            payment_ref.update({"daraja_checkout_request_id": checkout.get("checkout_request_id"), "daraja_merchant_request_id": checkout.get("merchant_request_id")})
+            return ok({
+                "success": True,
+                "message": checkout.get("customer_message") or "Check your phone and enter your M-Pesa PIN to complete payment.",
+                "paymentId": payment_ref.key,
+                "provider": "mpesa",
+                "checkoutRequestId": checkout.get("checkout_request_id"),
+            }, 201)
+        checkout = initiate_paystack_payment(
+            tenant,
+            payment_ref.key,
+            pkg.get("price"),
+            email=data.get("email"),
+            phone=phone,
+            description=f"{pkg.get('name')} internet package",
+            metadata={
+                "package_id": data["package_id"],
+                "package_name": pkg.get("name"),
+                "service_type": service_type,
+                "username": customer.get("username") if customer else None,
+                "mac_address": mac_address,
+                "router_ip": router_ip,
+                "router_mac": router_mac,
+                "link_login": link_login,
+                "dst": dst,
+            },
+        )
+    except PaymentProviderError as exc:
+        logger.warning(
+            "Payment provider error for tenant=%s payment=%s provider=%s detail=%s",
+            tenant_id,
+            payment_ref.key,
+            "daraja" if uses_daraja else "paystack",
+            exc.detail,
+        )
+        payment_ref.update({"status": "failed", "failed_at": iso_now(), "callback_result_desc": exc.detail})
+        return ok({"success": False, "message": exc.public_message, "paymentId": payment_ref.key}, exc.status_code)
+    except Exception as exc:
+        logger.exception(
+            "Unexpected payment initiation error for tenant=%s payment=%s provider=%s",
+            tenant_id,
+            payment_ref.key,
+            "daraja" if uses_daraja else "paystack",
+        )
+        payment_ref.update({"status": "failed", "failed_at": iso_now(), "callback_result_desc": str(exc)})
+        return ok({"success": False, "message": "Payment gateway is temporarily unavailable. Please try again later.", "paymentId": payment_ref.key}, 503)
+    payment_ref.update(
+        {
+            "paystack_reference": checkout.get("reference"),
+            "paystack_access_code": checkout.get("access_code"),
+            "paystack_authorization_url": checkout.get("authorization_url"),
+            "paystack_customer_email": checkout.get("customer_email"),
+            "currency": checkout.get("currency"),
+            "checkout_requested_at": iso_now(),
+        }
+    )
+    return ok({"success": True, "message": "Redirecting to Paystack checkout", "paymentId": payment_ref.key, "reference": checkout.get("reference"), "authorizationUrl": checkout.get("authorization_url")})
+
+
+
+
+@csrf_exempt
+@api_view(["POST"])
+def public_pay(request, tenant_id):
+    """Keep every public checkout failure as a useful API response."""
+    try:
+        return _public_pay_impl(request, tenant_id)
+    except PaymentProviderError as exc:
+        return ok({"success": False, "message": exc.public_message}, exc.status_code)
+    except Exception:
+        return ok({"success": False, "message": "Payment gateway is temporarily unavailable. Please try again later."}, 503)
+
+
+
+
+@csrf_exempt
+@api_view(["GET"])
+def public_verify(request, tenant_id):
+    reference = request.GET.get("reference") or request.GET.get("trxref")
+    if not reference:
+        return ok({"message": "Payment reference is required"}, 400)
+    found_tenant_id, payment_id, payment = find_payment_by_paystack_reference(reference, tenant_id=tenant_id)
+    if found_tenant_id != str(tenant_id) or not payment:
+        return ok({"message": "Payment not found"}, 404)
+    if payment.get("status") != "success":
+        tenant = {"id": tenant_id, **(ref(f"tenants/{tenant_id}").get() or {})}
+        try:
+            verified = verify_paystack_transaction(tenant, reference)
+            if verified.get("status") == "success":
+                if not complete_paystack_payment(verified):
+                    return ok({"success": False, "status": "failed", "message": "The paid amount did not match the package amount."}, 400)
+                payment = ref(f"tenants/{tenant_id}/payments/{payment_id}").get() or payment
+            else:
+                return ok({"success": False, "status": "failed", "message": verified.get("gateway_response") or "Payment was not successful"}, 400)
+        except Exception:
+            return ok({"success": False, "status": payment.get("status") or "pending", "message": "Payment verification is still pending. Please contact your ISP if this continues."}, 202)
+    return ok(
+        {
+            "success": payment.get("status") == "success",
+            "status": payment.get("status"),
+            "package_name": payment.get("package_name"),
+            "service_type": payment.get("service_type"),
+            "phone": payment.get("phone"),
+            "username": payment.get("access_username"),
+            "password": payment.get("access_password"),
+            "mac_address": payment.get("access_mac_address") or payment.get("mac_address"),
+            "router_ip": payment.get("router_ip"),
+            "router_mac": payment.get("router_mac"),
+            "link_login": payment.get("link_login"),
+            "dst": payment.get("dst"),
+            "expires_at": payment.get("access_expires_at"),
+            "paymentId": payment_id,
+        }
+    )
+
+
+@csrf_exempt
+@api_view(["GET", "PATCH", "DELETE"])
+@tenant_required
+def customers(request, customer_id=None):
+    tenant = request.tenant
+    if method(request, "GET") and not customer_id:
+        return as_collection_response(request, list_children(f"tenants/{tenant['id']}/customers"))
+    if method(request, "GET") and customer_id:
+        customer = ref(f"tenants/{tenant['id']}/customers/{customer_id}").get()
+        if not customer:
+            return ok({"message": "Customer not found"}, 404)
+        return ok({"id": customer_id, **customer})
+    if method(request, "PATCH") and customer_id:
+        customer = ref(f"tenants/{tenant['id']}/customers/{customer_id}").get()
+        if not customer:
+            return ok({"message": "Customer not found"}, 404)
+        data = body(request)
+        allowed = [
+            "name",
+            "phone",
+            "location",
+            "username",
+            "package",
+            "service_type",
+            "status",
+            "expiry_date",
+            "auto_reconnect",
+            "technician",
+            "router_serial_number",
+            "mikrotik_router_id",
+            "support",
+        ]
+        updates = {field: data[field] for field in allowed if field in data}
+        if not updates:
+            return ok({"message": "No customer fields provided"}, 400)
+        updates["updated_at"] = iso_now()
+        ref(f"tenants/{tenant['id']}/customers/{customer_id}").update(updates)
+        return ok({"success": True, "message": "Customer updated", "customer": {"id": customer_id, **customer, **updates}})
+    if method(request, "DELETE") and customer_id:
+        customer = ref(f"tenants/{tenant['id']}/customers/{customer_id}").get()
+        if not customer:
+            return ok({"message": "Customer not found"}, 404)
+        try:
+            delete_router_customer(tenant, customer.get("username"), customer.get("service_type") or "pppoe")
+        except Exception:
+            pass
+        ref(f"tenants/{tenant['id']}/customers/{customer_id}").delete()
+        return ok({"success": True, "message": "Customer deleted"})
+    return ok({"message": "Method not allowed"}, 405)
+
+
+@csrf_exempt
+@api_view(["POST"])
+@tenant_required
+def customer_add(request):
+    data = body(request)
+    required = ["name", "phone", "username", "password", "package_name"]
+    if any(not data.get(field) for field in required):
+        return ok({"message": "Name, phone, username, password, and package are required"}, 400)
+    if any(str(c.get("username", "")).lower() == str(data["username"]).lower() for c in list_children(f"tenants/{request.tenant['id']}/customers")):
+        return ok({"message": "A customer with this username already exists"}, 409)
+    service_type = str(data.get("service_type") or "hotspot").strip().lower()
+    if service_type not in {"pppoe", "hotspot"}:
+        return ok({"message": "Customer service type must be PPPoE or Hotspot"}, 400)
+    provision = data.get("provision_mikrotik", True)
+    linked_routers = request.tenant.get("linked_routers") or {}
+    mikrotik_router_id = str(data.get("mikrotik_router_id") or "").strip()
+    if provision and linked_routers:
+        if not mikrotik_router_id:
+            return ok({"message": "Select the MikroTik router for this customer"}, 400)
+        if mikrotik_router_id not in linked_routers:
+            return ok({"message": "Selected MikroTik router was not found"}, 400)
+    pkg = find_child_by_field(f"tenants/{request.tenant['id']}/packages", "name", data["package_name"])
+    if not pkg:
+        return ok({"message": f"Package \"{data['package_name']}\" was not found"}, 404)
+    provisioning_status = "not_requested"
+    provisioning_message = None
+    if provision:
+        if not has_mikrotik_credentials(request.tenant) and not _router_is_agent_linked(request.tenant):
+            return ok({"message": "Link a MikroTik router before provisioning customers"}, 400)
+        if has_mikrotik_credentials(request.tenant):
+            try:
+                if service_type == "pppoe":
+                    create_ppp_profile(request.tenant, pkg["name"], pkg.get("speed"))
+                else:
+                    create_hotspot_profile(request.tenant, pkg["name"], pkg.get("speed"))
+                upsert_customer_access(request.tenant, {**data, "service_type": service_type}, disabled=True)
+                provisioning_status = "provisioned"
+                provisioning_message = f"{service_type.upper()} access created on MikroTik and kept disabled until payment"
+            except (TimeoutError, OSError):
+                _queue_router_command(request, {
+                    "type": "sync_secrets",
+                    "router_id": mikrotik_router_id,
+                    "script": _customer_secret_script({**data, "package": data["package_name"], "speed": pkg.get("speed"), "service_type": service_type, "status": "inactive"}),
+                })
+                provisioning_status = "queued"
+                provisioning_message = f"{service_type.upper()} access queued for MikroTik sync"
+        else:
+            _queue_router_command(request, {
+                "type": "sync_secrets",
+                "router_id": mikrotik_router_id,
+                "script": _customer_secret_script({**data, "package": data["package_name"], "speed": pkg.get("speed"), "service_type": service_type, "status": "inactive"}),
+            })
+            provisioning_status = "queued"
+            provisioning_message = f"{service_type.upper()} access queued for MikroTik sync"
+    new_ref = ref(f"tenants/{request.tenant['id']}/customers").push(
+        {
+            "name": data["name"],
+            "phone": data["phone"],
+            "location": data.get("location") or "",
+            "username": data["username"],
+            "password": data["password"],
+            "technician": data.get("technician") or "",
+            "router_serial_number": data.get("router_serial_number") or "",
+            "mikrotik_router_id": mikrotik_router_id,
+            "support": data.get("support") or "",
+            "package": data["package_name"],
+            "service_type": service_type,
+            "provisioning_status": provisioning_status,
+            "provisioning_message": provisioning_message,
+            "status": "inactive",
+            "expiry_date": None,
+            "auto_reconnect": True,
+            "created_at": iso_now(),
+        }
+    )
+    # Sync to Postgres + RADIUS if tenant has RADIUS enabled
+    if request.tenant.get("radius_enabled"):
+        try:
+            from billing_api.radius_provisioning import upsert_pg_customer, sync_radius_customer
+            from billing_api.models import Tenant as TenantModel
+            tenant_obj = TenantModel.objects.get(pk=request.tenant["id"])
+            pg_customer = upsert_pg_customer(tenant_obj, {**data, "service_type": service_type})
+            if pg_customer:
+                sync_radius_customer(tenant_obj, pg_customer)
+        except Exception:
+            pass
+    return ok({"success": True, "message": "Customer added", "customerId": new_ref.key})
+
+
+def _normalize_permissions(value):
+    return value if isinstance(value, dict) else {}
+
+
+def _team_member_payload(member_id, member):
+    return {
+        "id": member_id,
+        "name": member.get("name") or "",
+        "email": member.get("email") or "",
+        "phone": member.get("phone") or "",
+        "role": member.get("role") or "",
+        "status": member.get("status") or "active",
+        "permissions": _normalize_permissions(member.get("permissions")),
+        "created_at": member.get("created_at") or "",
+        "updated_at": member.get("updated_at") or "",
+    }
+
+
+def _tenant_team_members(tenant_id):
+    tenant = ref(f"tenants/{tenant_id}").get() or {}
+    members = tenant.get("team_members") or {}
+    return members if isinstance(members, dict) else {}
+
+
+def _save_tenant_team_members(tenant_id, members):
+    ref(f"tenants/{tenant_id}").update({"team_members": members})
+
+
+@csrf_exempt
+@api_view(["GET", "DELETE"])
+@tenant_required
+def team_members(request, member_id=None):
+    tenant_id = request.tenant["id"]
+    members = _tenant_team_members(tenant_id)
+    if method(request, "GET") and not member_id:
+        return as_collection_response(
+            request,
+            [_team_member_payload(member_id, member) for member_id, member in members.items()],
+        )
+    if method(request, "DELETE") and member_id:
+        if member_id not in members:
+            return ok({"message": "User not found"}, 404)
+        members.pop(member_id, None)
+        _save_tenant_team_members(tenant_id, members)
+        return ok({"success": True, "message": "User removed"})
+    return ok({"message": "Method not allowed"}, 405)
+
+
+@csrf_exempt
+@api_view(["POST"])
+@tenant_required
+def team_invite(request):
+    data = body(request)
+    name = str(data.get("name") or "").strip()
+    email = str(data.get("email") or "").lower().strip()
+    phone = str(data.get("phone") or "").strip()
+    role = str(data.get("role") or "").strip()
+    if not name or not email:
+        return ok({"message": "Name and email are required"}, 400)
+    password = str(data.get("password") or "").strip()
+    if len(password) < 6:
+        return ok({"message": "Password must be at least 6 characters"}, 400)
+    tenant_id = request.tenant["id"]
+    members = _tenant_team_members(tenant_id)
+    if any(str(member.get("email") or "").lower() == email for member in members.values()):
+        return ok({"message": "A user with this email already exists"}, 409)
+    member_id = secrets.token_hex(8)
+    member = {
+        "name": name,
+        "email": email,
+        "phone": phone,
+        "role": role,
+        "password": hash_password(password),
+        "permissions": _normalize_permissions(data.get("permissions")),
+        "status": "active",
+        "created_at": iso_now(),
+        "updated_at": iso_now(),
+    }
+    members[member_id] = member
+    _save_tenant_team_members(tenant_id, members)
+    return ok({"success": True, "message": "User created", "member": _team_member_payload(member_id, member)})
+
+
+@csrf_exempt
+@api_view(["PATCH"])
+@tenant_required
+def team_member_permissions(request, member_id):
+    tenant_id = request.tenant["id"]
+    members = _tenant_team_members(tenant_id)
+    member = members.get(member_id)
+    if not member:
+        return ok({"message": "User not found"}, 404)
+    updates = {
+        "permissions": _normalize_permissions(body(request).get("permissions")),
+        "updated_at": iso_now(),
+    }
+    members[member_id] = {**member, **updates}
+    _save_tenant_team_members(tenant_id, members)
+    return ok({"success": True, "message": "Permissions saved", "member": _team_member_payload(member_id, {**member, **updates})})
+
+
+
+
+@csrf_exempt
+@api_view(["GET", "POST"])
+@tenant_required
+def payments(request):
+    if method(request, "GET"):
+        payments_data = list_children(f"tenants/{request.tenant['id']}/payments")
+        status_filter = request.GET.get("status")
+        from_date = parse_date(request.GET.get("from"))
+        to_date = parse_date(request.GET.get("to"))
+        if status_filter and status_filter != "all":
+            payments_data = [item for item in payments_data if item.get("status") == status_filter]
+        if from_date or to_date:
+            filtered = []
+            for item in payments_data:
+                current = payment_date(item)
+                if not current:
+                    continue
+                if from_date and current < from_date:
+                    continue
+                if to_date and current > to_date:
+                    continue
+                filtered.append(item)
+            payments_data = filtered
+        return as_collection_response(request, payments_data)
+    data = body(request)
+    if not data.get("phone"):
+        return ok({"message": "Customer phone is required"}, 400)
+    phone = normalize_phone(data["phone"])
+    payment_ref = ref(f"tenants/{request.tenant['id']}/payments").push(
+        {
+            "customer_id": data.get("customer_id"),
+            "customer_name": data.get("customer_name"),
+            "package_name": data.get("package_name"),
+            "service_type": data.get("service_type") or "pppoe",
+            "amount": float(data.get("amount") or 0),
+            "payment_code": None,
+            "phone": phone,
+            "status": "pending",
+            "paid_at": None,
+            "initiated_at": iso_now(),
+            "provider": "paystack",
+        }
+    )
+    try:
+        checkout = initiate_paystack_payment(
+            request.tenant,
+            payment_ref.key,
+            data.get("amount"),
+            email=data.get("email"),
+            phone=phone,
+            description=f"{data.get('package_name') or 'Internet'} payment",
+            metadata={
+                "customer_id": data.get("customer_id"),
+                "customer_name": data.get("customer_name"),
+                "package_name": data.get("package_name"),
+                "service_type": data.get("service_type") or "pppoe",
+            },
+        )
+    except PaymentProviderError as exc:
+        payment_ref.update({"status": "failed", "failed_at": iso_now(), "callback_result_desc": exc.detail})
+        return ok({"success": False, "message": exc.public_message, "paymentId": payment_ref.key}, exc.status_code)
+    payment_ref.update(
+        {
+            "paystack_reference": checkout.get("reference"),
+            "paystack_access_code": checkout.get("access_code"),
+            "paystack_authorization_url": checkout.get("authorization_url"),
+            "paystack_customer_email": checkout.get("customer_email"),
+            "currency": checkout.get("currency"),
+            "checkout_requested_at": iso_now(),
+        }
+    )
+    return ok({"success": True, "message": "Paystack checkout created", "paymentId": payment_ref.key, "reference": checkout.get("reference"), "authorizationUrl": checkout.get("authorization_url")})
+
+
+@csrf_exempt
+@api_view(["POST"])
+@tenant_required
+def payment_mark_paid(request, payment_id):
+    payment = ref(f"tenants/{request.tenant['id']}/payments/{payment_id}").get()
+    if not payment:
+        return ok({"message": "Payment not found"}, 404)
+    payment_code = payment.get("payment_code") or payment.get("paystack_reference") or f"CASH-{secrets.token_hex(4).upper()}"
+    updates = {
+        "status": "success",
+        "provider": payment.get("provider") or "cash",
+        "payment_code": payment_code,
+        "paid_at": iso_now(),
+        "callback_result_code": "manual",
+        "callback_result_desc": "Marked as paid by operator",
+    }
+    ref(f"tenants/{request.tenant['id']}/payments/{payment_id}").update(updates)
+    try:
+        activate_paid_access(request.tenant, payment_id, {**payment, **updates}, payment.get("phone"), payment_code)
+    except Exception as exc:
+        ref(f"tenants/{request.tenant['id']}/payments/{payment_id}").update({"access_status": "activation_failed", "callback_result_desc": str(exc)})
+        return ok({"success": True, "message": "Payment marked paid, but router activation failed", "activation_error": str(exc)})
+    return ok({"success": True, "message": "Payment marked as paid and access activated"})
+
+
+@csrf_exempt
+@api_view(["POST"])
+@tenant_required
+def customer_renew(request, customer_id):
+    data = body(request)
+    customer = ref(f"tenants/{request.tenant['id']}/customers/{customer_id}").get()
+    if not customer:
+        return ok({"message": "Customer not found"}, 404)
+    package_id = data.get("package_id")
+    package = ref(f"tenants/{request.tenant['id']}/packages/{package_id}").get() if package_id else find_child_by_field(f"tenants/{request.tenant['id']}/packages", "name", customer.get("package"))
+    if not package or package.get("is_active") is False:
+        return ok({"message": "Active package not found"}, 404)
+    payment_ref = ref(f"tenants/{request.tenant['id']}/payments").push(
+        {
+            "customer_id": customer_id,
+            "customer_name": customer.get("name"),
+            "package_id": package_id or package.get("id"),
+            "package_name": package.get("name"),
+            "service_type": customer.get("service_type") or "pppoe",
+            "amount": float(package.get("price") or 0),
+            "payment_code": f"MANUAL-{secrets.token_hex(4).upper()}",
+            "phone": customer.get("phone"),
+            "status": "success",
+            "paid_at": iso_now(),
+            "initiated_at": iso_now(),
+            "provider": data.get("provider") or "cash",
+            "source": "manual_renewal",
+        }
+    )
+    try:
+        activate_paid_access(request.tenant, payment_ref.key, {**payment_ref.instance.as_dict(), "package_name": package.get("name")}, customer.get("phone"), payment_ref.instance.payment_code)
+    except Exception as exc:
+        payment_ref.update({"access_status": "activation_failed", "callback_result_desc": str(exc)})
+        return ok({"success": True, "message": "Renewal saved, but router activation failed", "paymentId": payment_ref.key, "activation_error": str(exc)})
+    return ok({"success": True, "message": "Customer renewed and access activated", "paymentId": payment_ref.key})
+
+
+def tenant_payments(tenant_id):
+    return list_children(f"tenants/{tenant_id}/payments")
+
+
+def tenant_customers(tenant_id):
+    return list_children(f"tenants/{tenant_id}/customers")
+
+
+def tenant_packages(tenant_id):
+    return list_children(f"tenants/{tenant_id}/packages")
+
+
+def month_key(value):
+    dt = parse_date(value)
+    return dt.strftime("%b") if dt else ""
+
+
+def in_range(item_date, start, end):
+    if not item_date:
+        return False
+    if start and item_date < start:
+        return False
+    if end and item_date > end:
+        return False
+    return True
+
+
+@csrf_exempt
+@api_view(["GET"])
+@tenant_required
+def dashboard_stats(request):
+    tenant_id = request.tenant["id"]
+    payments_data = tenant_payments(tenant_id)
+    customers_data = tenant_customers(tenant_id)
+    packages_data = tenant_packages(tenant_id)
+    now = utcnow()
+    today = now.date()
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    paid_payments = [p for p in payments_data if p.get("status") == "success"]
+    revenue_this_month = sum(float(p.get("amount") or 0) for p in paid_payments if (payment_date(p) or now) >= month_start)
+    revenue_today = sum(float(p.get("amount") or 0) for p in paid_payments if payment_date(p) and payment_date(p).date() == today)
+
+    last_12 = []
+    for offset in range(11, -1, -1):
+        year = now.year
+        month = now.month - offset
+        while month <= 0:
+            month += 12
+            year -= 1
+        label = datetime(year, month, 1).strftime("%b")
+        total = sum(float(p.get("amount") or 0) for p in paid_payments if (payment_date(p) and payment_date(p).year == year and payment_date(p).month == month))
+        last_12.append([label, round(total, 2)])
+
+    days = []
+    for offset in range(6, -1, -1):
+        day = (now - timedelta(days=offset)).date()
+        label = day.strftime("%a")
+        active = len([c for c in customers_data if c.get("status") == "active"])
+        new = len([c for c in customers_data if parse_date(c.get("created_at")) and parse_date(c.get("created_at")).date() == day])
+        days.append([label, active, new])
+
+    package_counts = Counter(c.get("package") or "Unassigned" for c in customers_data)
+    palette = ["#fa8200", "#2563eb", "#16a34a", "#dc2626", "#9333ea", "#0f766e"]
+    package_utilization = [[name, count, palette[index % len(palette)]] for index, (name, count) in enumerate(package_counts.items())]
+    package_revenue = defaultdict(float)
+    for payment in paid_payments:
+        package_revenue[payment.get("package_name") or "Unassigned"] += float(payment.get("amount") or 0)
+    # Enrich customer data with RADIUS session data usage when available
+    radius_data_usage = {}
+    try:
+        from billing_api.models import RadiusSession as RadiusSessionModel
+        from django.db.models import Sum
+        from datetime import timedelta as td
+
+        month_ago = now - td(days=30)
+        sessions = RadiusSessionModel.objects.filter(
+            tenant_id=tenant_id,
+            started_at__gte=month_ago,
+        ).values("customer__username").annotate(
+            total_input=Sum("input_octets"),
+            total_output=Sum("output_octets"),
+        )
+        for s in sessions:
+            username = s["customer__username"] or ""
+            radius_data_usage[username] = float((s["total_input"] or 0) + (s["total_output"] or 0))
+    except Exception:
+        pass
+
+    # Compute avg_data_usage per package from RADIUS sessions
+    radius_package_usage = defaultdict(float)
+    radius_package_count = defaultdict(int)
+    try:
+        from billing_api.models import RadiusSession as RadiusSessionModel
+        from django.db.models import Sum, Count
+
+        month_ago = now - td(days=30)
+        pkg_sessions = RadiusSessionModel.objects.filter(
+            tenant_id=tenant_id,
+            started_at__gte=month_ago,
+        ).values("customer__package").annotate(
+            total_input=Sum("input_octets"),
+            total_output=Sum("output_octets"),
+            session_count=Count("id"),
+        )
+        for s in pkg_sessions:
+            pkg_name = s["customer__package"] or "Unassigned"
+            total_bytes = float((s["total_input"] or 0) + (s["total_output"] or 0))
+            radius_package_usage[pkg_name] += total_bytes
+            radius_package_count[pkg_name] += int(s["session_count"] or 0)
+    except Exception:
+        pass
+
+    package_performance = []
+    for package in packages_data:
+        name = package.get("name")
+        active_count = len([c for c in customers_data if c.get("package") == name and c.get("status") == "active"])
+        revenue = package_revenue.get(name, 0)
+        # Use real RADIUS data usage if available, fall back to package field
+        if name in radius_package_usage and radius_package_count.get(name, 0) > 0:
+            avg_bytes = radius_package_usage[name] / radius_package_count[name]
+            avg_usage_mb = round(avg_bytes / (1024 * 1024), 2)
+        else:
+            avg_usage_mb = float(package.get("avg_data_usage") or 0)
+        package_performance.append(
+            {
+                "name": name,
+                "price": float(package.get("price") or 0),
+                "active_users": active_count,
+                "monthly_revenue": round(revenue, 2),
+                "avg_data_usage": avg_usage_mb,
+                "arpu": round(revenue / active_count, 2) if active_count else 0,
+                "sync_status": package.get("ppp_profile_status") or "pending",
+            }
+        )
+
+    pppoe_customers = [c for c in customers_data if str(c.get("service_type") or "pppoe").lower() == "pppoe"]
+    hotspot_customers = [c for c in customers_data if str(c.get("service_type") or "hotspot").lower() == "hotspot"]
+    active_hotspot_users = [
+        c for c in hotspot_customers
+        if str(c.get("status") or "").lower() == "active"
+    ]
+    snapshot = request.tenant.get("mikrotik_router_snapshot") or {}
+    device = snapshot.get("device") or {}
+    cpu_load = device.get("cpu_load")
+    router_status = "suspended" if request.tenant.get("mikrotik_router_suspended") else "online" if request.tenant.get("mikrotik_last_seen_at") else "offline"
+    active_ratio = (len([c for c in customers_data if c.get("status") == "active"]) / len(customers_data) * 100) if customers_data else 0
+
+    return ok(
+        {
+            "summary": {
+                "revenue_this_month": round(revenue_this_month, 2),
+                "revenue_today": round(revenue_today, 2),
+                "sms_balance": float(request.tenant.get("sms_balance") or 0),
+                "total_customers": len(customers_data),
+                "pppoe_customers": len(pppoe_customers),
+                "hotspot_customers": len(hotspot_customers),
+                "active_customers": len([c for c in customers_data if c.get("status") == "active"]),
+            },
+            "router_health": {
+                "status": router_status,
+                "board_name": device.get("board_name") or request.tenant.get("mikrotik_detected_board"),
+                "cpu_load_percent": cpu_load,
+                "internet_strength_percent": 96 if router_status == "online" else 0 if router_status == "offline" else 62,
+                "traffic_percent": round(min(active_ratio, 100), 1),
+            },
+            "payments_chart": last_12,
+            "active_users_chart": days,
+            "retention_chart": [[item[0], item[1], max(0, item[1] - item[2]), 90] for item in days[-6:]],
+            "data_usage_chart": [[item[0], float(index * 8 + item[1])] for index, item in enumerate(days[-8:])],
+            "package_utilization": package_utilization,
+            "revenue_forecast": last_12[-6:] + [[f"+{i}", round((last_12[-1][1] if last_12 else 0) * (1 + i * 0.05), 2)] for i in range(1, 4)],
+            "sms_chart": [[item[0], int(request.tenant.get("sms_sent_today") or 0)] for item in days],
+            "most_active_users": sorted(
+                [
+                    {
+                        "username": c.get("username") or c.get("phone"),
+                        "phone": c.get("phone"),
+                        "data_used": radius_data_usage.get(
+                            c.get("username"),
+                            float(c.get("data_used") or c.get("data_usage") or 0),
+                        ),
+                    }
+                    for c in customers_data
+                ],
+                key=lambda item: item["data_used"],
+                reverse=True,
+            )[:6],
+            "top_hotspot_active_users": sorted(
+                [
+                    {
+                        "username": c.get("username") or c.get("phone"),
+                        "phone": c.get("phone"),
+                        "data_used": radius_data_usage.get(
+                            c.get("username"),
+                            float(c.get("data_used") or c.get("data_usage") or 0),
+                        ),
+                    }
+                    for c in active_hotspot_users
+                ],
+                key=lambda item: item["data_used"],
+                reverse=True,
+            )[:5],
+            "package_performance": package_performance,
+        }
+    )
+
+
+@csrf_exempt
+@api_view(["GET"])
+@tenant_required
+def report_revenue(request):
+    start = parse_date(request.GET.get("from"))
+    end = parse_date(request.GET.get("to"))
+    monthly = defaultdict(float)
+    for payment in tenant_payments(request.tenant["id"]):
+        dt = payment_date(payment)
+        if payment.get("status") == "success" and in_range(dt, start, end):
+            monthly[dt.strftime("%Y-%m")] += float(payment.get("amount") or 0)
+    rows = [{"month": key, "revenue": round(value, 2)} for key, value in sorted(monthly.items())]
+    return ok({"results": rows, "total": round(sum(item["revenue"] for item in rows), 2)})
+
+
+@csrf_exempt
+@api_view(["GET"])
+@tenant_required
+def report_customers(request):
+    start = parse_date(request.GET.get("from"))
+    end = parse_date(request.GET.get("to"))
+    monthly = defaultdict(int)
+    customers_data = tenant_customers(request.tenant["id"])
+    for customer in customers_data:
+        dt = parse_date(customer.get("created_at"))
+        if in_range(dt, start, end):
+            monthly[dt.strftime("%Y-%m")] += 1
+    expired = len([c for c in customers_data if c.get("expiry_date") and str(c.get("expiry_date")) < iso_now()])
+    return ok({"results": [{"month": key, "new_customers": value} for key, value in sorted(monthly.items())], "total_customers": len(customers_data), "expired_customers": expired})
+
+
+@csrf_exempt
+@api_view(["GET"])
+@tenant_required
+def report_packages(request):
+    customers_data = tenant_customers(request.tenant["id"])
+    payments_data = [p for p in tenant_payments(request.tenant["id"]) if p.get("status") == "success"]
+    rows = []
+    for package in tenant_packages(request.tenant["id"]):
+        name = package.get("name")
+        revenue = sum(float(p.get("amount") or 0) for p in payments_data if p.get("package_name") == name)
+        rows.append({"package": name, "price": float(package.get("price") or 0), "active_customers": len([c for c in customers_data if c.get("package") == name and c.get("status") == "active"]), "revenue": round(revenue, 2)})
+    return ok({"results": rows})
+
+
+@csrf_exempt
+@api_view(["GET"])
+@tenant_required
+def report_expenses(request):
+    expenses = request.tenant.get("expenses") or []
+    if not isinstance(expenses, list):
+        expenses = []
+    by_category = defaultdict(float)
+    for expense in expenses:
+        by_category[expense.get("category") or "Other"] += float(expense.get("amount") or 0)
+    revenue = sum(float(p.get("amount") or 0) for p in tenant_payments(request.tenant["id"]) if p.get("status") == "success")
+    total_expenses = sum(by_category.values())
+    return ok({"results": [{"category": key, "amount": round(value, 2)} for key, value in sorted(by_category.items())], "total_expenses": round(total_expenses, 2), "net_revenue": round(revenue - total_expenses, 2)})
+
+
+@csrf_exempt
+@api_view(["GET", "PATCH"])
+@tenant_required
+def settings_business(request):
+    tenant_id = request.tenant["id"]
+    if method(request, "GET"):
+        return ok(tenant_theme_payload(request.tenant))
+
+    data = body(request)
+    allowed = [
+        "business_name",
+        "owner_name",
+        "phone",
+        "support_email",
+        "theme_color",
+        "font",
+        "dark_mode",
+        "theme_mode",
+        "business_number",
+        "bank_code",
+        "bank_name",
+        "bank_account_number",
+        "paystack_platform_percentage",
+        "payment_methods",
+        "payment_provider",
+        "daraja_consumer_key",
+        "daraja_consumer_secret",
+        "daraja_shortcode",
+        "daraja_passkey",
+        "daraja_environment",
+        "daraja_till_number",
+        "daraja_shortcode_type",
+    ]
+    updates = {}
+    for field in allowed:
+        if field in data:
+            if field == "dark_mode":
+                updates[field] = bool(data[field])
+            elif field == "payment_methods":
+                requested = data[field] if isinstance(data[field], list) else [data[field]]
+                updates[field] = [str(item).strip().lower() for item in requested if str(item).strip() in {"bank", "paybill", "buygoods", "daraja_paybill", "daraja_buygoods"}]
+            elif field == "payment_provider":
+                candidate = str(data[field]).strip().lower()
+                updates[field] = candidate if candidate in {"paystack", "mpesa"} else "paystack"
+            else:
+                updates[field] = str(data[field]).strip()
+    if updates.get("theme_mode") not in {None, "light", "dark", "system"}:
+        updates["theme_mode"] = "light"
+    if "theme_mode" in updates:
+        updates["dark_mode"] = updates["theme_mode"] == "dark"
+    if "theme_color" in updates and not updates["theme_color"].startswith("#"):
+        updates["theme_color"] = f"#{updates['theme_color']}"
+    updates["business_settings_updated_at"] = iso_now()
+
+    merged = {**request.tenant, **updates}
+    if data.get("create_subaccount"):
+        try:
+            updates.update(create_or_update_tenant_subaccount(tenant_id, merged, merged))
+        except PaymentProviderError as exc:
+            updates.update({"paystack_subaccount_status": "failed", "paystack_subaccount_error": exc.detail})
+            ref(f"tenants/{tenant_id}").update(updates)
+            return ok({"success": False, "message": exc.public_message, "config": tenant_theme_payload({**merged, **updates})}, exc.status_code)
+
+    ref(f"tenants/{tenant_id}").update(updates)
+    return ok({"success": True, "message": "Business settings saved", "config": tenant_theme_payload({**merged, **updates})})
+
+
+@csrf_exempt
+@api_view(["GET", "PATCH"])
+@tenant_required
+def profile(request):
+    if method(request, "GET"):
+        return ok({"owner_name": request.tenant.get("owner_name") or "", "email": request.tenant.get("email") or "", "phone": request.tenant.get("phone") or "", "business_name": request.tenant.get("business_name") or ""})
+    data = body(request)
+    updates = {}
+    if "owner_name" in data:
+        updates["owner_name"] = str(data.get("owner_name") or "").strip()
+    if "phone" in data:
+        updates["phone"] = str(data.get("phone") or "").strip()
+    if "email" in data and str(data.get("email") or "").strip().lower() != request.tenant.get("email"):
+        if not check_password(data.get("current_password", ""), request.tenant.get("password")):
+            return ok({"message": "Current password is required to change email"}, 400)
+        updates["email"] = str(data["email"]).strip().lower()
+    if data.get("new_password"):
+        if not check_password(data.get("current_password", ""), request.tenant.get("password")):
+            return ok({"message": "Current password is incorrect"}, 400)
+        if data.get("new_password") != data.get("confirm_password"):
+            return ok({"message": "New password and confirmation do not match"}, 400)
+        updates["password"] = hash_password(data["new_password"])
+    if not updates:
+        return ok({"message": "No profile fields provided"}, 400)
+    ref(f"tenants/{request.tenant['id']}").update({**updates, "profile_updated_at": iso_now()})
+    return ok({"success": True, "message": "Profile updated"})
+
+
+@csrf_exempt
+@api_view(["POST"])
+@tenant_required
+def settings_logo(request):
+    upload = request.FILES.get("logo")
+    if not upload:
+        return ok({"message": "Logo file is required"}, 400)
+    if upload.size > 2 * 1024 * 1024:
+        return ok({"message": "Logo must be smaller than 2MB"}, 400)
+    ext = Path(upload.name).suffix.lower()
+    if ext not in {".png", ".jpg", ".jpeg", ".webp", ".svg"}:
+        return ok({"message": "Logo must be PNG, JPG, WEBP, or SVG"}, 400)
+    storage = FileSystemStorage(location=Path(settings.MEDIA_ROOT) / "tenant-logos", base_url=f"{settings.MEDIA_URL}tenant-logos/")
+    filename = storage.save(f"tenant-{request.tenant['id']}{ext}", upload)
+    logo_url = storage.url(filename)
+    ref(f"tenants/{request.tenant['id']}").update({"logo_url": logo_url, "logo_updated_at": iso_now()})
+    return ok({"success": True, "message": "Logo uploaded", "logo_url": logo_url})
+
+
+@csrf_exempt
+@api_view(["POST"])
+@tenant_required
+def settings_test_sms(request):
+    data = body(request)
+    phone = normalize_phone(data.get("phone") or request.tenant.get("phone"))
+    if not phone:
+        return ok({"message": "Phone number is required"}, 400)
+    return ok({"success": True, "message": "Test SMS queued", "phone": phone})
+
+
+@csrf_exempt
+@api_view(["GET", "POST", "PATCH", "DELETE"])
+@tenant_required
+def tickets(request, ticket_id=None):
+    tenant_id = request.tenant["id"]
+    if method(request, "GET") and not ticket_id:
+        items = list_children(f"tenants/{tenant_id}/tickets")
+        status_filter = request.GET.get("status")
+        if status_filter and status_filter != "all":
+            items = [item for item in items if item.get("status") == status_filter]
+        return as_collection_response(request, items)
+    if method(request, "POST") and not ticket_id:
+        data = body(request)
+        if not data.get("title"):
+            return ok({"message": "Ticket title is required"}, 400)
+        ticket_ref = ref(f"tenants/{tenant_id}/tickets").push(
+            {
+                "title": str(data.get("title") or "").strip(),
+                "description": str(data.get("description") or "").strip(),
+                "customer_id": str(data.get("customer_id") or "").strip(),
+                "status": data.get("status") or "open",
+                "priority": data.get("priority") or "medium",
+            }
+        )
+        return ok({"success": True, "message": "Ticket created", "ticketId": ticket_ref.key}, 201)
+    if not ticket_id:
+        return ok({"message": "Ticket id is required"}, 400)
+    ticket = ref(f"tenants/{tenant_id}/tickets/{ticket_id}").get()
+    if not ticket:
+        return ok({"message": "Ticket not found"}, 404)
+    if method(request, "PATCH"):
+        data = body(request)
+        allowed = ["title", "description", "customer_id", "status", "priority"]
+        updates = {field: data[field] for field in allowed if field in data}
+        if updates.get("status") in {"resolved", "closed"} and not ticket.get("resolved_at"):
+            updates["resolved_at"] = iso_now()
+        updates["updated_at"] = iso_now()
+        ref(f"tenants/{tenant_id}/tickets/{ticket_id}").update(updates)
+        return ok({"success": True, "message": "Ticket updated", "ticket": {"id": ticket_id, **ticket, **updates}})
+    if method(request, "DELETE"):
+        ref(f"tenants/{tenant_id}/tickets/{ticket_id}").delete()
+        return ok({"success": True, "message": "Ticket deleted"})
+    return ok({"message": "Method not allowed"}, 405)
+
+
+@csrf_exempt
+@api_view(["POST"])
+@tenant_required
+def settings_delete_customers(request):
+    data = body(request)
+    if str(data.get("confirm") or "").strip() != str(request.tenant.get("business_name") or "").strip():
+        return ok({"message": "Type your business name exactly to confirm"}, 400)
+    customers_data = list_children(f"tenants/{request.tenant['id']}/customers")
+    for customer in customers_data:
+        try:
+            delete_router_customer(request.tenant, customer.get("username"), customer.get("service_type") or "pppoe")
+        except Exception:
+            pass
+        ref(f"tenants/{request.tenant['id']}/customers/{customer['id']}").delete()
+    return ok({"success": True, "message": f"Deleted {len(customers_data)} customers"})
+
+
+@csrf_exempt
+@api_view(["GET", "PATCH"])
+@tenant_required
+def settings_mikrotik(request):
+    if method(request, "GET"):
+        linked_routers = request.tenant.get("linked_routers") or {}
+        if _router_is_agent_linked(request.tenant) and not linked_routers:
+            linked_routers = {"primary": _linked_router_from_tenant(request.tenant)}
+        return ok({
+            "mikrotik_host": request.tenant.get("mikrotik_host", ""),
+            "mikrotik_user": request.tenant.get("mikrotik_user", ""),
+            "mikrotik_port": int(request.tenant.get("mikrotik_port") or 8728),
+            "has_mikrotik_password": bool(request.tenant.get("mikrotik_pass")),
+            "mikrotik_provisioning_status": request.tenant.get("mikrotik_provisioning_status", ""),
+            "mikrotik_provisioned_at": request.tenant.get("mikrotik_provisioned_at", ""),
+            "mikrotik_last_seen_at": request.tenant.get("mikrotik_last_seen_at", ""),
+            "mikrotik_last_seen_ip": request.tenant.get("mikrotik_last_seen_ip", ""),
+            "mikrotik_detected_identity": request.tenant.get("mikrotik_detected_identity", ""),
+            "mikrotik_detected_version": request.tenant.get("mikrotik_detected_version", ""),
+            "mikrotik_detected_board": request.tenant.get("mikrotik_detected_board", ""),
+            "linked_routers": linked_routers,
+            "router_port_assignments": request.tenant.get("router_port_assignments") or {},
+        })
+    data = body(request)
+    updates = {}
+    for field in ["mikrotik_host", "mikrotik_user", "mikrotik_pass"]:
+        if field in data and (field != "mikrotik_pass" or str(data[field]).strip()):
+            updates[field] = str(data[field]).strip() if field != "mikrotik_pass" else str(data[field])
+    if "mikrotik_port" in data:
+        updates["mikrotik_port"] = int(data.get("mikrotik_port") or 8728)
+    if "mikrotik_port" in updates and not 1 <= updates["mikrotik_port"] <= 65535:
+        return ok({"message": "MikroTik port must be between 1 and 65535"}, 400)
+    updates["mikrotik_updated_at"] = iso_now()
+    ref(f"tenants/{request.tenant['id']}").update(updates)
+    merged = {**request.tenant, **updates}
+    return ok({"success": True, "message": "MikroTik configuration saved", "config": {"mikrotik_host": merged.get("mikrotik_host", ""), "mikrotik_user": merged.get("mikrotik_user", ""), "mikrotik_port": int(merged.get("mikrotik_port") or 8728), "has_mikrotik_password": bool(merged.get("mikrotik_pass"))}})
+
+
+@csrf_exempt
+@api_view(["POST"])
+@tenant_required
+def settings_mikrotik_test(request):
+    candidate = {**request.tenant, **body(request)}
+    if not candidate.get("mikrotik_pass"):
+        return ok({"message": "MikroTik password is required to test the connection"}, 400)
+    try:
+        profiles = router_items(candidate, "ppp", "profile")
+        return ok({"success": True, "mode": "routeros_api", "message": "MikroTik live API connection successful.", "profile_count": len(profiles)})
+    except (TimeoutError, OSError) as exc:
+        live_error = str(exc)
+    except Exception as exc:
+        live_error = str(exc)
+
+    snapshot = request.tenant.get("mikrotik_router_snapshot") or {}
+    status = request.tenant.get("mikrotik_provisioning_status")
+    if status in {"script_downloaded", "completed"} or snapshot:
+        return ok({
+            "success": True,
+            "mode": "provisioning_callback",
+            "message": "Router provisioning is connected. The router successfully reached this app.",
+            "profile_count": len((snapshot.get("profiles") or {}).get("pppoe") or []),
+            "warning": f"Using provisioning snapshot/agent mode. Live RouterOS API is not reachable from the server yet: {live_error}",
+        })
+    return ok({"message": f"Unable to reach MikroTik live API. Confirm public host/port forwarding to {candidate.get('mikrotik_port') or 8728}: {live_error}"}, 400)
+
+
+@csrf_exempt
+@api_view(["GET", "PATCH"])
+@tenant_required
+def settings_notifications(request):
+    if method(request, "GET"):
+        return ok(
+            {
+                "provider": request.tenant.get("notification_provider") or "whatsapp_cloud",
+                "sms_enabled": request.tenant.get("sms_enabled") is not False,
+                "sms_on_maintenance": request.tenant.get("sms_on_maintenance") is not False,
+                "sms_on_promotions": request.tenant.get("sms_on_promotions") is not False,
+                "sms_on_payment": request.tenant.get("sms_on_payment") is not False,
+                "sms_template_maintenance": request.tenant.get("sms_template_maintenance") or "We will be performing scheduled maintenance. Thank you for your patience.",
+                "sms_template_promotion": request.tenant.get("sms_template_promotion") or "Special offer from {{business}}: {{message}}",
+                "sms_template_hotspot": request.tenant.get("sms_template_hotspot") or "Your hotspot package is active. Username: {{username}}, Password: {{password}}.",
+                "sms_template_pppoe": request.tenant.get("sms_template_pppoe") or "Your PPPoE package is active. Username: {{username}}, Password: {{password}}.",
+                "sms_balance": int(request.tenant.get("sms_balance") or 0),
+                "sms_sent_count": int(request.tenant.get("sms_sent_count") or 0),
+                "whatsapp_enabled": bool(request.tenant.get("whatsapp_enabled")) or os.getenv("WHATSAPP_ENABLED", "false").lower() in {"1", "true", "yes", "on"},
+                "roamtech_sender_id": request.tenant.get("roamtech_sender_id") or "",
+                "payment_sms_template": request.tenant.get("payment_sms_template") or "Hi {{name}}, your {{package}} payment of Ksh {{amount}} is confirmed. Username: {{username}}, Password: {{password}}.",
+                "payment_whatsapp_template": request.tenant.get("payment_whatsapp_template") or "Hi {{name}}, your {{package}} internet package is active. Amount: Ksh {{amount}}. Username: {{username}}, Password: {{password}}.",
+            }
+        )
+    data = body(request)
+    updates = {
+        "notification_provider": str(data.get("provider") or "whatsapp_cloud").strip(),
+        "sms_enabled": data.get("sms_enabled") is not False,
+        "sms_on_maintenance": data.get("sms_on_maintenance") is not False,
+        "sms_on_promotions": data.get("sms_on_promotions") is not False,
+        "sms_on_payment": data.get("sms_on_payment") is not False,
+        "sms_template_maintenance": str(data.get("sms_template_maintenance") or "").strip(),
+        "sms_template_promotion": str(data.get("sms_template_promotion") or "").strip(),
+        "sms_template_hotspot": str(data.get("sms_template_hotspot") or "").strip(),
+        "sms_template_pppoe": str(data.get("sms_template_pppoe") or "").strip(),
+        "whatsapp_enabled": bool(data.get("whatsapp_enabled")),
+        "roamtech_sender_id": str(data.get("roamtech_sender_id") or "").strip(),
+        "payment_sms_template": str(data.get("payment_sms_template") or "").strip(),
+        "payment_whatsapp_template": str(data.get("payment_whatsapp_template") or "").strip(),
+        "notifications_updated_at": iso_now(),
+    }
+    ref(f"tenants/{request.tenant['id']}").update(updates)
+    return ok({"success": True, "message": "Notification settings saved", "config": updates})
+
+
+def to_access_username(phone):
+    return "".join(ch for ch in str(phone or "") if ch.isdigit())
+
+
+def render_notification_template(template, context):
+    rendered = str(template or "")
+    for key, value in context.items():
+        rendered = rendered.replace("{{" + key + "}}", str(value if value is not None else ""))
+    return rendered
+
+
+def notify_payment_access(tenant, payment, access):
+    service_type = str(payment.get("service_type") or "hotspot").lower()
+    template = (tenant or {}).get("sms_template_pppoe" if service_type == "pppoe" else "sms_template_hotspot") or "Your package is active. Username: {{username}}, Password: {{password}}."
+    message = render_notification_template(
+        template,
+        {
+            "name": payment.get("customer_name") or payment.get("phone") or "customer",
+            "package": payment.get("package_name") or "",
+            "amount": payment.get("amount") or "",
+            "username": access.get("username") or access.get("mac_address") or "",
+            "password": access.get("password") or "",
+            "expires_at": access.get("expiry_date") or "",
+        },
+    )
+    results = {}
+    if (tenant or {}).get("sms_on_payment") is not False:
+        balance = int((tenant or {}).get("sms_balance") or 0)
+        if balance <= 0:
+            results["sms"] = {"sent": False, "skipped": "sms_balance_empty"}
+        else:
+            results["sms"] = send_sms_message(payment.get("phone"), message, tenant)
+            if results["sms"].get("sent"):
+                tenant_id = tenant.get("id")
+                if tenant_id:
+                    ref(f"tenants/{tenant_id}").update({"sms_balance": balance - 1, "sms_sent_count": int((tenant or {}).get("sms_sent_count") or 0) + 1})
+    if (tenant or {}).get("whatsapp_enabled") or os.getenv("WHATSAPP_ENABLED", "false").lower() in {"1", "true", "yes", "on"}:
+        whatsapp_template = (tenant or {}).get("payment_whatsapp_template") or message
+        results["whatsapp"] = send_whatsapp_message(payment.get("phone"), render_notification_template(whatsapp_template, {"name": payment.get("customer_name") or payment.get("phone") or "customer", "package": payment.get("package_name") or "", "amount": payment.get("amount") or "", "username": access.get("username") or "", "password": access.get("password") or ""}), tenant)
+    return results
+
+
+def activate_paid_access(tenant, payment_id, payment, phone, payment_code):
+    tenant_id = tenant["id"]
+    package_name = payment.get("package_name")
+    customers_data = list_children(f"tenants/{tenant_id}/customers")
+    customer = None
+    if payment.get("customer_id"):
+        customer = next((c for c in customers_data if str(c.get("id")) == str(payment.get("customer_id"))), None)
+    if not customer and payment.get("username"):
+        customer = next((c for c in customers_data if str(c.get("username") or "").lower() == str(payment.get("username") or "").lower()), None)
+    if not customer and phone:
+        customer = next((c for c in customers_data if str(c.get("phone")) == str(phone)), None)
+    service_type = payment.get("service_type") or (customer or {}).get("service_type") or "hotspot"
+    package_for_access = package_name or (customer or {}).get("package")
+    pkg = find_child_by_field(f"tenants/{tenant_id}/packages", "name", package_for_access)
+    duration = package_duration_delta(pkg)
+    duration_seconds = int(duration.total_seconds())
+    expiry = utcnow() + duration
+    mac_address = normalize_mac(payment.get("mac_address") or (customer or {}).get("mac_address"))
+    username = mac_address if service_type == "tv" else (payment.get("username") or (customer or {}).get("username") or to_access_username(phone))
+    password = str(payment_code)
+    if customer:
+        updates = {"username": username, "password": password, "package": package_for_access, "service_type": service_type, "status": "active", "expiry_date": expiry.isoformat(), "last_payment_id": payment_id, "last_payment_code": payment_code, "auto_reconnect": True, "updated_at": iso_now()}
+        if mac_address:
+            updates["mac_address"] = mac_address
+        ref(f"tenants/{tenant_id}/customers/{customer['id']}").update(updates)
+        customer_id = customer["id"]
+    else:
+        new_ref = ref(f"tenants/{tenant_id}/customers").push({"name": mac_address or phone, "phone": phone, "username": username, "password": password, "package": package_for_access, "service_type": service_type, "status": "active", "expiry_date": expiry.isoformat(), "last_payment_id": payment_id, "last_payment_code": payment_code, "auto_reconnect": True, "mac_address": mac_address, "created_at": iso_now()})
+        customer_id = new_ref.key
+    if service_type == "tv" and not mac_address:
+        raise ValueError("TV MAC address is required for activation")
+    if tenant.get("radius_enabled") and service_type in {"hotspot", "pppoe"}:
+        try:
+            from billing_api.radius_provisioning import sync_radius_customer, upsert_pg_customer
+
+            tenant_obj = Tenant.objects.get(pk=tenant_id)
+            pg_customer = upsert_pg_customer(
+                tenant_obj,
+                {
+                    "name": (customer or {}).get("name") or phone or username,
+                    "phone": phone,
+                    "username": username,
+                    "password": password,
+                    "package": package_for_access,
+                    "service_type": service_type,
+                    "status": "active",
+                    "expiry_date": expiry.isoformat(),
+                    "last_payment_id": payment_id,
+                    "last_payment_code": payment_code,
+                },
+            )
+            sync_radius_customer(tenant_obj, pg_customer or {"username": username, "password": password})
+            logger.info(
+                "Paid access prepared for RADIUS tenant=%s payment=%s username=%s service=%s package=%s expires_at=%s",
+                tenant_id,
+                payment_id,
+                username,
+                service_type,
+                package_for_access,
+                expiry.isoformat(),
+            )
+        except Exception as exc:
+            logger.warning("Paid access RADIUS sync failed tenant=%s payment=%s username=%s error=%s", tenant_id, payment_id, username, exc, exc_info=True)
+            raise
+    router_access_status = "active"
+    router_access_error = None
+    access_payload = {
+        "username": username,
+        "password": password,
+        "package_name": package_for_access,
+        "package": package_for_access,
+        "service_type": service_type,
+        "mac_address": mac_address,
+        "duration_seconds": duration_seconds,
+        "expires_at": expiry.isoformat(),
+        "status": "active",
+        "speed": (pkg or {}).get("speed"),
+    }
+    if tenant.get("radius_enabled") and service_type in {"hotspot", "pppoe"}:
+        router_access_status = "radius_ready"
+        router_access_error = None
+        logger.info(
+            "Paid access activation delegated to RADIUS tenant=%s payment=%s username=%s; MikroTik will create Hotspot session on login",
+            tenant_id,
+            payment_id,
+            username,
+        )
+    elif has_mikrotik_credentials(tenant):
+        try:
+            if service_type == "hotspot" and pkg:
+                create_hotspot_profile(tenant, pkg["name"], pkg.get("speed"), duration_seconds)
+            if service_type == "pppoe" and pkg:
+                create_ppp_profile(tenant, pkg["name"], pkg.get("speed"), duration_seconds)
+            upsert_customer_access(tenant, access_payload)
+            set_customer_enabled(tenant, username, service_type, True)
+        except Exception as exc:
+            if _router_is_agent_linked(tenant):
+                _queue_router_command_for_tenant(tenant_id, {"type": "sync_secrets", "script": _customer_secret_script(access_payload)})
+                router_access_status = "queued"
+                router_access_error = str(exc)
+            else:
+                raise
+    elif _router_is_agent_linked(tenant):
+        _queue_router_command_for_tenant(tenant_id, {"type": "sync_secrets", "script": _customer_secret_script(access_payload)})
+        router_access_status = "queued"
+    else:
+        router_access_status = "pending"
+        router_access_error = "No linked MikroTik router"
+    ref(f"tenants/{tenant_id}/payments/{payment_id}").update({"customer_id": customer_id, "access_username": username, "access_password": password, "access_mac_address": mac_address, "access_expires_at": expiry.isoformat(), "access_status": router_access_status, "access_error": router_access_error, "auto_reconnect": True})
+    access = {"username": username, "password": password, "mac_address": mac_address, "expiry_date": expiry.isoformat()}
+    try:
+        notify_result = notify_payment_access(tenant, {**payment, "phone": phone, "package_name": package_for_access}, access)
+        if notify_result:
+            sent_channels = [name for name, result in notify_result.items() if result.get("sent")]
+            skipped = "; ".join(f"{name}: {result.get('skipped')}" for name, result in notify_result.items() if result.get("skipped"))
+            ref(f"tenants/{tenant_id}/payments/{payment_id}").update({"notification_status": "sent" if sent_channels else "skipped", "notification_channels": sent_channels, "notification_detail": skipped})
+    except Exception as exc:
+        ref(f"tenants/{tenant_id}/payments/{payment_id}").update({"whatsapp_status": "failed", "whatsapp_detail": str(exc)})
+    return access
+
+
+def find_payment_by_paystack_reference(reference, tenant_id=None, payment_id=None):
+    tenant_ids = [tenant_id] if tenant_id else [tenant["id"] for tenant in list_children("tenants")]
+    for current_tenant_id in tenant_ids:
+        if not current_tenant_id:
+            continue
+        if payment_id:
+            payment = ref(f"tenants/{current_tenant_id}/payments/{payment_id}").get()
+            if payment:
+                return current_tenant_id, payment_id, payment
+        for item in list_children(f"tenants/{current_tenant_id}/payments"):
+            if item.get("paystack_reference") == reference:
+                return current_tenant_id, item["id"], item
+    return None, None, None
+
+
+def complete_paystack_payment(event_data):
+    reference = event_data.get("reference")
+    metadata = event_data.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    tenant_id, payment_id, payment = find_payment_by_paystack_reference(reference, metadata.get("tenant_id"), metadata.get("payment_id"))
+    if not tenant_id or not payment_id:
+        return False
+    if payment.get("status") == "success":
+        return True
+
+    expected_amount = round(float(payment.get("amount") or 0), 2)
+    paid_amount = round(float(event_data.get("amount") or 0) / 100, 2)
+    if expected_amount and paid_amount != expected_amount:
+        ref(f"tenants/{tenant_id}/payments/{payment_id}").update({
+            "status": "failed",
+            "failed_at": iso_now(),
+            "callback_result_desc": "Paid amount does not match the package amount",
+        })
+        return False
+
+    customer = event_data.get("customer") or {}
+    authorization = event_data.get("authorization") or {}
+    payment_code = reference or event_data.get("id")
+    phone = metadata.get("phone") or payment.get("phone")
+    update = {
+        "provider": "paystack",
+        "amount": paid_amount,
+        "currency": event_data.get("currency") or payment.get("currency"),
+        "payment_code": payment_code,
+        "paystack_reference": reference,
+        "paystack_transaction_id": event_data.get("id"),
+        "paystack_channel": event_data.get("channel"),
+        "paystack_paid_at": event_data.get("paid_at") or event_data.get("paidAt"),
+        "paystack_customer_email": customer.get("email") or payment.get("paystack_customer_email"),
+        "paystack_authorization_code": authorization.get("authorization_code"),
+        "phone": phone,
+        "status": "success",
+        "paid_at": iso_now(),
+        "callback_result_code": "success",
+        "callback_result_desc": event_data.get("gateway_response") or "Paystack charge successful",
+    }
+    ref(f"tenants/{tenant_id}/payments/{payment_id}").update(update)
+    tenant_data = ref(f"tenants/{tenant_id}").get() or {}
+    activate_paid_access({"id": tenant_id, **tenant_data}, payment_id, {**payment, **metadata}, phone, payment_code)
+    return True
+
+
+def paystack_secrets_to_try():
+    seen = set()
+    for secret in [os.getenv("PAYSTACK_SECRET_KEY")]:
+        if secret and "replace_with" not in secret and not secret.strip().endswith("_secret_key") and secret not in seen:
+            seen.add(secret)
+            yield secret
+
+
+@csrf_exempt
+@api_view(["POST"])
+def paystack_webhook(request):
+    signature = request.headers.get("x-paystack-signature") or request.headers.get("X-Paystack-Signature")
+    if not any(verify_paystack_signature(request.body, signature, secret) for secret in paystack_secrets_to_try()):
+        return ok({"message": "Invalid Paystack signature"}, 401)
+    event = body(request)
+    if event.get("event") == "charge.success":
+        event_data = event.get("data") or {}
+        reference = event_data.get("reference")
+        tenant_id, payment_id, payment = find_payment_by_paystack_reference(reference, (event_data.get("metadata") or {}).get("tenant_id"), (event_data.get("metadata") or {}).get("payment_id"))
+        if payment and payment.get("status") == "success":
+            return ok({"success": True})
+        if reference:
+            tenant = {"id": tenant_id, **(ref(f"tenants/{tenant_id}").get() or {})} if tenant_id else {}
+            try:
+                verified = verify_paystack_transaction(tenant, reference)
+                complete_paystack_payment(verified)
+            except Exception:
+                return ok({"success": False, "message": "Payment verification will be retried"}, 202)
+    return ok({"success": True})
+
+
+@csrf_exempt
+@api_view(["GET"])
+def paystack_callback(request):
+    reference = request.GET.get("reference") or request.GET.get("trxref")
+    if not reference:
+        return ok({"message": "Missing Paystack reference"}, 400)
+    tenant_id, payment_id, payment = find_payment_by_paystack_reference(reference)
+    if not tenant_id:
+        return ok({"message": "Payment not found"}, 404)
+    tenant = {"id": tenant_id, **(ref(f"tenants/{tenant_id}").get() or {})}
+    try:
+        verified = verify_paystack_transaction(tenant, reference)
+    except Exception:
+        return ok({"success": False, "message": "Payment verification is temporarily unavailable. Please refresh shortly."}, 202)
+    if verified.get("status") == "success":
+        if not complete_paystack_payment(verified):
+            return ok({"success": False, "message": "The paid amount did not match the package amount."}, 400)
+        if "text/html" in request.headers.get("accept", ""):
+            payment = ref(f"tenants/{tenant_id}/payments/{payment_id}").get() or payment or {}
+            query = {
+                "reference": reference,
+                "router_ip": payment.get("router_ip") or "",
+                "ip": payment.get("router_ip") or "",
+                "mac": payment.get("router_mac") or "",
+                "link_login": payment.get("link_login") or "",
+                "dst": payment.get("dst") or "",
+            }
+            return redirect(f"/api/captive/{tenant_id}?{urlencode({key: value for key, value in query.items() if value})}")
+        return ok({"success": True, "message": "Payment verified. You can return to the customer portal.", "paymentId": payment_id})
+    ref(f"tenants/{tenant_id}/payments/{payment_id}").update({"status": "failed", "callback_result_desc": verified.get("gateway_response") or "Paystack verification did not succeed", "failed_at": iso_now()})
+    return ok({"success": False, "message": "Payment was not successful"}, 400)
+
+
+def complete_daraja_payment(tenant_id, payment_id, callback_metadata, amount, receipt, paid_at, phone):
+    payment = ref(f"tenants/{tenant_id}/payments/{payment_id}").get()
+    if not payment:
+        logger.warning("Daraja callback payment not found tenant=%s payment=%s receipt=%s", tenant_id, payment_id, receipt)
+        return False
+    if payment.get("status") == "success":
+        return True
+
+    expected_amount = round(float(payment.get("amount") or 0), 2)
+    paid_amount = round(float(amount or 0), 2)
+    if expected_amount and paid_amount != expected_amount:
+        logger.warning(
+            "Daraja callback amount mismatch tenant=%s payment=%s expected=%s paid=%s receipt=%s",
+            tenant_id,
+            payment_id,
+            expected_amount,
+            paid_amount,
+            receipt,
+        )
+        ref(f"tenants/{tenant_id}/payments/{payment_id}").update({
+            "status": "failed",
+            "failed_at": iso_now(),
+            "callback_result_desc": "Paid amount does not match the package amount",
+        })
+        return False
+
+    update = {
+        "provider": "mpesa",
+        "amount": paid_amount,
+        "payment_code": receipt,
+        "daraja_receipt_number": receipt,
+        "daraja_paid_at": paid_at,
+        "phone": phone or payment.get("phone"),
+        "status": "success",
+        "paid_at": iso_now(),
+        "callback_result_code": "success",
+        "callback_result_desc": "M-Pesa payment successful",
+    }
+    ref(f"tenants/{tenant_id}/payments/{payment_id}").update(update)
+    tenant_data = ref(f"tenants/{tenant_id}").get() or {}
+    activate_paid_access({"id": tenant_id, **tenant_data}, payment_id, {**payment, **callback_metadata}, phone or payment.get("phone"), receipt)
+    logger.info("Daraja payment completed tenant=%s payment=%s receipt=%s phone=%s amount=%s", tenant_id, payment_id, receipt, phone or payment.get("phone"), paid_amount)
+    return True
+
+
+@csrf_exempt
+@api_view(["POST"])
+def daraja_callback(request, tenant_id, payment_id, token):
+    # Daraja has no request-signing mechanism — the per-payment token
+    # embedded in the callback URL at STK push time is what stops this
+    # endpoint from being used to spoof completion of an arbitrary payment.
+    if not verify_daraja_callback_token(tenant_id, payment_id, token):
+        logger.warning("Daraja callback rejected invalid token tenant=%s payment=%s", tenant_id, payment_id)
+        return ok({"success": False, "message": "Invalid callback token"}, 401)
+
+    event = body(request)
+    stk_callback = (((event or {}).get("Body") or {}).get("stkCallback")) or {}
+    result_code = stk_callback.get("ResultCode")
+    result_desc = stk_callback.get("ResultDesc") or ""
+
+    if str(result_code) != "0":
+        logger.warning(
+            "Daraja callback failed tenant=%s payment=%s result_code=%s result_desc=%s",
+            tenant_id,
+            payment_id,
+            result_code,
+            result_desc,
+        )
+        ref(f"tenants/{tenant_id}/payments/{payment_id}").update({
+            "status": "failed",
+            "failed_at": iso_now(),
+            "callback_result_code": result_code,
+            "callback_result_desc": result_desc or "M-Pesa payment was cancelled or failed",
+        })
+        # Always 200 back to Safaricom — they retry on non-2xx, we don't
+        # want retries for a customer-cancelled payment.
+        return ok({"success": True})
+
+    items = ((stk_callback.get("CallbackMetadata") or {}).get("Item")) or []
+    values = {item.get("Name"): item.get("Value") for item in items if isinstance(item, dict)}
+    amount = values.get("Amount")
+    receipt = values.get("MpesaReceiptNumber")
+    paid_at = values.get("TransactionDate")
+    phone = values.get("PhoneNumber")
+
+    try:
+        complete_daraja_payment(tenant_id, payment_id, {}, amount, receipt, paid_at, phone)
+    except Exception:
+        logger.exception("Daraja callback activation failed tenant=%s payment=%s receipt=%s", tenant_id, payment_id, receipt)
+        raise
+    return ok({"success": True})
+
+

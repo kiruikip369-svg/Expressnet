@@ -22,7 +22,7 @@ CSRF_TRUSTED_ORIGINS = sorted(
     {
         "https://web-production-b9d86.up.railway.app",
         "https://stumpiest-caudally-eloy.ngrok-free.dev",
-        "htttps://expressnetbilling.com",
+        "https://expressnetbilling.com",
         *env_list("CSRF_TRUSTED_ORIGINS"),
     }
 )
@@ -51,6 +51,8 @@ DATABASES = {
         ssl_require=env_bool("DATABASE_SSL_REQUIRE", database_ssl_default),
     )
 }
+if USE_DJANGO_TENANTS:
+    DATABASES["default"]["ENGINE"] = "django_tenants.postgresql_backend"
 # Ensure connection reuse so the 30s agent-poll burst (many sequential
 # snapshot fetches) does not exhaust Railway's Postgres proxy pool.
 DATABASES["default"]["CONN_MAX_AGE"] = 60

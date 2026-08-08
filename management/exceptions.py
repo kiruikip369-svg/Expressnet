@@ -1,0 +1,3 @@
+class ManagementError(Exception):
+    pass
+

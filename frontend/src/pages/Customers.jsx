@@ -8,8 +8,13 @@ import StatusBadge from '../components/StatusBadge';
 const initialForm = {
   name: '',
   phone: '',
+  location: '',
   username: '',
   password: '',
+  technician: '',
+  router_serial_number: '',
+  mikrotik_router_id: '',
+  support: '',
   package_name: '',
   service_type: 'pppoe',
   provision_mikrotik: true,
@@ -30,6 +35,7 @@ function formatDate(value) {
 export default function Customers({ initialFilter = 'all', serviceLocked = null, title = 'Users' }) {
   const [customers, setCustomers] = useState([]);
   const [packages, setPackages] = useState([]);
+  const [mikrotikRouters, setMikrotikRouters] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [payingId, setPayingId] = useState(null);
@@ -48,6 +54,13 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
       return map;
     }, {});
   }, [packages]);
+
+  const mikrotikRouterMap = useMemo(() => {
+    return mikrotikRouters.reduce((map, router) => {
+      map[router.id] = router;
+      return map;
+    }, {});
+  }, [mikrotikRouters]);
 
   const userStats = useMemo(() => {
     const active = customers.filter((customer) => customer.status === 'active').length;
@@ -76,7 +89,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
       if (statusFilter === 'pppoe' && (customer.service_type || 'pppoe') !== 'pppoe') return false;
       if (statusFilter === 'paused' && !['paused', 'suspended', 'inactive'].includes(String(customer.status || '').toLowerCase())) return false;
       if (statusFilter === 'offline' && !['offline', 'expired'].includes(String(customer.status || '').toLowerCase())) return false;
-      const haystack = `${customer.name || ''} ${customer.phone || ''} ${customer.username || ''} ${customer.package || ''}`.toLowerCase();
+      const haystack = `${customer.name || ''} ${customer.phone || ''} ${customer.location || ''} ${customer.username || ''} ${customer.package || ''} ${customer.technician || ''}`.toLowerCase();
       return haystack.includes(search.toLowerCase());
     });
   }, [customers, search, serviceLocked, statusFilter]);
@@ -92,12 +105,19 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
   async function load() {
     setLoading(true);
     try {
-      const [customerRes, packageRes] = await Promise.all([
+      const [customerRes, packageRes, mikrotikRes] = await Promise.all([
         api.get('/customers?all=1'),
         api.get('/packages?all=1'),
+        api.get('/settings/mikrotik'),
       ]);
       setCustomers(Array.isArray(customerRes.data) ? customerRes.data : customerRes.data.results || []);
       setPackages(Array.isArray(packageRes.data) ? packageRes.data : packageRes.data.results || []);
+      const linkedRouters = mikrotikRes.data?.linked_routers || {};
+      setMikrotikRouters(Object.entries(linkedRouters).map(([id, router]) => ({
+        id,
+        label: router.identity || router.board_name || router.name || `MikroTik ${id}`,
+        host: router.last_seen_ip || mikrotikRes.data?.mikrotik_host || '',
+      })));
     } catch (error) {
       toast.error(error.response?.data?.message || 'Failed to load customers');
     } finally {
@@ -122,6 +142,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
     if (!form.username.trim()) nextErrors.username = 'Username is required';
     if (!editingId && !form.password.trim()) nextErrors.password = 'Password is required';
     if (!form.package_name) nextErrors.package_name = 'Package is required';
+    if (form.provision_mikrotik && mikrotikRouters.length > 0 && !form.mikrotik_router_id) nextErrors.mikrotik_router_id = 'Select the MikroTik for this customer';
     setErrors(nextErrors);
     return Object.keys(nextErrors).length === 0;
   };
@@ -143,7 +164,12 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
         await api.patch(`/customers/${editingId}`, {
           name: form.name,
           phone: form.phone,
+          location: form.location,
           username: form.username,
+          technician: form.technician,
+          router_serial_number: form.router_serial_number,
+          mikrotik_router_id: form.mikrotik_router_id,
+          support: form.support,
           package: form.package_name,
           service_type: form.service_type || 'pppoe',
         });
@@ -166,8 +192,13 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
     setForm({
       name: customer.name || '',
       phone: customer.phone || '',
+      location: customer.location || '',
       username: customer.username || '',
       password: '',
+      technician: customer.technician || '',
+      router_serial_number: customer.router_serial_number || '',
+      mikrotik_router_id: customer.mikrotik_router_id || '',
+      support: customer.support || '',
       package_name: customer.package || '',
       provision_mikrotik: false,
       service_type: customer.service_type || 'pppoe',
@@ -193,7 +224,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
   };
 
   const exportCsv = () => {
-    const headers = ['name', 'phone', 'username', 'package', 'service_type', 'status', 'expiry_date'];
+    const headers = ['name', 'phone', 'location', 'username', 'package', 'service_type', 'technician', 'router_serial_number', 'mikrotik_router_id', 'support', 'status', 'expiry_date'];
     const csv = [headers.join(','), ...filteredCustomers.map((item) => headers.map((key) => JSON.stringify(item[key] ?? '')).join(','))].join('\n');
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
     const link = document.createElement('a');
@@ -312,7 +343,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
               className="form-input mt-0 pl-9"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search name, phone, username, package"
+              placeholder="Search name, phone, location, username, package"
             />
           </label>
           <div className="flex gap-4 text-xs text-slate-500">
@@ -323,13 +354,15 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
       </section>
 
       <div className="table-shell overflow-x-auto">
-        <table className="min-w-[900px] divide-y divide-slate-200">
+        <table className="min-w-[1120px] divide-y divide-slate-200">
           <thead className="table-head">
             <tr>
               <th className="px-3 py-2">Name</th>
               <th className="px-3 py-2">Phone</th>
+              <th className="px-3 py-2">Location</th>
               <th className="px-3 py-2">Username</th>
               <th className="px-3 py-2">Package</th>
+              <th className="px-3 py-2">Technician</th>
               <th className="px-3 py-2">MikroTik</th>
               <th className="px-3 py-2">Expiry</th>
               <th className="px-3 py-2">Status</th>
@@ -338,16 +371,23 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
           </thead>
           <tbody className="divide-y divide-slate-100">
             {loading ? (
-              <tr><td className="table-cell text-slate-500" colSpan="8">Loading customers...</td></tr>
+              <tr><td className="table-cell text-slate-500" colSpan="10">Loading customers...</td></tr>
             ) : filteredCustomers.length === 0 ? (
-              <tr><td className="table-cell text-slate-500" colSpan="8">No customers found.</td></tr>
+              <tr><td className="table-cell text-slate-500" colSpan="10">No customers found.</td></tr>
             ) : filteredCustomers.map((customer) => (
               <tr key={customer.id}>
                 <td className="table-cell px-3 font-medium text-slate-900">{customer.name}</td>
                 <td className="table-cell px-3">{customer.phone}</td>
+                <td className="table-cell px-3">{customer.location || '-'}</td>
                 <td className="table-cell px-3">{customer.username}</td>
                 <td className="table-cell px-3">{customer.package || '-'}</td>
-                <td className="table-cell px-3"><StatusBadge status={customer.provisioning_status || 'pending'} /></td>
+                <td className="table-cell px-3">{customer.technician || '-'}</td>
+                <td className="table-cell px-3">
+                  <div className="space-y-1">
+                    <p className="font-medium text-slate-900">{mikrotikRouterMap[customer.mikrotik_router_id]?.label || customer.mikrotik_router_id || '-'}</p>
+                    <StatusBadge status={customer.provisioning_status || 'pending'} />
+                  </div>
+                </td>
                 <td className={`table-cell px-3 ${expiryClass(customer.expiry_date)}`}>{formatDate(customer.expiry_date)}</td>
                 <td className="table-cell px-3"><StatusBadge status={customer.status} /></td>
                 <td className="table-cell sticky right-0 border-l border-slate-200 bg-white px-3">
@@ -385,7 +425,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
           <form className="space-y-4" onSubmit={addCustomer}>
             <div className="grid gap-4 sm:grid-cols-2">
               <div>
-                <label className="form-label" htmlFor="name">Name</label>
+                <label className="form-label" htmlFor="name">Full name</label>
                 <input id="name" name="name" className="form-input" value={form.name} onChange={update} />
                 {errors.name && <p className="form-error">{errors.name}</p>}
               </div>
@@ -393,6 +433,10 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
                 <label className="form-label" htmlFor="phone">Phone</label>
                 <input id="phone" name="phone" className="form-input" value={form.phone} onChange={update} />
                 {errors.phone && <p className="form-error">{errors.phone}</p>}
+              </div>
+              <div>
+                <label className="form-label" htmlFor="location">Location</label>
+                <input id="location" name="location" className="form-input" value={form.location} onChange={update} />
               </div>
               <div>
                 <label className="form-label" htmlFor="username">Username</label>
@@ -404,6 +448,30 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
                 <input id="password" name="password" type="password" className="form-input" value={form.password} onChange={update} />
                 {errors.password && <p className="form-error">{errors.password}</p>}
               </div>}
+              <div>
+                <label className="form-label" htmlFor="technician">Technician who attended</label>
+                <input id="technician" name="technician" className="form-input" value={form.technician} onChange={update} />
+              </div>
+              <div>
+                <label className="form-label" htmlFor="router_serial_number">Router serial number</label>
+                <input id="router_serial_number" name="router_serial_number" className="form-input" value={form.router_serial_number} onChange={update} />
+              </div>
+              <div>
+                <label className="form-label" htmlFor="mikrotik_router_id">Create in MikroTik</label>
+                <select id="mikrotik_router_id" name="mikrotik_router_id" className="form-input" value={form.mikrotik_router_id} onChange={update}>
+                  <option value="">Select installed MikroTik</option>
+                  {mikrotikRouters.map((router) => (
+                    <option key={router.id} value={router.id}>
+                      {router.label}{router.host ? ` - ${router.host}` : ''}
+                    </option>
+                  ))}
+                </select>
+                {errors.mikrotik_router_id && <p className="form-error">{errors.mikrotik_router_id}</p>}
+              </div>
+              <div>
+                <label className="form-label" htmlFor="support">Support</label>
+                <input id="support" name="support" className="form-input" value={form.support} onChange={update} />
+              </div>
               {!serviceLocked && (
                 <div className="sm:col-span-2">
                   <label className="form-label" htmlFor="service_type">Service type</label>

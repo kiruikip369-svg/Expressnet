@@ -1,0 +1,3 @@
+class ManagementPermission:
+    pass
+

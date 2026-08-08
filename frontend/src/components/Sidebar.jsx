@@ -10,7 +10,6 @@ import {
   Router,
   Settings,
   Ticket,
-  Users,
   WalletCards,
   X,
 } from 'lucide-react';
@@ -21,15 +20,14 @@ const sections = [
     links: [{ to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard }],
   },
   {
-    title: 'Users',
+    title: '',
     links: [
-      { to: '/customers', label: 'Users', icon: Users },
       { to: '/pppoe-customers', label: 'Customers', icon: CreditCard },
-      { to: '/tickets', label: 'Tickets', icon: Ticket },
+      { to: '/tickets', label: 'Tasks', icon: Ticket },
     ],
   },
   {
-    title: 'Finance',
+    title: '',
     links: [
       { to: '/packages', label: 'Packages', icon: Package },
       { to: '/payments', label: 'Payments', icon: CreditCard },
@@ -39,21 +37,21 @@ const sections = [
     ],
   },
   {
-    title: 'Communication',
+    title: '',
     links: [
       { to: '/messages', label: 'Messages', icon: MessageSquare },
       { to: '/emails', label: 'Emails', icon: Mail },
     ],
   },
   {
-    title: 'Devices',
+    title: '',
     links: [
       { to: '/mikrotik', label: 'MikroTik', icon: Router },
-      { to: '/equipment', label: 'Equipment', icon: Gauge },
+      { to: '/equipment', label: 'Tools / Equipment', icon: Gauge },
     ],
   },
   {
-    title: 'System',
+    title: '',
     links: [
       { to: '/settings', label: 'Settings', icon: Settings },
     ],

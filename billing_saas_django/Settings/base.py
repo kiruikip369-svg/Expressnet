@@ -26,25 +26,57 @@ def env_path(name, default):
     return value or default.strip("/")
 
 
+def unique_apps(apps):
+    return list(dict.fromkeys(apps))
+
+
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY") or "dev-only-change-me"
 API_BASE_PATH = env_path("API_BASE_PATH", "api")
 ADMIN_API_PATH = env_path("ADMIN_API_PATH", "admin")
 ADMIN_FRONTEND_PATH = env_path("ADMIN_FRONTEND_PATH", "admin")
 
-INSTALLED_APPS = [
+USE_DJANGO_TENANTS = env_bool("USE_DJANGO_TENANTS", False)
+TENANT_BASE_DOMAIN = os.getenv("TENANT_BASE_DOMAIN", "expressnet.app")
+
+SHARED_APPS = [
+    "django_tenants",
+    "core",
     "django.contrib.auth",
     "django.contrib.contenttypes",
     "django.contrib.sessions",
     "django.contrib.staticfiles",
     "rest_framework",
+]
+
+TENANT_APPS = [
+    "django.contrib.auth",
+    "django.contrib.contenttypes",
+    "django.contrib.sessions",
+    "network",
+    "management",
+]
+
+LEGACY_APPS = [
     "billing_api",
 ]
+
+INSTALLED_APPS = (
+    unique_apps([*SHARED_APPS, *TENANT_APPS, *LEGACY_APPS])
+    if USE_DJANGO_TENANTS
+    else unique_apps(app for app in [*SHARED_APPS, *TENANT_APPS, *LEGACY_APPS] if app != "django_tenants")
+)
+
+TENANT_MODEL = "core.Tenant"
+TENANT_DOMAIN_MODEL = "core.Domain"
+DATABASE_ROUTERS = ("django_tenants.routers.TenantSyncRouter",) if USE_DJANGO_TENANTS else []
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
 ]
 if importlib.util.find_spec("whitenoise"):
     MIDDLEWARE.append("whitenoise.middleware.WhiteNoiseMiddleware")
+if USE_DJANGO_TENANTS:
+    MIDDLEWARE.append("django_tenants.middleware.main.TenantMainMiddleware")
 MIDDLEWARE += [
     "billing_api.middleware.SecurityHeadersMiddleware",
     "billing_api.middleware.SimpleRateLimitMiddleware",
@@ -61,7 +93,7 @@ TEMPLATES = [
         "BACKEND": "django.template.backends.django.DjangoTemplates",
         "DIRS": [BASE_DIR / "frontend" / "dist"],
         "APP_DIRS": True,
-        "OPTIONS": {"context_processors": []},
+        "OPTIONS": {"context_processors": ["django.template.context_processors.request"]},
     }
 ]
 WSGI_APPLICATION = "billing_saas_django.wsgi.application"

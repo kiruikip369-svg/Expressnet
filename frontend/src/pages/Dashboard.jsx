@@ -2,6 +2,7 @@ import { Activity, AlertTriangle, Cpu, Filter, Gauge, Radio, TrendingUp, Users, 
 import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import api from '../api/axios';
+import { useAuth } from '../context/AuthContext';
 
 function readDarkMode() {
   try {
@@ -24,6 +25,32 @@ function formatData(value) {
   if (gb >= 1) return `${gb.toFixed(gb >= 10 ? 0 : 1)} GB`;
   const mb = Number(value || 0) / (1024 * 1024);
   return `${mb.toFixed(0)} MB`;
+}
+
+function decodeToken(token) {
+  try {
+    const payload = token.split('.')[1];
+    const normalized = payload.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = normalized.padEnd(normalized.length + ((4 - (normalized.length % 4)) % 4), '=');
+    return JSON.parse(window.atob(padded));
+  } catch {
+    return null;
+  }
+}
+
+function isTenantAdmin(tenant, token) {
+  const decoded = token ? decodeToken(token) : null;
+  const role = String(tenant?.role || tenant?.user_role || decoded?.role || '').toLowerCase();
+  return (
+    role === 'admin' ||
+    role === 'tenant_admin' ||
+    role === 'owner' ||
+    tenant?.is_admin === true ||
+    tenant?.is_owner === true ||
+    decoded?.is_admin === true ||
+    decoded?.is_owner === true ||
+    (!role && Boolean(tenant?.id))
+  );
 }
 
 function StatCard({ icon: Icon, label, value, helper, children }) {
@@ -62,6 +89,7 @@ function OverviewCard({ icon: Icon, label, value, helper, percent, darkMode }) {
 }
 
 export default function Dashboard() {
+  const { tenant, token } = useAuth();
   const [dashboard, setDashboard] = useState(null);
   const [loading, setLoading] = useState(true);
   const [darkMode, setDarkMode] = useState(() => readDarkMode());
@@ -101,6 +129,7 @@ export default function Dashboard() {
   const trafficValue = Number(router.traffic_percent ?? router.network_traffic_percent ?? 0);
   const cpuValue = Number(router.cpu_load_percent ?? router.cpu_load ?? 0);
   const internetStrength = Number(router.internet_strength_percent ?? (router.status === 'online' ? 96 : router.status === 'offline' ? 0 : 62));
+  const canViewEarnings = isTenantAdmin(tenant, token);
 
   if (loading) {
     return <div className={`rounded-lg p-4 text-xs ${darkMode ? 'bg-[#17181b] text-[#c8ccdc]' : 'bg-white text-slate-600'}`}>Loading dashboard...</div>;
@@ -116,7 +145,7 @@ export default function Dashboard() {
         </div>
       </div>
 
-      <section className="grid gap-4 lg:grid-cols-3">
+      <section className={`grid gap-4 ${canViewEarnings ? 'lg:grid-cols-3' : 'lg:grid-cols-2'}`}>
         <StatCard icon={Users} label="Total users" value={stats.totalUsers.toLocaleString('en-KE')}>
           <div className="mt-4 grid grid-cols-2 gap-2 text-xs font-semibold">
             <span className="rounded-md bg-white/35 px-3 py-2">PPPoE: {stats.pppoeUsers.toLocaleString('en-KE')}</span>
@@ -124,7 +153,9 @@ export default function Dashboard() {
           </div>
         </StatCard>
         <StatCard icon={Activity} label="Active users" value={stats.activeUsers.toLocaleString('en-KE')} helper="Customers currently marked active" />
-        <StatCard icon={TrendingUp} label="Daily earnings" value={formatKES(stats.dailyEarnings)} helper="Successful payments today" />
+        {canViewEarnings && (
+          <StatCard icon={TrendingUp} label="Daily earnings" value={formatKES(stats.dailyEarnings)} helper="Successful payments today" />
+        )}
       </section>
 
       <section className="space-y-3">
