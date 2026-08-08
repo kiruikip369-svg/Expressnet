@@ -666,6 +666,8 @@ def _limited_router_status_payload(snapshot, assignments=None, source="provision
     payload["assignments"] = assignments or {}
     payload["source"] = source
     payload["message"] = message
+    payload["live"] = bool(live)
+    payload["sampled_at"] = iso_now() if live else (payload.get("sampled_at") or "")
     if tenant is not None:
         payload["connection_status"] = _router_connection_status(tenant, live=live)
         payload["last_seen_at"] = (tenant or {}).get("mikrotik_last_seen_at") or ""
@@ -1123,6 +1125,7 @@ def public_voucher_login(request, tenant_id):
     credential_label = code or username
     if voucher and voucher.get("status") == "active":
         package = ref(f"tenants/{tenant_id}/packages/{voucher.get('package_id')}").get() if voucher.get("package_id") else None
+        expires_at = utcnow() + package_duration_delta(package)
         access_payload = {
             "name": voucher.get("username"),
             "phone": data.get("phone") or "",
@@ -1133,6 +1136,9 @@ def public_voucher_login(request, tenant_id):
             "service_type": "hotspot",
             "status": "active",
             "speed": (package or {}).get("speed"),
+            "expiry_date": expires_at.isoformat(),
+            "provisioning_status": "radius_ready" if tenant.get("radius_enabled") else "active",
+            "provisioning_message": "Voucher validated by captive portal",
         }
     elif not code:
         customer = next(
@@ -1175,18 +1181,21 @@ def public_voucher_login(request, tenant_id):
     router_status = "radius_ready" if tenant.get("radius_enabled") else "pending"
     if tenant.get("radius_enabled"):
         try:
-            from billing_api.radius_provisioning import sync_radius_customer, upsert_pg_customer
+            from billing_api.radius_provisioning import sync_radius_customer, upsert_pg_customer, upsert_pg_package
 
             tenant_obj = Tenant.objects.get(pk=tenant_id)
+            if package:
+                upsert_pg_package(tenant_obj, package)
             pg_customer = upsert_pg_customer(tenant_obj, access_payload)
             if pg_customer:
                 sync_radius_customer(tenant_obj, pg_customer)
             logger.info(
-                "Captive login prepared for RADIUS tenant=%s kind=%s username=%s package=%s",
+                "Captive login prepared for RADIUS tenant=%s kind=%s username=%s package=%s expires_at=%s",
                 tenant_id,
                 credential_kind,
                 access_payload.get("username"),
                 access_payload.get("package"),
+                access_payload.get("expiry_date"),
             )
         except Exception as exc:
             logger.warning("Captive RADIUS sync failed tenant=%s kind=%s credential=%s error=%s", tenant_id, credential_kind, credential_label, exc, exc_info=True)
@@ -1468,7 +1477,7 @@ def vouchers(request):
                 # itself from reaching the router.
                 profile_name = "default"
             users = api.path("ip", "hotspot", "user")
-            existing = next((item for item in users.get() if str(item.get("name") or "") == voucher_username), None)
+            existing = next((item for item in users.select() if str(item.get("name") or "") == voucher_username), None)
             if existing and existing.get(".id"):
                 users.update(**{".id": existing[".id"], "name": voucher_username, "password": voucher_password, "profile": profile_name, "disabled": "no", "comment": f"billing-saas-voucher:{code}"})
             else:
@@ -1993,52 +2002,52 @@ def router_reboot(request):
 @api_view(["GET"])
 @tenant_required
 def router_resources(request):
-    try:
-        status = router_interface_status(request.tenant)
+    def resource_payload(status, source="routeros_api", message="Live MikroTik resource sample."):
         device = status.get("device", {})
         total = float(device.get("total_memory") or 0)
         free = float(device.get("free_memory") or 0)
-        return ok({
+        wireless_signals = [
+            item.get("signal_strength")
+            for item in status.get("interfaces", [])
+            if item.get("signal_strength") not in {None, ""}
+        ]
+        return {
             "cpu_load_percent": device.get("cpu_load"),
             "uptime": device.get("uptime"),
             "memory_used_bytes": max(0, total - free),
             "memory_total_bytes": total,
             "memory_used_percent": round((1 - free / total) * 100, 1) if total else None,
+            "traffic": status.get("traffic") or {},
+            "active_sessions": status.get("active_sessions") or {},
+            "wireless_signal_strength": max(wireless_signals) if wireless_signals else None,
+            "interfaces": [
+                {
+                    "name": item.get("name"),
+                    "type": item.get("type"),
+                    "running": item.get("running"),
+                    "traffic": item.get("traffic") or {},
+                    "signal_strength": item.get("signal_strength"),
+                    "wireless": item.get("wireless") or {},
+                }
+                for item in status.get("interfaces", [])
+            ],
             "board_name": device.get("board_name"),
             "version": device.get("version"),
-        })
+            "source": source,
+            "live": source == "routeros_api",
+            "sampled_at": iso_now(),
+            "message": message,
+        }
+
+    try:
+        status = router_interface_status(request.tenant)
+        return ok(resource_payload(status))
     except (TimeoutError, OSError) as exc:
         snapshot = request.tenant.get("mikrotik_router_snapshot") or {}
-        device = snapshot.get("device") or {}
-        total = float(device.get("total_memory") or 0)
-        free = float(device.get("free_memory") or 0)
-        return ok({
-            "cpu_load_percent": device.get("cpu_load"),
-            "uptime": device.get("uptime"),
-            "memory_used_bytes": max(0, total - free),
-            "memory_total_bytes": total,
-            "memory_used_percent": round((1 - free / total) * 100, 1) if total else None,
-            "board_name": device.get("board_name"),
-            "version": device.get("version"),
-            "source": "provisioning_snapshot",
-            "message": f"Live API unreachable, showing last snapshot: {exc}",
-        })
+        return ok(resource_payload(snapshot, "provisioning_snapshot", f"Live API unreachable, showing last snapshot: {exc}"))
     except Exception as exc:
         snapshot = request.tenant.get("mikrotik_router_snapshot") or {}
-        device = snapshot.get("device") or {}
-        total = float(device.get("total_memory") or 0)
-        free = float(device.get("free_memory") or 0)
-        return ok({
-            "cpu_load_percent": device.get("cpu_load"),
-            "uptime": device.get("uptime"),
-            "memory_used_bytes": max(0, total - free),
-            "memory_total_bytes": total,
-            "memory_used_percent": round((1 - free / total) * 100, 1) if total else None,
-            "board_name": device.get("board_name"),
-            "version": device.get("version"),
-            "source": "provisioning_snapshot",
-            "message": f"Live API failed, showing last snapshot: {exc}",
-        })
+        return ok(resource_payload(snapshot, "provisioning_snapshot", f"Live API failed, showing last snapshot: {exc}"))
 
 
 def _empty_router_snapshot():

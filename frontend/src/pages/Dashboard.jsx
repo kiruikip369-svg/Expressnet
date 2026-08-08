@@ -27,6 +27,14 @@ function formatData(value) {
   return `${mb.toFixed(0)} MB`;
 }
 
+function formatBitrate(value) {
+  const bps = Number(value || 0);
+  if (bps >= 1_000_000_000) return `${(bps / 1_000_000_000).toFixed(1)} Gbps`;
+  if (bps >= 1_000_000) return `${(bps / 1_000_000).toFixed(1)} Mbps`;
+  if (bps >= 1_000) return `${(bps / 1_000).toFixed(0)} Kbps`;
+  return `${bps.toFixed(0)} bps`;
+}
+
 function decodeToken(token) {
   try {
     const payload = token.split('.')[1];
@@ -126,9 +134,12 @@ export default function Dashboard() {
     dailyEarnings: Number(summary.revenue_today || 0),
   };
 
+  const trafficBps = Number(router.network_traffic_bps || 0);
   const trafficValue = Number(router.traffic_percent ?? router.network_traffic_percent ?? 0);
   const cpuValue = Number(router.cpu_load_percent ?? router.cpu_load ?? 0);
   const internetStrength = Number(router.internet_strength_percent ?? (router.status === 'online' ? 96 : router.status === 'offline' ? 0 : 62));
+  const trafficLabel = trafficBps ? formatBitrate(trafficBps) : `${trafficValue}%`;
+  const sourceLabel = router.sample_source === 'routeros_api' ? 'Live MikroTik sample' : 'Latest router snapshot';
   const canViewEarnings = isTenantAdmin(tenant, token);
 
   if (loading) {
@@ -161,9 +172,9 @@ export default function Dashboard() {
       <section className="space-y-3">
         <h2 className="text-sm font-semibold">Dashboard Overview</h2>
         <div className="grid gap-4 xl:grid-cols-2">
-          <OverviewCard darkMode={darkMode} icon={Wifi} label="Internet strength" value={`${internetStrength}%`} helper={router.status ? `Router ${router.status}` : 'Router signal health'} percent={internetStrength} />
-          <OverviewCard darkMode={darkMode} icon={Radio} label="Network traffic" value={`${trafficValue}%`} helper="Current traffic load" percent={trafficValue} />
-          <OverviewCard darkMode={darkMode} icon={Cpu} label="CPU status" value={`${cpuValue}%`} helper={router.board_name || 'Router CPU load'} percent={cpuValue} />
+          <OverviewCard darkMode={darkMode} icon={Wifi} label="Internet strength" value={`${internetStrength}%`} helper={router.status ? `${sourceLabel} - ${router.status}` : sourceLabel} percent={internetStrength} />
+          <OverviewCard darkMode={darkMode} icon={Radio} label="Network traffic" value={trafficLabel} helper="Current live router throughput" percent={trafficValue} />
+          <OverviewCard darkMode={darkMode} icon={Cpu} label="CPU status" value={`${cpuValue}%`} helper={router.board_name || sourceLabel} percent={cpuValue} />
           <section className={`rounded-lg border ${darkMode ? 'border-[#33343a] bg-[#222326] text-white' : 'border-slate-200 bg-white text-slate-950'}`}>
             <div className={`flex items-center gap-2 border-b px-4 py-3 ${darkMode ? 'border-[#36373d]' : 'border-slate-200'}`}>
               <Gauge size={17} className="text-[#fa8200]" />

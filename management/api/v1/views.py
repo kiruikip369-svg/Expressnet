@@ -1237,10 +1237,30 @@ def dashboard_stats(request):
         if str(c.get("status") or "").lower() == "active"
     ]
     snapshot = request.tenant.get("mikrotik_router_snapshot") or {}
+    router_sample_source = "provisioning_snapshot"
+    try:
+        if has_mikrotik_credentials(request.tenant):
+            snapshot = router_interface_status(request.tenant)
+            router_sample_source = "routeros_api"
+    except Exception as exc:
+        logger.warning("Dashboard live MikroTik sample failed tenant=%s error=%s", tenant_id, exc)
     device = snapshot.get("device") or {}
     cpu_load = device.get("cpu_load")
-    router_status = "suspended" if request.tenant.get("mikrotik_router_suspended") else "online" if request.tenant.get("mikrotik_last_seen_at") else "offline"
+    router_status = "suspended" if request.tenant.get("mikrotik_router_suspended") else "online" if router_sample_source == "routeros_api" or request.tenant.get("mikrotik_last_seen_at") else "offline"
     active_ratio = (len([c for c in customers_data if c.get("status") == "active"]) / len(customers_data) * 100) if customers_data else 0
+    traffic = snapshot.get("traffic") or {}
+    traffic_bps = int(traffic.get("rx_bps") or 0) + int(traffic.get("tx_bps") or 0)
+    signal_values = [
+        int(item.get("signal_strength"))
+        for item in snapshot.get("interfaces", [])
+        if str(item.get("signal_strength") or "").lstrip("-").isdigit()
+    ]
+    if signal_values:
+        strongest_signal = max(signal_values)
+        internet_strength_percent = max(0, min(100, round((strongest_signal + 90) / 40 * 100)))
+    else:
+        internet_strength_percent = 100 if router_sample_source == "routeros_api" else 96 if router_status == "online" else 0 if router_status == "offline" else 62
+    traffic_percent = round(min((traffic_bps / 1_000_000), 100), 1) if traffic_bps else round(min(active_ratio, 100), 1)
 
     return ok(
         {
@@ -1257,8 +1277,14 @@ def dashboard_stats(request):
                 "status": router_status,
                 "board_name": device.get("board_name") or request.tenant.get("mikrotik_detected_board"),
                 "cpu_load_percent": cpu_load,
-                "internet_strength_percent": 96 if router_status == "online" else 0 if router_status == "offline" else 62,
-                "traffic_percent": round(min(active_ratio, 100), 1),
+                "internet_strength_percent": internet_strength_percent,
+                "traffic_percent": traffic_percent,
+                "network_traffic_bps": traffic_bps,
+                "network_rx_bps": traffic.get("rx_bps"),
+                "network_tx_bps": traffic.get("tx_bps"),
+                "active_sessions": snapshot.get("active_sessions") or {},
+                "sample_source": router_sample_source,
+                "sampled_at": traffic.get("sampled_at") or iso_now(),
             },
             "payments_chart": last_12,
             "active_users_chart": days,

@@ -814,6 +814,22 @@ def router_interface_status(tenant):
         def items(*path):
             return list(api.path(*path).select())
 
+        def command_rows(command, attrs=None):
+            try:
+                return list(api.command(command, attrs or {}))
+            except Exception:
+                return []
+
+        def first_numeric(row, *keys):
+            for key in keys:
+                value = row.get(key)
+                if value not in {None, ""}:
+                    try:
+                        return int(float(value))
+                    except (TypeError, ValueError):
+                        return value
+            return None
+
         resource = (items("system", "resource") or [{}])[0]
         routerboard = (items("system", "routerboard") or [{}])[0]
         interfaces = items("interface")
@@ -821,6 +837,41 @@ def router_interface_status(tenant):
         hotspot_servers = items("ip", "hotspot")
         ppp_profiles = items("ppp", "profile")
         hotspot_profiles = items("ip", "hotspot", "user", "profile")
+        active_hotspot = items("ip", "hotspot", "active")
+        active_ppp = items("ppp", "active")
+
+        traffic_by_name = {}
+        for interface in interfaces:
+            name = interface.get("name")
+            if not name:
+                continue
+            rows = command_rows("/interface/monitor-traffic", {"interface": name, "once": ""})
+            row = rows[0] if rows else {}
+            traffic_by_name[name] = {
+                "rx_bps": first_numeric(row, "rx-bits-per-second"),
+                "tx_bps": first_numeric(row, "tx-bits-per-second"),
+                "rx_packet_rate": first_numeric(row, "rx-packets-per-second"),
+                "tx_packet_rate": first_numeric(row, "tx-packets-per-second"),
+            }
+
+        wireless_by_interface = {}
+        for row in command_rows("/interface/wireless/registration-table/print"):
+            interface_name = row.get("interface")
+            if not interface_name:
+                continue
+            signal = first_numeric(row, "signal-strength")
+            current = wireless_by_interface.get(interface_name)
+            if current is None or (isinstance(signal, int) and signal > int(current.get("signal_strength") or -999)):
+                wireless_by_interface[interface_name] = {
+                    "client_mac": row.get("mac-address"),
+                    "signal_strength": signal,
+                    "tx_rate": row.get("tx-rate"),
+                    "rx_rate": row.get("rx-rate"),
+                    "uptime": row.get("uptime"),
+                }
+
+        total_rx_bps = sum(int(v.get("rx_bps") or 0) for v in traffic_by_name.values() if isinstance(v.get("rx_bps"), int))
+        total_tx_bps = sum(int(v.get("tx_bps") or 0) for v in traffic_by_name.values() if isinstance(v.get("tx_bps"), int))
     finally:
         api.close()
 
@@ -834,6 +885,16 @@ def router_interface_status(tenant):
             "total_memory": resource.get("total-memory"),
             "architecture": resource.get("architecture-name"),
         },
+        "traffic": {
+            "rx_bps": total_rx_bps,
+            "tx_bps": total_tx_bps,
+            "sampled_at": datetime.now(timezone.utc).isoformat(),
+        },
+        "active_sessions": {
+            "hotspot": len(active_hotspot),
+            "pppoe": len(active_ppp),
+            "total": len(active_hotspot) + len(active_ppp),
+        },
         "interfaces": [
             {
                 "id": item.get(".id"),
@@ -844,6 +905,9 @@ def router_interface_status(tenant):
                 "mac_address": item.get("mac-address"),
                 "comment": item.get("comment", ""),
                 "mtu": item.get("mtu"),
+                "traffic": traffic_by_name.get(item.get("name")) or {},
+                "wireless": wireless_by_interface.get(item.get("name")) or {},
+                "signal_strength": (wireless_by_interface.get(item.get("name")) or {}).get("signal_strength"),
             }
             for item in interfaces
         ],
