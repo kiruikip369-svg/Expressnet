@@ -14,6 +14,8 @@ import {
   X,
 } from 'lucide-react';
 import { NavLink } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
+import { canAccessPage, pageForPath } from '../utils/permissions';
 
 const sections = [
   {
@@ -59,6 +61,7 @@ const sections = [
 ];
 
 export default function Sidebar({ open, onClose }) {
+  const { tenant } = useAuth();
   const navClass = ({ isActive }) =>
     [
       'flex h-8 items-center gap-3 rounded-md px-3 text-xs font-normal transition',
@@ -101,7 +104,7 @@ export default function Sidebar({ open, onClose }) {
                 <p className="mb-2 px-3 text-[10px] font-normal uppercase tracking-wide text-white/60">{section.title}</p>
               )}
               <div className="space-y-1">
-                {section.links.map(({ to, label, icon: Icon }) => (
+                {section.links.filter(({ to }) => canAccessPage(tenant, pageForPath(to))).map(({ to, label, icon: Icon }) => (
                   <NavLink key={to} to={to} className={navClass} onClick={onClose}>
                     <Icon size={16} />
                     <span className="min-w-0 flex-1 truncate">{label}</span>

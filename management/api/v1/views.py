@@ -1245,7 +1245,7 @@ def dashboard_stats(request):
     except Exception as exc:
         logger.warning("Dashboard live MikroTik sample failed tenant=%s error=%s", tenant_id, exc)
     device = snapshot.get("device") or {}
-    cpu_load = device.get("cpu_load")
+    cpu_load = device.get("cpu_load") if router_sample_source == "routeros_api" else None
     router_status = "suspended" if request.tenant.get("mikrotik_router_suspended") else "online" if router_sample_source == "routeros_api" or request.tenant.get("mikrotik_last_seen_at") else "offline"
     active_ratio = (len([c for c in customers_data if c.get("status") == "active"]) / len(customers_data) * 100) if customers_data else 0
     traffic = snapshot.get("traffic") or {}
@@ -1259,8 +1259,8 @@ def dashboard_stats(request):
         strongest_signal = max(signal_values)
         internet_strength_percent = max(0, min(100, round((strongest_signal + 90) / 40 * 100)))
     else:
-        internet_strength_percent = 100 if router_sample_source == "routeros_api" else 96 if router_status == "online" else 0 if router_status == "offline" else 62
-    traffic_percent = round(min((traffic_bps / 1_000_000), 100), 1) if traffic_bps else round(min(active_ratio, 100), 1)
+        internet_strength_percent = 100 if router_sample_source == "routeros_api" else 0
+    traffic_percent = round(min((traffic_bps / 1_000_000), 100), 1) if router_sample_source == "routeros_api" and traffic_bps else 0
 
     return ok(
         {
@@ -1279,10 +1279,10 @@ def dashboard_stats(request):
                 "cpu_load_percent": cpu_load,
                 "internet_strength_percent": internet_strength_percent,
                 "traffic_percent": traffic_percent,
-                "network_traffic_bps": traffic_bps,
-                "network_rx_bps": traffic.get("rx_bps"),
-                "network_tx_bps": traffic.get("tx_bps"),
-                "active_sessions": snapshot.get("active_sessions") or {},
+                "network_traffic_bps": traffic_bps if router_sample_source == "routeros_api" else 0,
+                "network_rx_bps": traffic.get("rx_bps") if router_sample_source == "routeros_api" else 0,
+                "network_tx_bps": traffic.get("tx_bps") if router_sample_source == "routeros_api" else 0,
+                "active_sessions": snapshot.get("active_sessions") if router_sample_source == "routeros_api" else {},
                 "sample_source": router_sample_source,
                 "sampled_at": traffic.get("sampled_at") or iso_now(),
             },

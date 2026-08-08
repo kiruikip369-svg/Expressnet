@@ -6,6 +6,7 @@ import api from '../api/axios';
 const PERMISSION_PAGES = [
   { key: 'dashboard', label: 'Dashboard' },
   { key: 'customers', label: 'Customers' },
+  { key: 'tickets', label: 'Tasks' },
   { key: 'packages', label: 'Packages' },
   { key: 'payments', label: 'Payments' },
   { key: 'vouchers', label: 'Vouchers' },

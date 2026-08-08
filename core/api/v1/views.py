@@ -12,6 +12,7 @@ from urllib.parse import urlencode, urlparse
 
 import jwt
 from django.conf import settings
+from django.core.cache import cache
 from django.core.files.storage import FileSystemStorage
 from django.core.management import call_command
 from django.core.mail import send_mail
@@ -547,10 +548,73 @@ def auth_register(request):
 @api_view(["POST"])
 def auth_login(request):
     data = body(request)
+    if data.get("challenge_id"):
+        challenge_id = str(data.get("challenge_id") or "").strip()
+        code = "".join(ch for ch in str(data.get("code") or "") if ch.isdigit())
+        challenge = cache.get(f"tenant_login_2fa:{challenge_id}")
+        if not challenge or not code or code != str(challenge.get("code")):
+            return ok({"message": "Invalid or expired verification code"}, 401)
+        cache.delete(f"tenant_login_2fa:{challenge_id}")
+        tenant_obj = Tenant.objects.filter(pk=challenge.get("tenant_id")).first()
+        if not tenant_obj:
+            return ok({"message": "Tenant not found"}, 401)
+        tenant = tenant_obj.as_dict(include_id=True)
+        member_id = challenge.get("member_id")
+        try:
+            token = tenant_token(tenant["id"], member_id=member_id)
+        except Exception as exc:
+            return ok({"message": f"Server configuration error: {exc}"}, 500)
+        if member_id:
+            member = (tenant.get("team_members") or {}).get(member_id) or {}
+            tenant_payload = {
+                "id": tenant["id"],
+                "business_name": tenant.get("business_name"),
+                "email": member.get("email"),
+                "name": member.get("name"),
+                "role": member.get("role") or "",
+                "member_id": member_id,
+                "permissions": _normalize_permissions(member.get("permissions")),
+                "is_admin": False,
+                **tenant_theme_payload(tenant),
+            }
+        else:
+            tenant_payload = {
+                "id": tenant["id"],
+                "business_name": tenant.get("business_name"),
+                "email": tenant.get("email"),
+                "role": "tenant_admin",
+                "is_admin": True,
+                **tenant_theme_payload(tenant),
+            }
+        return ok({"success": True, "token": token, "tenant": tenant_payload})
+
     if not data.get("email") or not data.get("password"):
         return ok({"message": "Email and password are required"}, 400)
     email = str(data["email"]).lower().strip()
     password = str(data["password"]).strip()
+
+    def start_two_step(tenant, recipient_email, member_id=None):
+        code = f"{secrets.randbelow(1000000):06d}"
+        challenge_id = secrets.token_urlsafe(24)
+        cache.set(
+            f"tenant_login_2fa:{challenge_id}",
+            {"tenant_id": tenant["id"], "member_id": member_id, "code": code},
+            timeout=10 * 60,
+        )
+        send_system_email(
+            "Your Expressnet verification code",
+            f"Your Expressnet sign-in verification code is {code}. It expires in 10 minutes.",
+            [recipient_email],
+        )
+        return ok(
+            {
+                "success": True,
+                "requires_two_step": True,
+                "challenge_id": challenge_id,
+                "message": "Verification code sent to your email.",
+            }
+        )
+
     tenant_obj = Tenant.objects.filter(email__iexact=email).first()
     if tenant_obj:
         if not check_password(password, tenant_obj.password):
@@ -560,24 +624,7 @@ def auth_login(request):
             tenant_obj.status = "active"
             tenant_obj.save(update_fields=["status"])
             tenant["status"] = "active"
-        try:
-            token = tenant_token(tenant["id"])
-        except Exception as exc:
-            return ok({"message": f"Server configuration error: {exc}"}, 500)
-        return ok(
-            {
-                "success": True,
-                "token": token,
-                "tenant": {
-                    "id": tenant["id"],
-                    "business_name": tenant.get("business_name"),
-                    "email": tenant.get("email"),
-                    "role": "tenant_admin",
-                    "is_admin": True,
-                    **tenant_theme_payload(tenant),
-                },
-            }
-        )
+        return start_two_step(tenant, tenant.get("email"))
 
     for tenant_obj in Tenant.objects.filter(status="active"):
         tenant = tenant_obj.as_dict(include_id=True)
@@ -589,27 +636,7 @@ def auth_login(request):
                 continue
             if member.get("status", "active") != "active" or not check_password(password, member.get("password")):
                 return ok({"message": "Wrong password"}, 401)
-            try:
-                token = tenant_token(tenant["id"], member_id=member_id)
-            except Exception as exc:
-                return ok({"message": f"Server configuration error: {exc}"}, 500)
-            return ok(
-                {
-                    "success": True,
-                    "token": token,
-                    "tenant": {
-                        "id": tenant["id"],
-                        "business_name": tenant.get("business_name"),
-                        "email": member.get("email"),
-                        "name": member.get("name"),
-                        "role": member.get("role") or "",
-                        "member_id": member_id,
-                        "permissions": _normalize_permissions(member.get("permissions")),
-                        "is_admin": False,
-                        **tenant_theme_payload(tenant),
-                    },
-                }
-            )
+            return start_two_step(tenant, member.get("email"), member_id=member_id)
 
     return ok({"message": "Account not found"}, 404)
 
