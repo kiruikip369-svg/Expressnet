@@ -32,7 +32,6 @@ class SimpleRateLimitMiddleware:
         api_base = settings.API_BASE_PATH.strip("/")
         admin_base = settings.ADMIN_API_PATH.strip("/")
         return {
-            ("POST", f"/{api_base}/auth/login"): (5, 15 * 60),
             ("POST", f"/{api_base}/auth/register"): (5, 15 * 60),
             ("POST", f"/{api_base}/{admin_base}/auth/login"): (5, 15 * 60),
             ("POST", f"/{api_base}/vouchers"): (30, 60 * 60),

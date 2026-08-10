@@ -1,5 +1,6 @@
 import json
 import html
+import hashlib
 import logging
 import os
 import secrets
@@ -195,6 +196,27 @@ def send_login_verification_email(recipient_email, code):
     except Exception:
         logger.exception("Failed to send login verification email")
         return 0
+
+
+def _login_failure_key(request, email):
+    ip = request.META.get("HTTP_X_FORWARDED_FOR", request.META.get("REMOTE_ADDR", "")).split(",")[0].strip()
+    digest = hashlib.sha256(f"{ip}:{email}".encode("utf-8")).hexdigest()
+    return f"tenant_login_failures:{digest}"
+
+
+def _login_failure_response(request, email):
+    limit = int(os.getenv("TENANT_LOGIN_FAILURE_LIMIT", "5"))
+    window = int(os.getenv("TENANT_LOGIN_FAILURE_WINDOW", str(15 * 60)))
+    key = _login_failure_key(request, email)
+    failures = int(cache.get(key) or 0) + 1
+    cache.set(key, failures, timeout=window)
+    if failures > limit:
+        return ok({"message": "Too many wrong password attempts. Please try again later."}, 429)
+    return None
+
+
+def _clear_login_failures(request, email):
+    cache.delete(_login_failure_key(request, email))
 
 
 def notify_admins_tenant_signup(tenant_id, tenant):
@@ -681,7 +703,11 @@ def auth_login(request):
     tenant_obj = Tenant.objects.filter(email__iexact=email).first()
     if tenant_obj:
         if not check_password(password, tenant_obj.password):
+            limited = _login_failure_response(request, email)
+            if limited:
+                return limited
             return ok({"message": "Wrong password"}, 401)
+        _clear_login_failures(request, email)
         tenant = tenant_obj.as_dict(include_id=True)
         if tenant.get("status") != "active":
             tenant_obj.status = "active"
@@ -698,9 +724,16 @@ def auth_login(request):
             if str(member.get("email") or "").lower().strip() != email:
                 continue
             if member.get("status", "active") != "active" or not check_password(password, member.get("password")):
+                limited = _login_failure_response(request, email)
+                if limited:
+                    return limited
                 return ok({"message": "Wrong password"}, 401)
+            _clear_login_failures(request, email)
             return start_two_step(tenant, member.get("email"), member_id=member_id)
 
+    limited = _login_failure_response(request, email)
+    if limited:
+        return limited
     return ok({"message": "Account not found"}, 404)
 
 
