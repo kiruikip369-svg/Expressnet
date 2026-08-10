@@ -678,6 +678,25 @@ def _limited_router_status_payload(snapshot, assignments=None, source="provision
 def _linked_router_from_tenant(tenant):
     snapshot = (tenant or {}).get("mikrotik_router_snapshot") or {}
     device = snapshot.get("device") or {}
+    addresses = snapshot.get("addresses") or []
+    bridge_name = (tenant or {}).get("mikrotik_bridge_name") or mikrotik_managed_bridge_name(tenant)
+    lan_ip = next(
+        (
+            str(item.get("address") or "").split("/", 1)[0]
+            for item in addresses
+            if str(item.get("interface") or "") == bridge_name and item.get("address")
+        ),
+        "",
+    )
+    wan_interface = (tenant or {}).get("mikrotik_wan_interface") or "ether1"
+    wan_ip = next(
+        (
+            str(item.get("address") or "").split("/", 1)[0]
+            for item in addresses
+            if str(item.get("interface") or "") == wan_interface and item.get("address")
+        ),
+        "",
+    )
     return {
         "id": "primary",
         "board_name": device.get("board_name") or (tenant or {}).get("mikrotik_detected_board") or "MikroTik Router",
@@ -687,6 +706,9 @@ def _linked_router_from_tenant(tenant):
         "provisioning_status": (tenant or {}).get("mikrotik_provisioning_status") or "",
         "last_seen_at": (tenant or {}).get("mikrotik_last_seen_at") or "",
         "last_seen_ip": (tenant or {}).get("mikrotik_last_seen_ip") or "",
+        "tunnel_ip": (tenant or {}).get("mikrotik_vpn_tunnel_ip") or (tenant or {}).get("mikrotik_host") or "",
+        "wan_ip": wan_ip,
+        "lan_ip": lan_ip,
         "cpu_load": device.get("cpu_load"),
         "free_memory": device.get("free_memory"),
         "interface_count": len((snapshot or {}).get("interfaces") or []),
@@ -1213,7 +1235,13 @@ def public_voucher_login(request, tenant_id):
                 return _html_page("Login unavailable", f"<main><div class='alert'>Credentials were accepted, but router access could not be prepared: {html.escape(str(exc))}</div><p><a href='/api/captive/{html.escape(str(tenant_id))}'>Back to portal</a></p></main>", 503)
             return ok({"message": f"Credentials were accepted, but router access could not be prepared: {exc}"}, 503)
     elif _router_is_agent_linked(tenant):
-        script = _customer_secret_script(access_payload)
+        script = _customer_secret_script(
+            {
+                **access_payload,
+                "router_client_ip": data.get("ip") or "",
+                "router_client_mac": data.get("mac") or "",
+            }
+        )
         if script:
             try:
                 _queue_router_command_for_tenant(tenant_id, {"type": "sync_hotspot_login", "script": script}, tenant)
@@ -1671,6 +1699,8 @@ def _customer_secret_script(customer):
     username = _rsc_escape(customer.get("username") or "")
     password = _rsc_escape(customer.get("password") or "")
     profile = _rsc_escape(customer.get("package") or customer.get("package_name") or "default")
+    client_ip = _rsc_escape(customer.get("router_client_ip") or customer.get("client_ip") or customer.get("ip") or "")
+    client_mac = _rsc_escape(normalize_mac(customer.get("router_client_mac") or customer.get("mac_address") or customer.get("mac") or ""))
     if not username:
         return ""
     disabled = "no" if customer.get("status") == "active" else "yes"
@@ -1718,6 +1748,10 @@ def _customer_secret_script(customer):
         f'profile="{profile}" disabled={disabled} comment="billing-saas-managed" }} '
         f'else={{ /ip hotspot user set [find name="{username}"] password="{password}" '
         f'profile="{profile}" disabled={disabled} comment="billing-saas-managed" }};'
+        f':if ("{disabled}" = "no" && "{client_ip}" != "") do={{ '
+        f':do {{ /ip hotspot active login user="{username}" password="{password}" ip="{client_ip}" mac-address="{client_mac}" }} '
+        f'on-error={{ :log warning "Billing SaaS agent: automatic Hotspot login failed for {username}" }}; '
+        f'}};'
     )
 
 

@@ -52,7 +52,10 @@ export default function MikrotikSettings() {
       cpu: routerStatus?.device?.cpu_load ?? item.cpu_load,
       memory: routerStatus?.device?.free_memory ?? item.free_memory,
       status: routerStatus?.connection_status || item.status || (isFreshLastSeen(item.last_seen_at || config?.mikrotik_last_seen_at) ? 'online' : 'offline'),
-      remoteWinbox: routerStatus?.last_seen_ip || item.last_seen_ip || config?.mikrotik_host || '-',
+      tunnelIp: item.tunnel_ip || config?.mikrotik_host || '-',
+      wanIp: item.wan_ip || '',
+      lanIp: item.lan_ip || '',
+      lastSeenIp: routerStatus?.last_seen_ip || item.last_seen_ip || '',
       lastSeenAt: routerStatus?.last_seen_at || item.last_seen_at || config?.mikrotik_last_seen_at,
       source: routerStatus?.source || 'stored',
       ports: routerStatus?.interfaces?.length ?? item.interface_count,
@@ -67,7 +70,7 @@ export default function MikrotikSettings() {
   }), [rows]);
 
   const filteredRows = rows.filter((item) => {
-    const text = `${item.boardName} ${item.remoteWinbox} ${item.provisioning}`.toLowerCase();
+    const text = `${item.boardName} ${item.tunnelIp} ${item.wanIp} ${item.lanIp} ${item.provisioning}`.toLowerCase();
     if (!text.includes(search.toLowerCase())) return false;
     if (filter === 'online') return item.status === 'online';
     if (filter === 'offline') return item.status !== 'online';
@@ -219,7 +222,7 @@ export default function MikrotikSettings() {
                   <th className="px-4 py-3">Status</th>
                   <th className="px-4 py-3">Last Seen</th>
                   <th className="px-4 py-3">Source</th>
-                  <th className="px-4 py-3">Router IP</th>
+                  <th className="px-4 py-3">Tunnel IP</th>
                   <th className="px-4 py-3">Ports</th>
                   <th className="px-4 py-3 text-right">Actions</th>
                 </tr>
@@ -242,7 +245,15 @@ export default function MikrotikSettings() {
                     </td>
                     <td className="table-cell">{formatLastSeen(router.lastSeenAt)}</td>
                     <td className="table-cell"><span className="rounded bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-700">{router.source === 'routeros_api' ? 'Live API' : router.source === 'agent_report' ? 'Agent' : 'Stored'}</span></td>
-                    <td className="table-cell text-green-700">{router.remoteWinbox}</td>
+                    <td className="table-cell">
+                      <div className="font-semibold text-green-700">{router.tunnelIp}</div>
+                      {(router.wanIp || router.lanIp) && (
+                        <div className="mt-1 space-y-0.5 text-[11px] text-slate-500">
+                          {router.wanIp && <div>WAN {router.wanIp}</div>}
+                          {router.lanIp && <div>LAN {router.lanIp}</div>}
+                        </div>
+                      )}
+                    </td>
                     <td className="table-cell">{router.ports ?? '-'}</td>
                     <td className="table-cell">
                       <div className="relative flex justify-end">
