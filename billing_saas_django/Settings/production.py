@@ -7,6 +7,7 @@ from .base import *
 
 DEBUG = False
 RATE_LIMIT_ENABLED = env_bool("RATE_LIMIT_ENABLED", True)
+TENANT_LOGIN_2FA_ENABLED = env_bool("TENANT_LOGIN_2FA_ENABLED", False)
 
 if not os.getenv("EMAIL_BACKEND"):
     EMAIL_BACKEND = "billing_api.email_backend.IPv4EmailBackend"
