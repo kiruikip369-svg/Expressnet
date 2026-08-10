@@ -94,6 +94,7 @@ export default function Packages() {
   const applyQuickTemplate = () => {
     setEditingPackage(null);
     setForm({
+      service_type: 'hotspot',
       name: 'Unlimited 24 Hours',
       speed: '5M/5M',
       duration_value: '24',

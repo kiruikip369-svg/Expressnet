@@ -62,6 +62,11 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
     }, {});
   }, [mikrotikRouters]);
 
+  const formPackageOptions = useMemo(() => {
+    const selectedService = form.service_type || serviceLocked || 'pppoe';
+    return packages.filter((pkg) => (pkg.service_type || 'hotspot') === selectedService);
+  }, [form.service_type, packages, serviceLocked]);
+
   const userStats = useMemo(() => {
     const active = customers.filter((customer) => customer.status === 'active').length;
     const hotspot = customers.filter((customer) => (customer.service_type || 'pppoe') === 'hotspot').length;
@@ -131,7 +136,12 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
 
   const update = (event) => {
     const { name, type, checked, value } = event.target;
-    setForm((current) => ({ ...current, [name]: type === 'checkbox' ? checked : value }));
+    setForm((current) => ({
+      ...current,
+      [name]: type === 'checkbox' ? checked : value,
+      ...(name === 'service_type' ? { package_name: '' } : {}),
+      ...(name === 'mikrotik_router_id' && value ? { provision_mikrotik: true } : {}),
+    }));
     setErrors((current) => ({ ...current, [event.target.name]: '' }));
   };
 
@@ -142,7 +152,10 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
     if (!form.username.trim()) nextErrors.username = 'Username is required';
     if (!editingId && !form.password.trim()) nextErrors.password = 'Password is required';
     if (!form.package_name) nextErrors.package_name = 'Package is required';
-    if (form.provision_mikrotik && mikrotikRouters.length > 0 && !form.mikrotik_router_id) nextErrors.mikrotik_router_id = 'Select the MikroTik for this customer';
+    const selectedPackage = packages.find((pkg) => pkg.name === form.package_name);
+    const selectedService = form.service_type || serviceLocked || 'pppoe';
+    if (selectedPackage && (selectedPackage.service_type || 'hotspot') !== selectedService) nextErrors.package_name = `Select a ${selectedService.toUpperCase()} package`;
+    if ((form.provision_mikrotik || form.mikrotik_router_id) && mikrotikRouters.length > 0 && !form.mikrotik_router_id) nextErrors.mikrotik_router_id = 'Select the MikroTik for this customer';
     setErrors(nextErrors);
     return Object.keys(nextErrors).length === 0;
   };
