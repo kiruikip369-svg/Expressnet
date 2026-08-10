@@ -48,7 +48,7 @@ function responseItems(data) {
 }
 
 function preferredDarajaMethod(methods = []) {
-  return methods.find((item) => ['daraja_paybill', 'daraja_buygoods'].includes(item)) || '';
+  return methods.find((item) => ['daraja_paybill', 'daraja_buygoods'].includes(item)) || 'daraja_paybill';
 }
 
 export default function CustomerPortal() {
@@ -225,19 +225,7 @@ export default function CustomerPortal() {
         dst: routerContext.dst,
         payment_method: paymentMethod,
       });
-      toast.success(data.message || (data.provider === 'mpesa' ? 'Check your phone for the M-Pesa prompt' : 'Redirecting to Paystack'));
-      if (data.authorizationUrl) {
-        if (!String(data.authorizationUrl).startsWith('https://checkout.paystack.com/')) {
-          toast.error('Payment checkout URL was rejected');
-          return;
-        }
-        window.location.href = data.authorizationUrl;
-        return;
-      }
-      if (data.provider === 'mpesa') {
-        closePayment();
-        return;
-      }
+      toast.success(data.message || 'Check your phone for the M-Pesa prompt');
       closePayment();
     } catch (err) {
       toast.error(err.response?.data?.message || 'Could not start payment');

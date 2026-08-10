@@ -109,5 +109,7 @@ urlpatterns = [
     path("paystack/webhook", management_views.paystack_webhook),
     path("paystack/callback", management_views.paystack_callback),
     path("daraja/callback/<str:tenant_id>/<str:payment_id>/<str:token>", management_views.daraja_callback),
+    path("daraja/b2c/result", management_views.daraja_b2c_result),
+    path("daraja/b2c/timeout", management_views.daraja_b2c_timeout),
     path(f"{settings.ADMIN_API_PATH}/", include(admin_urlpatterns)),
 ]

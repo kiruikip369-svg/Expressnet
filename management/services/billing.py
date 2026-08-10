@@ -230,6 +230,31 @@ def verify_paystack_signature(raw_body, signature, secret):
 # approval queue in this codebase yet; this is the natural equivalent.
 # ---------------------------------------------------------------------------
 
+def platform_daraja_config(tenant=None):
+    tenant = tenant or {}
+    return {
+        **tenant,
+        "daraja_consumer_key": os.getenv("DARAJA_CONSUMER_KEY") or os.getenv("MPESA_CONSUMER_KEY") or tenant.get("daraja_consumer_key"),
+        "daraja_consumer_secret": os.getenv("DARAJA_CONSUMER_SECRET") or os.getenv("MPESA_CONSUMER_SECRET") or tenant.get("daraja_consumer_secret"),
+        "daraja_shortcode": os.getenv("DARAJA_SHORTCODE") or os.getenv("MPESA_SHORTCODE") or tenant.get("daraja_shortcode"),
+        "daraja_passkey": os.getenv("DARAJA_PASSKEY") or os.getenv("MPESA_PASSKEY") or tenant.get("daraja_passkey"),
+        "daraja_till_number": os.getenv("DARAJA_TILL_NUMBER") or os.getenv("MPESA_TILL_NUMBER") or tenant.get("daraja_till_number"),
+        "daraja_environment": os.getenv("DARAJA_ENVIRONMENT") or os.getenv("MPESA_ENVIRONMENT") or tenant.get("daraja_environment") or "production",
+        "daraja_shortcode_type": os.getenv("DARAJA_SHORTCODE_TYPE") or tenant.get("daraja_shortcode_type") or "CustomerPayBillOnline",
+    }
+
+
+def tenant_payout_details(tenant):
+    tenant = tenant or {}
+    return {
+        "business_number": str(tenant.get("business_number") or "").strip(),
+        "bank_code": str(tenant.get("bank_code") or "").strip(),
+        "bank_name": str(tenant.get("bank_name") or "").strip(),
+        "bank_account_number": str(tenant.get("bank_account_number") or "").strip(),
+        "payout_phone": str(tenant.get("payout_phone") or tenant.get("phone") or "").strip(),
+    }
+
+
 def daraja_is_configured(tenant, payment_method=None):
     tenant = tenant or {}
     common = all(str(tenant.get(field) or "").strip() for field in ("daraja_consumer_key", "daraja_consumer_secret", "daraja_passkey"))
@@ -239,12 +264,7 @@ def daraja_is_configured(tenant, payment_method=None):
 
 
 def tenant_uses_daraja(tenant):
-    tenant = tenant or {}
-    methods = tenant.get("payment_methods") if isinstance(tenant.get("payment_methods"), list) else []
-    # Daraja is opt-in per tenant payment method. Paystack remains the
-    # platform default, regardless of credentials stored on the tenant.
-    selected = next((str(item).strip().lower() for item in methods if str(item).strip().lower() in {"daraja_paybill", "daraja_buygoods"}), "")
-    return bool(selected) and daraja_is_configured(tenant, selected)
+    return daraja_is_configured(platform_daraja_config(tenant), selected_daraja_method(tenant))
 
 
 def selected_daraja_method(tenant, requested_method=None):
@@ -254,7 +274,7 @@ def selected_daraja_method(tenant, requested_method=None):
         return requested
     methods = tenant.get("payment_methods") if isinstance(tenant.get("payment_methods"), list) else []
     selected = next((str(item).strip().lower() for item in methods if str(item).strip().lower() in {"daraja_paybill", "daraja_buygoods"}), "")
-    return selected
+    return selected or os.getenv("DARAJA_DEFAULT_METHOD", "daraja_paybill")
 
 
 def daraja_base_url(tenant):
@@ -474,6 +494,62 @@ def initiate_daraja_payment(tenant, payment_id, amount, phone, description=None,
         "phone": formatted_phone,
         "customer_message": data.get("CustomerMessage"),
     }
+
+
+def initiate_daraja_b2c(tenant, payment_id, amount, phone, remarks=None):
+    tenant = platform_daraja_config(tenant)
+    shortcode = str(tenant.get("daraja_b2c_shortcode") or tenant.get("daraja_shortcode") or "").strip()
+    initiator = str(tenant.get("daraja_b2c_initiator_name") or os.getenv("DARAJA_B2C_INITIATOR_NAME") or "").strip()
+    security_credential = str(tenant.get("daraja_b2c_security_credential") or os.getenv("DARAJA_B2C_SECURITY_CREDENTIAL") or "").strip()
+    recipient = daraja_phone_format(phone)
+    if not all([shortcode, initiator, security_credential]):
+        raise PaymentProviderError(
+            "Tenant settlement is not fully configured.",
+            "Missing Daraja B2C shortcode, initiator name, or security credential",
+            503,
+        )
+    if not recipient or not recipient.startswith("254") or len(recipient) != 12:
+        raise PaymentProviderError("Tenant payout phone is invalid.", "Invalid Daraja B2C recipient phone", 400)
+
+    base_url = get_public_base_url()
+    if not base_url:
+        raise RuntimeError("PUBLIC_APP_URL or PAYSTACK_CALLBACK_BASE_URL is required for Daraja B2C callbacks")
+
+    token = get_daraja_access_token(tenant)
+    payload = {
+        "InitiatorName": initiator,
+        "SecurityCredential": security_credential,
+        "CommandID": str(os.getenv("DARAJA_B2C_COMMAND_ID") or "BusinessPayment"),
+        "Amount": max(1, int(round(float(amount or 0)))),
+        "PartyA": shortcode,
+        "PartyB": recipient,
+        "Remarks": str(remarks or f"Tenant settlement {payment_id}")[:100],
+        "QueueTimeOutURL": f"{base_url}/api/daraja/b2c/timeout",
+        "ResultURL": f"{base_url}/api/daraja/b2c/result",
+        "Occasion": str(payment_id)[:100],
+    }
+    response = requests.post(
+        f"{daraja_base_url(tenant)}/mpesa/b2c/v1/paymentrequest",
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        json=payload,
+        timeout=30,
+    )
+    try:
+        response.raise_for_status()
+    except requests.HTTPError as exc:
+        raise PaymentProviderError(
+            "Tenant settlement could not be requested.",
+            f"Daraja B2C request failed {response.status_code}: {response.text[:500]}",
+            502,
+        ) from exc
+    data = response.json()
+    if str(data.get("ResponseCode")) not in {"0", "00"}:
+        raise PaymentProviderError(
+            "Tenant settlement could not be requested.",
+            data.get("ResponseDescription") or data.get("errorMessage") or f"Daraja B2C rejected request: {data}",
+            502,
+        )
+    return data
 
 
 

@@ -17,7 +17,7 @@ const initialForm = {
   support: '',
   package_name: '',
   service_type: 'pppoe',
-  provision_mikrotik: true,
+  provision_mikrotik: false,
 };
 
 function toDate(value) {
@@ -273,9 +273,9 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
       if (data.authorizationUrl) {
         window.open(data.authorizationUrl, '_blank', 'noopener,noreferrer');
       }
-      toast.success('Paystack checkout created');
+      toast.success('M-Pesa prompt sent');
     } catch (error) {
-      toast.error(error.response?.data?.message || 'Failed to create Paystack checkout');
+      toast.error(error.response?.data?.message || 'Failed to start M-Pesa payment');
     } finally {
       setPayingId(null);
     }
@@ -500,7 +500,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
                   onChange={update}
                 />
                 <span>
-                  <span className="block font-semibold text-slate-800">Create this customer on MikroTik now</span>
+                  <span className="block font-semibold text-slate-800">Also create this customer on MikroTik now</span>
                   <span className="mt-1 block">
                     This creates a PPPoE secret on MikroTik using the selected package/profile and keeps it disabled until payment.
                   </span>
