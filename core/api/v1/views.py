@@ -149,6 +149,7 @@ def send_system_email(subject, message, recipients):
 
 def send_login_verification_email(recipient_email, code):
     if not recipient_email or not code:
+        logger.warning("Login verification email skipped because recipient or code is missing")
         return 0
     brand = getattr(settings, "EMAIL_BRAND_NAME", "Expressnet")
     from_email = getattr(settings, "DEFAULT_FROM_EMAIL", "")
@@ -192,9 +193,26 @@ def send_login_verification_email(recipient_email, code):
             headers={"Reply-To": from_email} if from_email else None,
         )
         message.attach_alternative(html_body, "text/html")
-        return message.send(fail_silently=True)
+        sent = message.send(fail_silently=False)
+        if not sent:
+            logger.warning(
+                "Login verification email backend returned 0 sent messages for recipient=%s backend=%s host=%s from=%s",
+                recipient_email,
+                getattr(settings, "EMAIL_BACKEND", ""),
+                getattr(settings, "EMAIL_HOST", ""),
+                from_email,
+            )
+        return sent
     except Exception:
-        logger.exception("Failed to send login verification email")
+        logger.exception(
+            "Failed to send login verification email recipient=%s backend=%s host=%s port=%s user=%s from=%s",
+            recipient_email,
+            getattr(settings, "EMAIL_BACKEND", ""),
+            getattr(settings, "EMAIL_HOST", ""),
+            getattr(settings, "EMAIL_PORT", ""),
+            getattr(settings, "EMAIL_HOST_USER", ""),
+            from_email,
+        )
         return 0
 
 
@@ -685,7 +703,7 @@ def auth_login(request):
     password = str(data["password"]).strip()
 
     def start_two_step(tenant, recipient_email, member_id=None):
-        if not getattr(settings, "TENANT_LOGIN_2FA_ENABLED", False):
+        if not getattr(settings, "TENANT_LOGIN_2FA_ENABLED", True):
             try:
                 return ok(_tenant_login_payload(tenant, member_id=member_id))
             except Exception as exc:
