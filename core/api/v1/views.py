@@ -219,6 +219,33 @@ def _clear_login_failures(request, email):
     cache.delete(_login_failure_key(request, email))
 
 
+def _tenant_login_payload(tenant, member_id=None):
+    token = tenant_token(tenant["id"], member_id=member_id)
+    if member_id:
+        member = (tenant.get("team_members") or {}).get(member_id) or {}
+        tenant_payload = {
+            "id": tenant["id"],
+            "business_name": tenant.get("business_name"),
+            "email": member.get("email"),
+            "name": member.get("name"),
+            "role": member.get("role") or "",
+            "member_id": member_id,
+            "permissions": _normalize_permissions(member.get("permissions")),
+            "is_admin": False,
+            **tenant_theme_payload(tenant),
+        }
+    else:
+        tenant_payload = {
+            "id": tenant["id"],
+            "business_name": tenant.get("business_name"),
+            "email": tenant.get("email"),
+            "role": "tenant_admin",
+            "is_admin": True,
+            **tenant_theme_payload(tenant),
+        }
+    return {"success": True, "token": token, "tenant": tenant_payload}
+
+
 def notify_admins_tenant_signup(tenant_id, tenant):
     default_dashboard_url = f"/{settings.ADMIN_FRONTEND_PATH}/tenants"
     dashboard_url = os.getenv("ADMIN_TENANTS_URL", default_dashboard_url)
@@ -648,32 +675,9 @@ def auth_login(request):
         tenant = tenant_obj.as_dict(include_id=True)
         member_id = challenge.get("member_id")
         try:
-            token = tenant_token(tenant["id"], member_id=member_id)
+            return ok(_tenant_login_payload(tenant, member_id=member_id))
         except Exception as exc:
             return ok({"message": f"Server configuration error: {exc}"}, 500)
-        if member_id:
-            member = (tenant.get("team_members") or {}).get(member_id) or {}
-            tenant_payload = {
-                "id": tenant["id"],
-                "business_name": tenant.get("business_name"),
-                "email": member.get("email"),
-                "name": member.get("name"),
-                "role": member.get("role") or "",
-                "member_id": member_id,
-                "permissions": _normalize_permissions(member.get("permissions")),
-                "is_admin": False,
-                **tenant_theme_payload(tenant),
-            }
-        else:
-            tenant_payload = {
-                "id": tenant["id"],
-                "business_name": tenant.get("business_name"),
-                "email": tenant.get("email"),
-                "role": "tenant_admin",
-                "is_admin": True,
-                **tenant_theme_payload(tenant),
-            }
-        return ok({"success": True, "token": token, "tenant": tenant_payload})
 
     if not data.get("email") or not data.get("password"):
         return ok({"message": "Email and password are required"}, 400)
@@ -681,6 +685,11 @@ def auth_login(request):
     password = str(data["password"]).strip()
 
     def start_two_step(tenant, recipient_email, member_id=None):
+        if not getattr(settings, "TENANT_LOGIN_2FA_ENABLED", False):
+            try:
+                return ok(_tenant_login_payload(tenant, member_id=member_id))
+            except Exception as exc:
+                return ok({"message": f"Server configuration error: {exc}"}, 500)
         code = f"{secrets.randbelow(1000000):06d}"
         challenge_id = secrets.token_urlsafe(24)
         cache.set(
