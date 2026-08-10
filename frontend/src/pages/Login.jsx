@@ -19,6 +19,7 @@ export default function Login() {
   const [verificationCode, setVerificationCode] = useState('');
   const [errors, setErrors] = useState({});
   const [showPassword, setShowPassword] = useState(false);
+  const [resending, setResending] = useState(false);
 
   const update = (event) => {
     setForm((current) => ({ ...current, [event.target.name]: event.target.value }));
@@ -63,11 +64,24 @@ export default function Login() {
     }
   };
 
+  const resendVerification = async () => {
+    if (!challengeId || resending) return;
+    setResending(true);
+    try {
+      const { data } = await api.post('/auth/login', { resend_challenge_id: challengeId });
+      toast.success(data.message || 'Verification code resent');
+    } catch (error) {
+      toast.error(getMessage(error));
+    } finally {
+      setResending(false);
+    }
+  };
+
   return (
     <main className="flex min-h-screen items-center justify-center bg-slate-100 px-4 py-10">
       <section className="w-full max-w-md rounded-lg bg-white p-8 shadow-soft ring-1 ring-slate-200">
         <div className="mb-8">
-          <p className="text-sm font-semibold uppercase tracking-wide text-blue-600">Billing SaaS</p>
+          <p className="text-sm font-semibold uppercase tracking-wide text-blue-600">Expressnetbilling</p>
           <h1 className="mt-2 text-2xl font-bold text-slate-900">Sign in to your tenant account</h1>
         </div>
 
@@ -123,8 +137,8 @@ export default function Login() {
             {loading ? 'Signing in...' : challengeId ? 'Verify and login' : 'Login'}
           </button>
           {challengeId && (
-            <button type="button" className="btn-secondary w-full justify-center" onClick={() => { setChallengeId(''); setVerificationCode(''); }}>
-              Use a different email
+            <button type="button" className="btn-secondary w-full justify-center" onClick={resendVerification} disabled={loading || resending}>
+              {resending ? 'Resending...' : 'Resend verification email'}
             </button>
           )}
         </form>

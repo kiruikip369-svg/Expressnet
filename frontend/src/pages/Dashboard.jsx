@@ -63,7 +63,7 @@ function isTenantAdmin(tenant, token) {
 
 function StatCard({ icon: Icon, label, value, helper, children }) {
   return (
-    <section className="rounded-lg bg-[#ffb17a] px-4 py-4 text-[#261001] shadow-[0_18px_30px_rgba(15,23,42,0.12)]">
+    <section className="rounded-lg px-4 py-4 shadow-[0_18px_30px_rgba(15,23,42,0.12)]" style={{ background: 'var(--app-accent-soft)', color: 'var(--app-text)' }}>
       <div className="flex items-center justify-between gap-3">
         <p className="text-xs font-semibold uppercase">{label}</p>
         <Icon size={18} />
@@ -81,7 +81,7 @@ function OverviewCard({ icon: Icon, label, value, helper, percent, darkMode }) {
     <section className={`rounded-lg border p-4 ${darkMode ? 'border-[#33343a] bg-[#222326] text-white' : 'border-slate-200 bg-white text-slate-950'}`}>
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <span className="inline-flex h-9 w-9 items-center justify-center rounded-md bg-[#ffefe2] text-[#d96f00]"><Icon size={18} /></span>
+          <span className="inline-flex h-9 w-9 items-center justify-center rounded-md" style={{ background: 'var(--app-accent-muted)', color: 'var(--app-accent)' }}><Icon size={18} /></span>
           <div>
             <h2 className="text-sm font-semibold">{label}</h2>
             <p className={`text-[11px] ${darkMode ? 'text-[#a9aec3]' : 'text-slate-500'}`}>{helper}</p>
@@ -90,7 +90,7 @@ function OverviewCard({ icon: Icon, label, value, helper, percent, darkMode }) {
         <p className="text-lg font-bold">{value}</p>
       </div>
       <div className={`mt-4 h-2 overflow-hidden rounded-full ${darkMode ? 'bg-[#34353b]' : 'bg-slate-100'}`}>
-        <div className="h-full rounded-full bg-[#fa8200]" style={{ width: `${bounded}%` }} />
+        <div className="h-full rounded-full" style={{ width: `${bounded}%`, background: 'var(--app-accent)' }} />
       </div>
     </section>
   );
@@ -177,7 +177,7 @@ export default function Dashboard() {
           <OverviewCard darkMode={darkMode} icon={Cpu} label="CPU status" value={`${cpuValue}%`} helper={router.board_name || sourceLabel} percent={cpuValue} />
           <section className={`rounded-lg border ${darkMode ? 'border-[#33343a] bg-[#222326] text-white' : 'border-slate-200 bg-white text-slate-950'}`}>
             <div className={`flex items-center gap-2 border-b px-4 py-3 ${darkMode ? 'border-[#36373d]' : 'border-slate-200'}`}>
-              <Gauge size={17} className="text-[#fa8200]" />
+              <Gauge size={17} style={{ color: 'var(--app-accent)' }} />
               <div>
                 <h2 className="text-sm font-semibold">Top 5 hotspot active users</h2>
                 <p className={`text-[11px] ${darkMode ? 'text-[#a9aec3]' : 'text-slate-500'}`}>Ranked by data usage</p>
@@ -191,7 +191,7 @@ export default function Dashboard() {
                 <tbody className={darkMode ? 'divide-y divide-[#34353b]' : 'divide-y divide-slate-100'}>
                   {topHotspotUsers.length ? topHotspotUsers.map((user) => (
                     <tr key={user.username || user.phone}>
-                      <td className="px-4 py-3 font-semibold text-[#d96f00]">{user.username || '-'}</td>
+                      <td className="px-4 py-3 font-semibold" style={{ color: 'var(--app-accent)' }}>{user.username || '-'}</td>
                       <td className="px-4 py-3">{formatData(user.data_used)}</td>
                       <td className="px-4 py-3">{user.phone || '-'}</td>
                     </tr>

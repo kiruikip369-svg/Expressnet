@@ -9,7 +9,7 @@ const publicApi = axios.create({
 });
 
 const defaultSite = {
-  brand_name: 'Billing SaaS',
+  brand_name: 'Expressnetbilling',
   headline: 'Internet billing built for hotspot businesses',
   subheadline: 'Sell packages, collect Paystack payments, and activate MikroTik users automatically.',
   about: 'We help hotspot operators manage customers, packages, payments, and access control from one secure platform.',
@@ -349,7 +349,7 @@ export default function Home() {
                   <div className="rounded-2xl shadow-2xl w-full h-[500px] relative z-10 overflow-hidden bg-slate-100">
                     <img
                       src={aboutImageUrl}
-                      alt="Billing SaaS platform preview"
+                      alt="Expressnetbilling platform preview"
                       className="block h-full w-full object-cover"
                     />
                   </div>

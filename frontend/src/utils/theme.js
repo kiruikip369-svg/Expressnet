@@ -26,6 +26,13 @@ function mixWithWhite(hex, amount = 0.72) {
   return `#${mixed.map((part) => part.toString(16).padStart(2, '0')).join('')}`;
 }
 
+function mixWithBlack(hex, amount = 0.18) {
+  const color = normalizeThemeColor(hex).slice(1);
+  const parts = [0, 2, 4].map((start) => parseInt(color.slice(start, start + 2), 16));
+  const mixed = parts.map((part) => Math.round(part * (1 - amount)));
+  return `#${mixed.map((part) => part.toString(16).padStart(2, '0')).join('')}`;
+}
+
 function hexToRgb(hex) {
   const color = normalizeThemeColor(hex).slice(1);
   return [0, 2, 4].map((start) => parseInt(color.slice(start, start + 2), 16));
@@ -91,6 +98,8 @@ export function applyTenantTheme(settings = getStoredTenantSettings()) {
   root.style.setProperty('--dashboard-color-soft', accentSoft);
   root.style.setProperty('--app-accent', theme.themeColor);
   root.style.setProperty('--app-accent-soft', accentSoft);
+  root.style.setProperty('--app-accent-strong', mixWithBlack(theme.themeColor));
+  root.style.setProperty('--app-accent-muted', mixWithWhite(theme.themeColor, 0.9));
   root.style.setProperty('--app-accent-contrast', contrastColor(theme.themeColor));
   root.style.setProperty('--app-focus-ring', mixWithWhite(theme.themeColor, 0.82));
   root.style.setProperty('--app-font-family', `${theme.font}, Roboto, ui-sans-serif, system-ui, sans-serif`);

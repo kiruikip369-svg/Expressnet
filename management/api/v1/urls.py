@@ -23,6 +23,7 @@ urlpatterns = [
     path("settings/test-sms", views.settings_test_sms),
     path("settings/delete-customers", views.settings_delete_customers),
     path("settings/notifications", views.settings_notifications),
+    path("staff", views.staff_members),
     path("team/members", views.team_members),
     path("team/invite", views.team_invite),
     path("team/members/<str:member_id>", views.team_members),

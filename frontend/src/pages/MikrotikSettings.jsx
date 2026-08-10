@@ -164,11 +164,11 @@ export default function MikrotikSettings() {
             <p className="page-subtitle">Routers are linked by running the provisioning command. No API host, username, or password is required.</p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <button type="button" className="btn-secondary border-slate-300 text-blue-600" onClick={() => toast('Tutorial content will open here when added.')}>
+            <button type="button" className="btn-secondary" onClick={() => toast('Tutorial content will open here when added.')}>
               <HelpCircle size={16} />
               Tutorial
             </button>
-            <button type="button" className="btn-primary bg-orange-500 text-slate-950 hover:bg-orange-400" onClick={() => navigate('/mikrotik/link?add=1')}>
+            <button type="button" className="btn-primary" onClick={() => navigate('/mikrotik/link?add=1')}>
               <LinkIcon size={16} />
               Link a MikroTik
             </button>
@@ -188,13 +188,13 @@ export default function MikrotikSettings() {
                 key={key}
                 type="button"
                 className={`inline-flex h-10 items-center gap-2 border-b px-1 text-xs font-medium ${
-                  filter === key ? 'border-orange-500 text-orange-600' : 'border-transparent text-slate-600'
+                  filter === key ? 'border-[var(--app-accent)] text-[var(--app-accent)]' : 'border-transparent text-slate-600'
                 }`}
                 onClick={() => setFilter(key)}
               >
                 <Icon size={15} className="text-slate-400" />
                 {label}
-                <span className={`rounded px-1.5 py-0.5 text-[10px] ${key === 'online' ? 'bg-green-50 text-green-700' : key === 'offline' ? 'bg-red-50 text-red-600' : 'bg-orange-50 text-orange-700'}`}>{count}</span>
+                <span className={`rounded px-1.5 py-0.5 text-[10px] ${key === 'online' ? 'bg-green-50 text-green-700' : key === 'offline' ? 'bg-red-50 text-red-600' : ''}`} style={key === 'all' ? { background: 'var(--app-accent-muted)', color: 'var(--app-accent)' } : undefined}>{count}</span>
               </button>
             ))}
           </div>
@@ -232,9 +232,9 @@ export default function MikrotikSettings() {
                 ) : filteredRows.map((router) => (
                   <tr key={router.id}>
                     <td className="table-cell font-medium text-slate-950">{router.boardName}</td>
-                    <td className="table-cell"><span className="rounded bg-orange-50 px-2 py-1 text-[11px] font-medium text-orange-700">{router.provisioning}</span></td>
+                    <td className="table-cell"><span className="rounded px-2 py-1 text-[11px] font-medium" style={{ background: 'var(--app-accent-muted)', color: 'var(--app-accent)' }}>{router.provisioning}</span></td>
                     <td className="table-cell">{router.cpu === undefined ? '-' : <span className="rounded bg-green-50 px-2 py-1 text-[11px] font-medium text-green-700">{router.cpu}%</span>}</td>
-                    <td className="table-cell">{router.memory ? <span className="rounded bg-orange-50 px-2 py-1 text-[11px] font-medium text-orange-700">{formatMemory(router.memory)}</span> : '-'}</td>
+                    <td className="table-cell">{router.memory ? <span className="rounded px-2 py-1 text-[11px] font-medium" style={{ background: 'var(--app-accent-muted)', color: 'var(--app-accent)' }}>{formatMemory(router.memory)}</span> : '-'}</td>
                     <td className="table-cell">
                       <span className={`rounded px-2 py-1 text-[11px] font-medium ${router.status === 'online' ? 'bg-green-50 text-green-700' : router.status === 'suspended' ? 'bg-amber-50 text-amber-700' : 'bg-red-50 text-red-600'}`}>
                         {router.status === 'online' ? 'Online' : router.status === 'suspended' ? 'Suspended' : 'Offline'}
@@ -248,7 +248,7 @@ export default function MikrotikSettings() {
                       <div className="relative flex justify-end">
                         <button
                           type="button"
-                          className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600 transition hover:border-orange-200 hover:text-orange-600 disabled:cursor-not-allowed disabled:opacity-50"
+                          className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600 transition hover:border-[var(--app-accent-soft)] hover:text-[var(--app-accent)] disabled:cursor-not-allowed disabled:opacity-50"
                           onClick={(event) => {
                             if (openActionId === router.id) {
                               setOpenActionId('');
@@ -268,7 +268,7 @@ export default function MikrotikSettings() {
 
                         {openActionId === router.id && (
                           <div style={{ top: actionPosition?.top, left: actionPosition?.left }} className="fixed z-[9999] w-44 rounded-md border border-slate-200 bg-white py-1 text-left shadow-lg">
-                            <button type="button" className="flex w-full items-center gap-2 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-orange-50 hover:text-orange-700" onClick={() => editRouter(router.id)}>
+                            <button type="button" className="flex w-full items-center gap-2 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-[var(--app-accent-muted)] hover:text-[var(--app-accent)]" onClick={() => editRouter(router.id)}>
                               <Edit size={14} />
                               Edit
                             </button>

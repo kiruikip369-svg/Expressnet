@@ -38,13 +38,13 @@ function sameDay(a, b) {
 
 function MetricCard({ title, value, helper }) {
   return (
-    <div className="rounded-md bg-[#ffb783] p-4 shadow-[0_18px_30px_rgba(15,23,42,0.12)]">
-      <p className="text-xs font-semibold text-black">{title}</p>
+    <div className="rounded-md p-4 shadow-[0_18px_30px_rgba(15,23,42,0.12)]" style={{ background: 'var(--app-accent-soft)', color: 'var(--app-text)' }}>
+      <p className="text-xs font-semibold">{title}</p>
       <div className="mt-3 flex items-center gap-2">
-        <p className="text-xl font-bold text-black">{formatKES(value)}</p>
-        <Eye size={14} className="text-black" />
+        <p className="text-xl font-bold">{formatKES(value)}</p>
+        <Eye size={14} />
       </div>
-      <p className="mt-2 text-xs text-black">{helper}</p>
+      <p className="mt-2 text-xs">{helper}</p>
     </div>
   );
 }
@@ -150,7 +150,7 @@ export default function Payments() {
           <h1 className="text-xl font-semibold text-black">Payments</h1>
           <span className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-900 text-[10px]">i</span>
         </div>
-        <div className="flex gap-2"><button type="button" className="btn-secondary" onClick={() => setMethodsOpen(true)}><Settings2 size={14} />Payment methods</button><button type="button" className="inline-flex h-9 items-center gap-2 rounded-md bg-[#ff9347] px-4 text-xs font-semibold text-black shadow-md hover:bg-[#ff842f]" onClick={openRecordPayment}>
+        <div className="flex gap-2"><button type="button" className="btn-secondary" onClick={() => setMethodsOpen(true)}><Settings2 size={14} />Payment methods</button><button type="button" className="btn-primary h-9 px-4 shadow-md" onClick={openRecordPayment}>
           <Coins size={14} />
           Record Payment
         </button></div>
@@ -184,7 +184,7 @@ export default function Payments() {
             ['checked', 'Checked payments', CheckCheck],
             ['unchecked', 'Unchecked payments', X],
           ].map(([key, label, Icon]) => (
-            <button key={key} type="button" className={`inline-flex h-10 items-center gap-2 border-b-2 text-xs font-medium ${tab === key ? 'border-[#fa8200] text-[#c95f00]' : 'border-transparent text-slate-500'}`} onClick={() => setTab(key)}>
+            <button key={key} type="button" className={`inline-flex h-10 items-center gap-2 border-b-2 text-xs font-medium ${tab === key ? 'border-[var(--app-accent)] text-[var(--app-accent)]' : 'border-transparent text-slate-500'}`} onClick={() => setTab(key)}>
               <Icon size={15} />
               {label}
             </button>
@@ -196,7 +196,7 @@ export default function Payments() {
         <div className="flex justify-end border-b border-slate-200 p-3">
           <label className="relative block w-full max-w-xs">
             <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input className="h-9 w-full rounded-md border border-slate-200 pl-9 pr-3 text-xs outline-none focus:border-[#fa8200] focus:ring-2 focus:ring-orange-100" placeholder="Search" value={query} onChange={(event) => setQuery(event.target.value)} />
+            <input className="form-input mt-0 h-9 pl-9" placeholder="Search" value={query} onChange={(event) => setQuery(event.target.value)} />
           </label>
         </div>
 
@@ -221,14 +221,14 @@ export default function Payments() {
               ) : rows.map((payment) => (
                 <tr key={payment.id}>
                   <td className="px-5 py-4"><input type="checkbox" className="h-4 w-4 rounded border-slate-300" /></td>
-                  <td className="px-5 py-4 font-bold text-[#b95600]">{payment.customer_name || payment.access_username || '-'}</td>
+                  <td className="px-5 py-4 font-bold" style={{ color: 'var(--app-accent)' }}>{payment.customer_name || payment.access_username || '-'}</td>
                   <td className="px-5 py-4">{payment.phone || '-'}</td>
                   <td className="px-5 py-4">{payment.payment_code || payment.paystack_reference || '-'}</td>
                   <td className="px-5 py-4">{formatKES(payment.amount)}</td>
                   <td className="px-5 py-4"><span className="rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] text-emerald-700">{payment.status === 'success' ? 'Yes' : 'No'}</span></td>
                   <td className="px-5 py-4">{formatDate(payment.paid_at || payment.created_at || payment.initiated_at)}</td>
-                  <td className="px-5 py-4"><span className="rounded-md border border-orange-200 bg-orange-50 px-2 py-1 text-[10px] text-[#c95f00]">{payment.provider === 'voucher' ? 'Voucher' : 'Direct'}</span></td>
-                  <td className="px-5 py-4 text-right text-[#fa8200]"><MoreVertical size={16} /></td>
+                  <td className="px-5 py-4"><span className="rounded-md border px-2 py-1 text-[10px]" style={{ borderColor: 'var(--app-accent-soft)', background: 'var(--app-accent-muted)', color: 'var(--app-accent)' }}>{payment.provider === 'voucher' ? 'Voucher' : 'Direct'}</span></td>
+                  <td className="px-5 py-4 text-right" style={{ color: 'var(--app-accent)' }}><MoreVertical size={16} /></td>
                 </tr>
               ))}
             </tbody>
@@ -250,7 +250,7 @@ export default function Payments() {
             </div>
             <div className="mt-5 flex justify-end gap-2">
               <button type="button" className="btn-secondary" onClick={() => setModalOpen(false)}>Cancel</button>
-              <button type="submit" className="inline-flex h-8 items-center gap-2 rounded-md bg-[#ff9347] px-4 text-xs font-semibold text-black">
+              <button type="submit" className="btn-primary">
                 <Plus size={14} />
                 Save Payment
               </button>

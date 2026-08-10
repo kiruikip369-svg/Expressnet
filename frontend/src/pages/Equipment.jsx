@@ -3,6 +3,8 @@ import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import api from '../api/axios';
 import Modal from '../components/Modal';
+import { useAuth } from '../context/AuthContext';
+import { canPerformAction } from '../utils/permissions';
 
 // Equipment (routers, switches, access points...) is issued and tracked by
 // who has it — it isn't expected to come back on a schedule, so it carries
@@ -19,7 +21,7 @@ const TOOL_STATUSES = [
   { key: 'lost', label: 'Lost' },
 ];
 
-const blankDraft = { itemType: 'equipment', itemName: '', staffId: '', task: '', status: 'with_staff' };
+const blankDraft = { itemType: 'equipment', itemName: '', quantity: '1', staffId: '', task: '', status: 'with_staff' };
 
 function StatusPill({ status }) {
   const styles = {
@@ -45,7 +47,23 @@ function formatDate(value) {
   }
 }
 
+function staffLabel(staff) {
+  const name = staff.name || staff.email || 'Unnamed staff';
+  const role = staff.role ? ` - ${staff.role}` : '';
+  return `${name}${role}`;
+}
+
+function extractStaff(data) {
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.results)) return data.results;
+  if (data && typeof data === 'object') {
+    return Object.entries(data).map(([id, staff]) => ({ id, ...(staff || {}) }));
+  }
+  return [];
+}
+
 export default function Equipment() {
+  const { tenant } = useAuth();
   const [staffList, setStaffList] = useState([]);
   const [staffLoading, setStaffLoading] = useState(true);
 
@@ -55,13 +73,16 @@ export default function Equipment() {
   const [saving, setSaving] = useState(false);
   const [typeFilter, setTypeFilter] = useState('all');
   const [showForm, setShowForm] = useState(false);
+  const canCreate = canPerformAction(tenant, 'equipment', 'create');
+  const canEdit = canPerformAction(tenant, 'equipment', 'edit');
+  const canDelete = canPerformAction(tenant, 'equipment', 'delete');
 
   useEffect(() => {
     let mounted = true;
     async function loadStaff() {
       try {
-        const { data } = await api.get('/settings/staff');
-        if (mounted) setStaffList(Array.isArray(data) ? data : []);
+        const { data } = await api.get('/staff?all=1');
+        if (mounted) setStaffList(extractStaff(data));
       } catch (error) {
         toast.error(error.response?.data?.message || 'Failed to load staff list');
       } finally {
@@ -107,6 +128,7 @@ export default function Equipment() {
       toast.error('Enter the equipment or tool name');
       return;
     }
+    const quantity = draft.itemType === 'equipment' ? Math.max(Number.parseInt(draft.quantity, 10) || 1, 1) : 1;
     if (!draft.staffId) {
       toast.error('Select which staff member is receiving it');
       return;
@@ -121,6 +143,7 @@ export default function Equipment() {
                 ...item,
                 itemType: draft.itemType,
                 itemName: draft.itemName.trim(),
+                quantity,
                 staffId: draft.staffId,
                 staffName: staff?.name || item.staffName,
                 task: draft.task.trim(),
@@ -133,6 +156,7 @@ export default function Equipment() {
         id: `EQ-${Date.now().toString().slice(-6)}`,
         itemType: draft.itemType,
         itemName: draft.itemName.trim(),
+        quantity,
         staffId: draft.staffId,
         staffName: staff?.name || 'Unknown staff',
         task: draft.task.trim(),
@@ -151,6 +175,7 @@ export default function Equipment() {
     setDraft({
       itemType: record.itemType,
       itemName: record.itemName,
+      quantity: String(record.quantity || 1),
       staffId: record.staffId,
       task: record.task || '',
       status: record.status || 'with_staff',
@@ -188,9 +213,11 @@ export default function Equipment() {
         <div className="flex flex-wrap items-center gap-2">
           <span className="btn-secondary"><Wrench size={15} />{withStaffCount} tools out</span>
           <span className="btn-secondary"><AlertTriangle size={15} />{lostCount} lost</span>
-          <button className="btn-primary" type="button" onClick={openAddForm}>
-            <Plus size={15} />Record assignment
-          </button>
+          {canCreate && (
+            <button className="btn-primary" type="button" onClick={openAddForm}>
+              <Plus size={15} />Record assignment
+            </button>
+          )}
         </div>
       </div>
 
@@ -224,11 +251,12 @@ export default function Equipment() {
               <tr className="border-b border-slate-200 text-xs font-medium text-slate-500">
                 <th className="px-4 py-3">Item</th>
                 <th className="px-4 py-3">Type</th>
+                <th className="px-4 py-3">Qty</th>
                 <th className="px-4 py-3">Staff</th>
                 <th className="px-4 py-3">Task</th>
                 <th className="px-4 py-3">Issued</th>
                 <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3 text-right">Actions</th>
+                  {(canEdit || canDelete) && <th className="px-4 py-3 text-right">Actions</th>}
               </tr>
             </thead>
             <tbody>
@@ -241,32 +269,39 @@ export default function Equipment() {
                     </div>
                   </td>
                   <td className="px-4 py-3 text-slate-600 capitalize">{record.itemType}</td>
+                  <td className="px-4 py-3 text-slate-600">{record.itemType === 'equipment' ? record.quantity || 1 : '-'}</td>
                   <td className="px-4 py-3 text-slate-600">{record.staffName}</td>
                   <td className="px-4 py-3 text-slate-500">{record.task || '—'}</td>
                   <td className="px-4 py-3 text-slate-500">{formatDate(record.issuedAt)}</td>
                   <td className="px-4 py-3">
                     {record.itemType === 'tool' ? <StatusPill status={record.status} /> : <span className="text-xs text-slate-400">Not tracked</span>}
                   </td>
-                  <td className="px-4 py-3">
-                    <div className="flex flex-wrap items-center justify-end gap-2">
-                      {record.itemType === 'tool' && record.status === 'with_staff' && (
-                        <>
-                          <button className="btn-secondary" type="button" onClick={() => setToolStatus(record, 'returned')}>
-                            <RotateCcw size={14} />Returned
+                  {(canEdit || canDelete) && (
+                    <td className="px-4 py-3">
+                      <div className="flex flex-wrap items-center justify-end gap-2">
+                        {canEdit && record.itemType === 'tool' && record.status === 'with_staff' && (
+                          <>
+                            <button className="btn-secondary" type="button" onClick={() => setToolStatus(record, 'returned')}>
+                              <RotateCcw size={14} />Returned
+                            </button>
+                            <button className="btn-danger" type="button" onClick={() => setToolStatus(record, 'lost')}>
+                              <AlertTriangle size={14} />Lost
+                            </button>
+                          </>
+                        )}
+                        {canEdit && (
+                          <button className="btn-secondary" type="button" onClick={() => startEdit(record)}>
+                            <Pencil size={14} />Edit
                           </button>
-                          <button className="btn-danger" type="button" onClick={() => setToolStatus(record, 'lost')}>
-                            <AlertTriangle size={14} />Lost
+                        )}
+                        {canDelete && (
+                          <button className="btn-danger" type="button" onClick={() => removeRecord(record)}>
+                            <Trash2 size={14} />Delete
                           </button>
-                        </>
-                      )}
-                      <button className="btn-secondary" type="button" onClick={() => startEdit(record)}>
-                        <Pencil size={14} />Edit
-                      </button>
-                      <button className="btn-danger" type="button" onClick={() => removeRecord(record)}>
-                        <Trash2 size={14} />Delete
-                      </button>
-                    </div>
-                  </td>
+                        )}
+                      </div>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -313,6 +348,18 @@ export default function Equipment() {
               onChange={(event) => updateDraft('itemName', event.target.value)}
             />
 
+            {draft.itemType === 'equipment' && (
+              <input
+                className="form-input"
+                type="number"
+                min="1"
+                step="1"
+                placeholder="Quantity"
+                value={draft.quantity}
+                onChange={(event) => updateDraft('quantity', event.target.value)}
+              />
+            )}
+
             <select
               className="form-input"
               value={draft.staffId}
@@ -322,7 +369,7 @@ export default function Equipment() {
               <option value="">{staffLoading ? 'Loading staff...' : 'Select staff member'}</option>
               {staffList.map((staff) => (
                 <option key={staff.id} value={staff.id}>
-                  {staff.name} {staff.email ? `(${staff.email})` : ''}
+                  {staffLabel(staff)}
                 </option>
               ))}
             </select>

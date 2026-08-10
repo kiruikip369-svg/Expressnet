@@ -31,6 +31,13 @@ export function canAccessPage(tenant, pageKey) {
   return Boolean(permission?.access && permission?.view);
 }
 
+export function canPerformAction(tenant, pageKey, action) {
+  if (!pageKey || pageKey === 'profile') return true;
+  if (isTenantAdmin(tenant)) return true;
+  const permission = tenant?.permissions?.[pageKey];
+  return Boolean(permission?.access && permission?.[action]);
+}
+
 export function firstAllowedPath(tenant) {
   if (isTenantAdmin(tenant)) return '/dashboard';
   const match = Object.entries(PAGE_PERMISSIONS).find(([pageKey]) => canAccessPage(tenant, pageKey));

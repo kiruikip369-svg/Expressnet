@@ -21,7 +21,8 @@ function formatDate(value) {
   return `${String(date.getDate()).padStart(2, '0')}.${String(date.getMonth() + 1).padStart(2, '0')}.${date.getFullYear()} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
 }
 
-const ORANGE = '#d96f00';
+const ACCENT = 'var(--app-accent)';
+const ACCENT_SOFT = 'var(--app-accent-soft)';
 const GRID = '#e5e7eb';
 
 const fallbackSeries = {
@@ -66,7 +67,7 @@ function BarChart({ data, valueIndex = 1, height = 190 }) {
     <div className="flex items-end gap-3" style={{ height }}>
       {data.map((item) => (
         <div key={item[0]} className="flex flex-1 flex-col items-center gap-2">
-          <div className="w-full max-w-[26px] rounded-t-sm" style={{ height: `${Math.max(((Number(item[valueIndex]) || 0) / max) * (height - 28), item[valueIndex] ? 5 : 1)}px`, background: ORANGE }} />
+          <div className="w-full max-w-[26px] rounded-t-sm" style={{ height: `${Math.max(((Number(item[valueIndex]) || 0) / max) * (height - 28), item[valueIndex] ? 5 : 1)}px`, background: ACCENT }} />
           <span className="text-[10px] text-slate-500">{item[0]}</span>
         </div>
       ))}
@@ -74,7 +75,7 @@ function BarChart({ data, valueIndex = 1, height = 190 }) {
   );
 }
 
-function LineChart({ data, indexes = [1], colors = [ORANGE], height = 190 }) {
+function LineChart({ data, indexes = [1], colors = [ACCENT], height = 190 }) {
   return (
     <svg viewBox="0 0 320 190" className="h-full w-full" style={{ minHeight: height }}>
       {[0, 1, 2, 3].map((line) => <line key={line} x1="18" x2="304" y1={24 + line * 42} y2={24 + line * 42} stroke={GRID} strokeWidth="1" />)}
@@ -105,13 +106,13 @@ function exportCsv(rows) {
 
 function MetricCard({ title, value, helper }) {
   return (
-    <div className="rounded-md bg-[#ffb783] p-4 shadow-[0_18px_30px_rgba(15,23,42,0.12)]">
-      <p className="text-xs font-semibold text-black">{title}</p>
+    <div className="rounded-md p-4 shadow-[0_18px_30px_rgba(15,23,42,0.12)]" style={{ background: 'var(--app-accent-soft)', color: 'var(--app-text)' }}>
+      <p className="text-xs font-semibold">{title}</p>
       <div className="mt-3 flex items-center gap-2">
-        <p className="text-xl font-bold text-black">{formatKES(value)}</p>
-        <Eye size={14} className="text-black" />
+        <p className="text-xl font-bold">{formatKES(value)}</p>
+        <Eye size={14} />
       </div>
-      <p className="mt-2 text-xs text-black">{helper}</p>
+      <p className="mt-2 text-xs">{helper}</p>
     </div>
   );
 }
@@ -183,7 +184,7 @@ export default function Reports() {
           <h1 className="text-xl font-semibold text-black">Reports</h1>
           <span className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-900 text-[10px]">i</span>
         </div>
-        <button type="button" className="inline-flex h-9 items-center gap-2 rounded-md bg-[#ff9347] px-4 text-xs font-semibold text-black shadow-md hover:bg-[#ff842f]" onClick={() => exportCsv(rows)}>
+        <button type="button" className="btn-primary h-9 px-4 shadow-md" onClick={() => exportCsv(rows)}>
           <Download size={14} />
           Export Report
         </button>
@@ -198,10 +199,10 @@ export default function Reports() {
 
       <section className="grid gap-4 xl:grid-cols-2">
         <ChartCard title="Payments" subtitle="Payments and expenses trend."><BarChart data={chartData.payments} height={230} /></ChartCard>
-        <ChartCard title="Active Users" subtitle="Active and new users trend."><LineChart data={chartData.activeUsers} indexes={[1, 2]} colors={[ORANGE, '#f8dcc7']} height={230} /></ChartCard>
-        <ChartCard title="Customer retention rate" subtitle="Recurring and active customer movement."><LineChart data={chartData.retention} indexes={[1, 2, 3]} colors={['#2563eb', '#16a34a', '#ef4444']} height={230} /></ChartCard>
-        <ChartCard title="Data Usage" subtitle="Data usage trend for PPPoE and Hotspot users."><LineChart data={chartData.dataUsage} indexes={[1]} colors={[ORANGE]} height={230} /></ChartCard>
-        <ChartCard title="Revenue Forecast" subtitle="Expected revenue trend."><LineChart data={chartData.forecast} indexes={[1]} colors={['#2563eb']} height={230} /></ChartCard>
+        <ChartCard title="Active Users" subtitle="Active and new users trend."><LineChart data={chartData.activeUsers} indexes={[1, 2]} colors={[ACCENT, ACCENT_SOFT]} height={230} /></ChartCard>
+        <ChartCard title="Customer retention rate" subtitle="Recurring and active customer movement."><LineChart data={chartData.retention} indexes={[1, 2, 3]} colors={[ACCENT, '#16a34a', '#ef4444']} height={230} /></ChartCard>
+        <ChartCard title="Data Usage" subtitle="Data usage trend for PPPoE and Hotspot users."><LineChart data={chartData.dataUsage} indexes={[1]} colors={[ACCENT]} height={230} /></ChartCard>
+        <ChartCard title="Revenue Forecast" subtitle="Expected revenue trend."><LineChart data={chartData.forecast} indexes={[1]} colors={[ACCENT]} height={230} /></ChartCard>
         <ChartCard title="Sent SMS" subtitle="SMS sent from the system."><BarChart data={chartData.sms} height={230} /></ChartCard>
       </section>
 
@@ -211,7 +212,7 @@ export default function Reports() {
             ['checked', 'Checked payments', CheckCheck],
             ['unchecked', 'Unchecked payments', X],
           ].map(([key, label, Icon]) => (
-            <button key={key} type="button" className={`inline-flex h-10 items-center gap-2 border-b-2 text-xs font-medium ${tab === key ? 'border-[#fa8200] text-[#c95f00]' : 'border-transparent text-slate-500'}`} onClick={() => setTab(key)}>
+            <button key={key} type="button" className={`inline-flex h-10 items-center gap-2 border-b-2 text-xs font-medium ${tab === key ? 'border-[var(--app-accent)] text-[var(--app-accent)]' : 'border-transparent text-slate-500'}`} onClick={() => setTab(key)}>
               <Icon size={15} />
               {label}
             </button>
@@ -223,7 +224,7 @@ export default function Reports() {
         <div className="flex justify-end border-b border-slate-200 p-3">
           <label className="relative block w-full max-w-xs">
             <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input className="h-9 w-full rounded-md border border-slate-200 pl-9 pr-3 text-xs outline-none focus:border-[#fa8200] focus:ring-2 focus:ring-orange-100" placeholder="Search" value={query} onChange={(event) => setQuery(event.target.value)} />
+            <input className="form-input mt-0 h-9 pl-9" placeholder="Search" value={query} onChange={(event) => setQuery(event.target.value)} />
           </label>
         </div>
         <div className="overflow-x-auto">
@@ -247,14 +248,14 @@ export default function Reports() {
               ) : rows.map((payment) => (
                 <tr key={payment.id}>
                   <td className="px-5 py-4"><input type="checkbox" className="h-4 w-4 rounded border-slate-300" /></td>
-                  <td className="px-5 py-4 font-bold text-[#b95600]">{payment.customer_name || payment.access_username || '-'}</td>
+                  <td className="px-5 py-4 font-bold" style={{ color: 'var(--app-accent)' }}>{payment.customer_name || payment.access_username || '-'}</td>
                   <td className="px-5 py-4">{payment.phone || '-'}</td>
                   <td className="px-5 py-4">{payment.payment_code || payment.paystack_reference || '-'}</td>
                   <td className="px-5 py-4">{formatKES(payment.amount)}</td>
                   <td className="px-5 py-4"><span className="rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] text-emerald-700">{payment.status === 'success' ? 'Yes' : 'No'}</span></td>
                   <td className="px-5 py-4">{formatDate(payment.paid_at || payment.created_at)}</td>
-                  <td className="px-5 py-4"><span className="rounded-md border border-orange-200 bg-orange-50 px-2 py-1 text-[10px] text-[#c95f00]">{payment.provider === 'voucher' ? 'Voucher' : 'Direct'}</span></td>
-                  <td className="px-5 py-4 text-right text-[#fa8200]"><MoreVertical size={16} /></td>
+                  <td className="px-5 py-4"><span className="rounded-md border px-2 py-1 text-[10px]" style={{ borderColor: 'var(--app-accent-soft)', background: 'var(--app-accent-muted)', color: 'var(--app-accent)' }}>{payment.provider === 'voucher' ? 'Voucher' : 'Direct'}</span></td>
+                  <td className="px-5 py-4 text-right" style={{ color: 'var(--app-accent)' }}><MoreVertical size={16} /></td>
                 </tr>
               ))}
             </tbody>

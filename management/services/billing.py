@@ -270,7 +270,7 @@ def get_daraja_credentials(tenant, payment_method="daraja_paybill"):
     passkey = str(tenant.get("daraja_passkey") or "").strip()
     till_number = str(tenant.get("daraja_till_number") or "").strip()
     shortcode_type = str(tenant.get("daraja_shortcode_type") or "CustomerBuyGoodsOnline").strip()
-    business_number = till_number if payment_method == "daraja_buygoods" else shortcode
+    business_number = (till_number or shortcode) if payment_method == "daraja_buygoods" else shortcode
     if not all([consumer_key, consumer_secret, business_number, passkey]):
         logger.warning(
             "Daraja credentials incomplete for tenant=%s method=%s missing=%s",
@@ -389,11 +389,11 @@ def initiate_daraja_payment(tenant, payment_id, amount, phone, description=None,
         raise RuntimeError("PUBLIC_APP_URL or PAYSTACK_CALLBACK_BASE_URL is required for the Daraja callback URL")
 
     token = get_daraja_access_token(tenant, payment_method)
-    business_shortcode = creds["till_number"] if payment_method == "daraja_buygoods" and creds["till_number"] else creds["shortcode"]
+    business_shortcode = (creds["till_number"] or creds["shortcode"]) if payment_method == "daraja_buygoods" else creds["shortcode"]
     timestamp, password = daraja_timestamp_and_password(business_shortcode, creds["passkey"])
     callback_token = make_daraja_callback_token(tenant_id, payment_id)
 
-    party_b = creds["till_number"] if payment_method == "daraja_buygoods" and creds["till_number"] else business_shortcode
+    party_b = (creds["till_number"] or business_shortcode) if payment_method == "daraja_buygoods" else business_shortcode
     payload = {
         "BusinessShortCode": business_shortcode,
         "Password": password,

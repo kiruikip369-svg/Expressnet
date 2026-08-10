@@ -72,7 +72,7 @@ export default function Register() {
     <main className="min-h-screen bg-slate-100 px-4 py-10">
       <section className="mx-auto max-w-5xl rounded-lg bg-white p-6 shadow-soft ring-1 ring-slate-200 sm:p-8">
         <div className="mb-8">
-          <p className="text-sm font-semibold uppercase tracking-wide text-blue-600">Billing SaaS</p>
+          <p className="text-sm font-semibold uppercase tracking-wide text-blue-600">Expressnetbilling</p>
           <h1 className="mt-2 text-2xl font-bold text-slate-900">Register your hotspot business</h1>
           <p className="mt-2 text-sm text-slate-500">
             Create your tenant account and billing workspace. Payment settlement details can be added later in Settings.

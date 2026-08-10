@@ -322,13 +322,13 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
                 key={key}
                 type="button"
                 className={`flex h-10 items-center gap-2 border-b-2 px-0 text-xs font-normal transition ${
-                  active ? 'border-[#fa8200] text-[#c95f00]' : 'border-transparent text-slate-500 hover:text-slate-900'
+                  active ? 'border-[var(--app-accent)] text-[var(--app-accent)]' : 'border-transparent text-slate-500 hover:text-slate-900'
                 }`}
                 onClick={() => setStatusFilter(key)}
               >
-                <Icon size={16} className={active ? 'text-[#c95f00]' : 'text-slate-400'} />
+                <Icon size={16} className={active ? 'text-[var(--app-accent)]' : 'text-slate-400'} />
                 <span>{label}</span>
-                <span className="rounded-md border border-orange-200 bg-orange-50 px-1.5 py-0.5 text-[10px] leading-none text-[#c95f00]">{count}</span>
+                <span className="rounded-md border px-1.5 py-0.5 text-[10px] leading-none" style={{ borderColor: 'var(--app-accent-soft)', background: 'var(--app-accent-muted)', color: 'var(--app-accent)' }}>{count}</span>
               </button>
             );
           })}
@@ -495,7 +495,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
                 <input
                   type="checkbox"
                   name="provision_mikrotik"
-                  className="mt-0.5 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                  className="mt-0.5 h-4 w-4 rounded border-slate-300 accent-[var(--app-accent)] focus:ring-[var(--app-focus-ring)]"
                   checked={form.provision_mikrotik}
                   onChange={update}
                 />

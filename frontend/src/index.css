@@ -6,6 +6,11 @@
   :root {
     --dashboard-color: #fa8200;
     --dashboard-color-soft: #ffd1a0;
+    --app-accent: #fa8200;
+    --app-accent-soft: #ffd1a0;
+    --app-accent-strong: #cd6a00;
+    --app-accent-muted: #fff3e6;
+    --app-accent-contrast: #111827;
     --app-bg: #ffffff;
     --app-panel: #ffffff;
     --app-panel-muted: #f8fafc;
@@ -91,16 +96,29 @@ html[data-theme="dark"] .tenant-app tr.bg-slate-50 { background-color: var(--app
 
 @layer components {
   .btn-primary {
-    @apply inline-flex h-8 items-center justify-center gap-2 rounded-md bg-app-navy px-3 text-xs font-normal text-white transition hover:bg-app-navySoft disabled:cursor-not-allowed disabled:opacity-60;
+    @apply inline-flex h-8 items-center justify-center gap-2 rounded-md px-3 text-xs font-normal transition disabled:cursor-not-allowed disabled:opacity-60;
+    background: var(--app-accent);
+    color: var(--app-accent-contrast);
+  }
+
+  .btn-primary:hover {
+    background: var(--app-accent-strong);
+    color: #ffffff;
   }
 
   .btn-danger {
-    @apply inline-flex h-8 items-center justify-center gap-2 rounded-md bg-app-navy px-3 text-xs font-normal text-white transition hover:bg-app-navySoft disabled:cursor-not-allowed disabled:opacity-60;
+    @apply inline-flex h-8 items-center justify-center gap-2 rounded-md bg-red-600 px-3 text-xs font-normal text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60;
   }
 
   .btn-secondary {
-    @apply inline-flex h-8 items-center justify-center gap-2 rounded-md border border-app-navy px-3 text-xs font-normal text-app-navy transition disabled:cursor-not-allowed disabled:opacity-60;
+    @apply inline-flex h-8 items-center justify-center gap-2 rounded-md border px-3 text-xs font-normal transition disabled:cursor-not-allowed disabled:opacity-60;
     background: var(--app-panel);
+    border-color: var(--app-accent);
+    color: var(--app-accent);
+  }
+
+  .btn-secondary:hover {
+    background: var(--app-accent-muted);
   }
 
   .form-label {
@@ -108,10 +126,15 @@ html[data-theme="dark"] .tenant-app tr.bg-slate-50 { background-color: var(--app
   }
 
   .form-input {
-    @apply mt-1 h-8 w-full rounded-md border px-3 text-xs outline-none transition focus:border-app-navy focus:ring-2 focus:ring-blue-100;
+    @apply mt-1 h-8 w-full rounded-md border px-3 text-xs outline-none transition focus:ring-2;
     background: var(--app-input);
     border-color: var(--app-border);
     color: var(--app-input-text);
+  }
+
+  .form-input:focus {
+    border-color: var(--app-accent);
+    --tw-ring-color: var(--app-focus-ring);
   }
 
   .form-error {

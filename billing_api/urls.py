@@ -97,6 +97,7 @@ urlpatterns = [
     path("settings/mikrotik", network_views.settings_mikrotik),
     path("settings/mikrotik/test", network_views.settings_mikrotik_test),
     path("settings/notifications", management_views.settings_notifications),
+    path("staff", management_views.staff_members),
     path("team/members", management_views.team_members),
     path("team/members/", management_views.team_members),
     path("team/invite", management_views.team_invite),

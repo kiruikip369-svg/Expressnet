@@ -15,7 +15,7 @@ from django.conf import settings
 from django.core.cache import cache
 from django.core.files.storage import FileSystemStorage
 from django.core.management import call_command
-from django.core.mail import send_mail
+from django.core.mail import EmailMultiAlternatives, send_mail
 from django.core.paginator import Paginator
 from django.db import close_old_connections, connection
 from django.db.utils import OperationalError
@@ -125,6 +125,10 @@ def err(message, status=400):
     return Response({"error": message}, status=status)
 
 
+def _normalize_permissions(value):
+    return value if isinstance(value, dict) else {}
+
+
 def admin_notification_recipients():
     configured = list(getattr(settings, "ADMIN_NOTIFICATION_EMAILS", []))
     firebase_admins = [admin.get("email") for admin in list_children("admins") if admin.get("email")]
@@ -139,6 +143,57 @@ def send_system_email(subject, message, recipients):
     try:
         return send_mail(subject, message, settings.DEFAULT_FROM_EMAIL, recipients, fail_silently=True)
     except Exception:
+        return 0
+
+
+def send_login_verification_email(recipient_email, code):
+    if not recipient_email or not code:
+        return 0
+    brand = getattr(settings, "EMAIL_BRAND_NAME", "Expressnet")
+    from_email = getattr(settings, "DEFAULT_FROM_EMAIL", "")
+    subject = f"{code} is your {brand} sign-in code"
+    text_body = (
+        f"Your {brand} sign-in code is {code}.\n\n"
+        "Enter this code on the login page to finish signing in. "
+        "The code expires in 10 minutes.\n\n"
+        "If you did not try to sign in, you can ignore this email."
+    )
+    html_body = f"""
+<!doctype html>
+<html>
+  <body style="margin:0;padding:0;background:#f8fafc;font-family:Arial,Helvetica,sans-serif;color:#0f172a;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f8fafc;padding:24px 0;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:520px;background:#ffffff;border:1px solid #e2e8f0;border-radius:8px;">
+            <tr>
+              <td style="padding:28px;">
+                <p style="margin:0 0 8px;font-size:14px;font-weight:700;color:#2563eb;">{html.escape(brand)}</p>
+                <h1 style="margin:0 0 16px;font-size:22px;line-height:1.3;color:#0f172a;">Sign in verification code</h1>
+                <p style="margin:0 0 20px;font-size:15px;line-height:1.6;color:#334155;">Use this code to finish signing in. It expires in 10 minutes.</p>
+                <p style="margin:0 0 22px;padding:14px 18px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;text-align:center;font-size:30px;letter-spacing:8px;font-weight:700;color:#1d4ed8;">{html.escape(code)}</p>
+                <p style="margin:0;font-size:13px;line-height:1.5;color:#64748b;">If you did not try to sign in, you can safely ignore this email.</p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>
+"""
+    try:
+        message = EmailMultiAlternatives(
+            subject=subject,
+            body=text_body,
+            from_email=from_email,
+            to=[recipient_email],
+            headers={"Reply-To": from_email} if from_email else None,
+        )
+        message.attach_alternative(html_body, "text/html")
+        return message.send(fail_silently=True)
+    except Exception:
+        logger.exception("Failed to send login verification email")
         return 0
 
 
@@ -162,10 +217,10 @@ def notify_admins_tenant_signup(tenant_id, tenant):
 
 def notify_tenant_activated(tenant):
     send_system_email(
-        "Your Billing SaaS account is active",
+        "Your Expressnetbilling account is active",
         (
             f"Hello {tenant.get('owner_name') or tenant.get('business_name')},\n\n"
-            f"Your {tenant.get('business_name') or 'Billing SaaS'} account has been activated. "
+            f"Your {tenant.get('business_name') or 'Expressnetbilling'} account has been activated. "
             "You can now sign in and finish setting up your workspace.\n\n"
             "Login: /login"
         ),
@@ -548,6 +603,16 @@ def auth_register(request):
 @api_view(["POST"])
 def auth_login(request):
     data = body(request)
+    if data.get("resend_challenge_id"):
+        challenge_id = str(data.get("resend_challenge_id") or "").strip()
+        challenge = cache.get(f"tenant_login_2fa:{challenge_id}")
+        if not challenge:
+            return ok({"message": "Invalid or expired verification code"}, 401)
+        sent = send_login_verification_email(challenge.get("email"), challenge.get("code"))
+        if not sent:
+            return ok({"message": "We could not resend the verification email. Please try again."}, 502)
+        return ok({"success": True, "message": "Verification code resent to your email."})
+
     if data.get("challenge_id"):
         challenge_id = str(data.get("challenge_id") or "").strip()
         code = "".join(ch for ch in str(data.get("code") or "") if ch.isdigit())
@@ -598,14 +663,12 @@ def auth_login(request):
         challenge_id = secrets.token_urlsafe(24)
         cache.set(
             f"tenant_login_2fa:{challenge_id}",
-            {"tenant_id": tenant["id"], "member_id": member_id, "code": code},
+            {"tenant_id": tenant["id"], "member_id": member_id, "code": code, "email": recipient_email},
             timeout=10 * 60,
         )
-        send_system_email(
-            "Your Expressnet verification code",
-            f"Your Expressnet sign-in verification code is {code}. It expires in 10 minutes.",
-            [recipient_email],
-        )
+        sent = send_login_verification_email(recipient_email, code)
+        if not sent:
+            return ok({"message": "We could not send the verification email. Please try again."}, 502)
         return ok(
             {
                 "success": True,

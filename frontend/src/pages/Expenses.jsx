@@ -31,13 +31,13 @@ function formatDate(value) {
 
 function MetricCard({ title, value, helper }) {
   return (
-    <div className="rounded-md bg-[#ffb783] p-5 shadow-[0_18px_30px_rgba(15,23,42,0.10)]">
-      <p className="text-xs font-semibold text-black">{title}</p>
+    <div className="rounded-md p-5 shadow-[0_18px_30px_rgba(15,23,42,0.10)]" style={{ background: 'var(--app-accent-soft)', color: 'var(--app-text)' }}>
+      <p className="text-xs font-semibold">{title}</p>
       <div className="mt-3 flex items-center gap-2">
-        <p className="text-xl font-bold text-black">{formatKES(value)}</p>
-        <Eye size={14} className="text-black" />
+        <p className="text-xl font-bold">{formatKES(value)}</p>
+        <Eye size={14} />
       </div>
-      <p className="mt-2 text-xs text-black">{helper}</p>
+      <p className="mt-2 text-xs">{helper}</p>
     </div>
   );
 }
@@ -98,7 +98,7 @@ export default function Expenses() {
     <div className="space-y-7">
       <div className="flex items-center justify-between gap-3">
         <h1 className="text-xl font-semibold text-black">Expenses</h1>
-        <button type="button" className="inline-flex h-9 items-center gap-2 rounded-md bg-[#ff9347] px-4 text-xs font-semibold text-black shadow-md hover:bg-[#ff842f]" onClick={openCreate}>
+        <button type="button" className="btn-primary h-9 px-4 shadow-md" onClick={openCreate}>
           <Plus size={14} />
           Create Expense
         </button>
@@ -114,7 +114,7 @@ export default function Expenses() {
         <div className="flex justify-end border-b border-slate-200 p-3">
           <label className="relative block w-full max-w-xs">
             <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input className="h-9 w-full rounded-md border border-slate-200 pl-9 pr-3 text-xs outline-none focus:border-[#fa8200] focus:ring-2 focus:ring-orange-100" placeholder="Search" value={query} onChange={(event) => setQuery(event.target.value)} />
+            <input className="form-input mt-0 h-9 pl-9" placeholder="Search" value={query} onChange={(event) => setQuery(event.target.value)} />
           </label>
         </div>
         <div className="overflow-x-auto">
@@ -139,9 +139,9 @@ export default function Expenses() {
                   <td className="px-5 py-4">{formatDate(expense.date)}</td>
                   <td className="px-5 py-4">{expense.type}</td>
                   <td className="px-5 py-4">{formatKES(expense.amount)}</td>
-                  <td className="px-5 py-4"><span className="rounded-md border border-orange-200 bg-orange-50 px-2 py-1 text-[10px] text-[#c95f00]">{expense.method}</span></td>
+                  <td className="px-5 py-4"><span className="rounded-md border px-2 py-1 text-[10px]" style={{ borderColor: 'var(--app-accent-soft)', background: 'var(--app-accent-muted)', color: 'var(--app-accent)' }}>{expense.method}</span></td>
                   <td className="px-5 py-4 text-right">
-                    <button type="button" className="inline-flex items-center gap-1 text-xs font-semibold text-[#c95f00]" onClick={() => openEdit(expense)}>
+                    <button type="button" className="inline-flex items-center gap-1 text-xs font-semibold" style={{ color: 'var(--app-accent)' }} onClick={() => openEdit(expense)}>
                       <Pencil size={14} className="text-slate-400" />
                       Edit
                     </button>
@@ -165,7 +165,7 @@ export default function Expenses() {
             </div>
             <div className="mt-5 flex justify-end gap-2">
               <button type="button" className="btn-secondary" onClick={() => setModalOpen(false)}>Cancel</button>
-              <button type="submit" className="inline-flex h-8 items-center rounded-md bg-[#ff9347] px-4 text-xs font-semibold text-black">Save</button>
+              <button type="submit" className="btn-primary">Save</button>
             </div>
           </form>
         </div>

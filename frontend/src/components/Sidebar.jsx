@@ -65,7 +65,7 @@ export default function Sidebar({ open, onClose }) {
   const navClass = ({ isActive }) =>
     [
       'flex h-8 items-center gap-3 rounded-md px-3 text-xs font-normal transition',
-      isActive ? 'bg-app-accent text-white' : 'text-slate-200 hover:bg-white/10 hover:text-white',
+      isActive ? 'bg-white/[0.18] text-white shadow-sm' : 'text-white/80 hover:bg-white/10 hover:text-white',
     ].join(' ');
 
   return (
@@ -78,13 +78,14 @@ export default function Sidebar({ open, onClose }) {
       />
 
       <aside
-        className={`fixed inset-y-0 left-0 z-40 flex w-72 flex-col bg-sidebar px-4 py-5 text-white transition-transform lg:w-[240px] lg:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-40 flex w-72 flex-col px-4 py-5 text-white transition-transform lg:w-[240px] lg:translate-x-0 ${
           open ? 'translate-x-0' : '-translate-x-full'
         }`}
+        style={{ background: 'linear-gradient(180deg, var(--app-accent) 0%, var(--app-accent-strong) 100%)' }}
       >
         <div className="mb-6 flex h-10 items-center justify-between">
           <div>
-            <p className="text-[10px] font-normal uppercase tracking-wide text-blue-200">Billing SaaS</p>
+            <p className="text-[10px] font-normal uppercase tracking-wide text-white/70">Expressnetbilling</p>
             <h1 className="text-sm font-normal text-white">Tenant Portal</h1>
           </div>
           <button

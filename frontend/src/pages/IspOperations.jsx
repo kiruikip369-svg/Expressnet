@@ -3,6 +3,8 @@ import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import api from '../api/axios';
 import Modal from '../components/Modal';
+import { canPerformAction } from '../utils/permissions';
+import { useAuth } from '../context/AuthContext';
 
 const blankTask = {
   title: '',
@@ -29,6 +31,7 @@ function priorityClass(priority) {
 }
 
 export default function IspOperations() {
+  const { tenant } = useAuth();
   const [tickets, setTickets] = useState([]);
   const [teamMembers, setTeamMembers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -36,13 +39,16 @@ export default function IspOperations() {
   const [draft, setDraft] = useState(blankTask);
   const [editingId, setEditingId] = useState(null);
   const [showForm, setShowForm] = useState(false);
+  const canCreate = canPerformAction(tenant, 'tickets', 'create');
+  const canEdit = canPerformAction(tenant, 'tickets', 'edit');
+  const canDelete = canPerformAction(tenant, 'tickets', 'delete');
 
   async function loadTickets() {
     setLoading(true);
     try {
       const [ticketRes, teamRes] = await Promise.all([
         api.get('/tickets?all=1'),
-        api.get('/team/members?all=1'),
+        api.get('/staff?all=1'),
       ]);
       setTickets(Array.isArray(ticketRes.data) ? ticketRes.data : ticketRes.data.results || []);
       setTeamMembers(Array.isArray(teamRes.data) ? teamRes.data : teamRes.data.results || []);
@@ -58,8 +64,7 @@ export default function IspOperations() {
   }, []);
 
   const assignableMembers = useMemo(() => {
-    const allowedRoles = ['technician', 'marketer', 'support'];
-    return teamMembers.filter((member) => allowedRoles.includes(String(member.role || '').trim().toLowerCase()));
+    return teamMembers.filter((member) => String(member.status || 'active').toLowerCase() === 'active');
   }, [teamMembers]);
 
   const filtered = useMemo(() => {
@@ -129,10 +134,12 @@ export default function IspOperations() {
             <h1 className="text-lg font-semibold text-slate-800">Tasks</h1>
             <p className="text-sm text-slate-500">Assign field work, follow-ups, customer support, and marketing tasks.</p>
           </div>
-          <button type="button" className="btn-primary" onClick={() => { setDraft(blankTask); setEditingId(null); setShowForm(true); }}>
-            <Plus size={16} />
-            New task
-          </button>
+          {canCreate && (
+            <button type="button" className="btn-primary" onClick={() => { setDraft(blankTask); setEditingId(null); setShowForm(true); }}>
+              <Plus size={16} />
+              New task
+            </button>
+          )}
         </div>
       </section>
 
@@ -151,7 +158,7 @@ export default function IspOperations() {
               <label className="block text-xs font-medium text-slate-500">
                 Assign to
                 <select className="form-input" value={draft.assigned_to} onChange={(event) => updateAssignee(event.target.value)}>
-                  <option value="">Select technician, marketer, or support</option>
+                  <option value="">Select staff member</option>
                   {assignableMembers.map((member) => (
                     <option key={member.id} value={member.id}>{member.name} - {member.role}</option>
                   ))}
@@ -208,10 +215,12 @@ export default function IspOperations() {
                         Assigned to: <span className="font-semibold text-slate-700">{ticket.assigned_to_name || 'Unassigned'}</span>
                         {ticket.assigned_to_role ? <span> ({ticket.assigned_to_role})</span> : null}
                       </p>
-                      <div className="mt-3 flex justify-end gap-2">
-                        <button type="button" className="btn-secondary px-2 py-1 text-xs" onClick={() => edit(ticket)}><Pencil size={13} />Edit</button>
-                        <button type="button" className="btn-secondary px-2 py-1 text-xs text-red-600" onClick={() => remove(ticket)}><Trash2 size={13} />Delete</button>
-                      </div>
+                      {(canEdit || canDelete) && (
+                        <div className="mt-3 flex justify-end gap-2">
+                          {canEdit && <button type="button" className="btn-secondary px-2 py-1 text-xs" onClick={() => edit(ticket)}><Pencil size={13} />Edit</button>}
+                          {canDelete && <button type="button" className="btn-secondary px-2 py-1 text-xs text-red-600" onClick={() => remove(ticket)}><Trash2 size={13} />Delete</button>}
+                        </div>
+                      )}
                     </article>
                   ))}
                   {filtered.filter((ticket) => ticket.status === status).length === 0 && <p className="py-8 text-center text-xs text-slate-400">No tasks</p>}

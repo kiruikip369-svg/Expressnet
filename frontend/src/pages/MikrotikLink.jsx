@@ -1,7 +1,7 @@
 import {
+  ArrowRight,
   CheckCircle2,
   Clipboard,
-  Network,
   PlugZap,
   RefreshCw,
   Router,
@@ -35,6 +35,7 @@ export default function MikrotikSettings() {
   const [routerStatus, setRouterStatus] = useState(null);
   const [pullingStatus, setPullingStatus] = useState(false);
   const [assigning, setAssigning] = useState(false);
+  const [activeStep, setActiveStep] = useState('link');
   const [selectedServices, setSelectedServices] = useState(['pppoe']);
   const [selectedPorts, setSelectedPorts] = useState([]);
 
@@ -65,8 +66,10 @@ export default function MikrotikSettings() {
         const fromSnapshot = data.source === 'provisioning_snapshot' || data.source === 'provisioning_seen';
         toast.success(fromSnapshot ? 'Loaded router provisioning state' : 'Router status pulled');
       }
+      return data;
     } catch (error) {
       toast.error(error.response?.data?.message || 'Failed to pull router status');
+      return null;
     } finally {
       setPullingStatus(false);
     }
@@ -81,9 +84,10 @@ export default function MikrotikSettings() {
         // the previously linked router's snapshot or status in this screen.
         setProvisioningState({ status: '', provisionedAt: '', lastSeenAt: '', lastSeenIp: '', identity: '', version: '', board: '' });
         setRouterStatus(null);
+        setActiveStep('link');
         return;
       }
-      setProvisioningState({
+      const nextProvisioningState = {
         status: data.mikrotik_provisioning_status || '',
         provisionedAt: data.mikrotik_provisioned_at || '',
         lastSeenAt: data.mikrotik_last_seen_at || '',
@@ -91,6 +95,18 @@ export default function MikrotikSettings() {
         identity: data.mikrotik_detected_identity || '',
         version: data.mikrotik_detected_version || '',
         board: data.mikrotik_detected_board || '',
+      };
+      setProvisioningState({
+        ...nextProvisioningState,
+      });
+      const nextConfigured = Boolean(
+        nextProvisioningState.lastSeenAt
+        || nextProvisioningState.status === 'completed'
+        || nextProvisioningState.status === 'script_downloaded',
+      );
+      setActiveStep((current) => {
+        if (current === 'configure') return current;
+        return nextConfigured && !isReprovisioning ? 'configure' : 'link';
       });
       if (!isAddingRouter && (data.mikrotik_last_seen_at || data.mikrotik_provisioning_status === 'completed')) {
         pullRouterStatus({ silent: true });
@@ -123,6 +139,11 @@ export default function MikrotikSettings() {
     } catch {
       toast.error('Copy failed');
     }
+  };
+
+  const goToConfiguration = async () => {
+    const data = await pullRouterStatus();
+    if (data) setActiveStep('configure');
   };
 
   const togglePort = (portName) => {
@@ -175,7 +196,7 @@ export default function MikrotikSettings() {
   return (
     <div className="space-y-4">
       {showProvisioning && (
-        <section id="link-mikrotik" className="surface-card p-4">
+        <section id="link-mikrotik" className={`surface-card p-4 ${activeStep === 'link' ? '' : 'hidden'}`}>
           <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h1 className="page-title">{isAddingRouter ? 'Add another MikroTik device' : 'Link MikroTik Device'}</h1>
@@ -206,18 +227,6 @@ export default function MikrotikSettings() {
             </div>
             <pre className="mt-3 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-md bg-slate-800 p-3 text-xs leading-6 text-slate-100">{provision?.command || 'Generating command...'}</pre>
           </div>
-          {provision && (
-            <div className="mt-3 grid gap-3 sm:grid-cols-2">
-              <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                <p className="text-xs font-semibold uppercase text-slate-500">Expires</p>
-                <p className="mt-1 font-mono text-sm text-slate-900">{provision.expires_at}</p>
-              </div>
-              <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                <p className="text-xs font-semibold uppercase text-slate-500">Purpose</p>
-                <p className="mt-1 text-sm font-semibold text-slate-900">Link router, report ports, and prepare captive portal</p>
-              </div>
-            </div>
-          )}
           {provisioningState?.status === 'completed' && (
             <div className="mt-3 grid gap-3 rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-800 sm:grid-cols-2 lg:grid-cols-4">
               <div>
@@ -238,19 +247,22 @@ export default function MikrotikSettings() {
               </div>
             </div>
           )}
+          <div className="mt-4 flex justify-end">
+            <button type="button" className="btn-primary" onClick={goToConfiguration} disabled={pullingStatus}>
+              {pullingStatus ? 'Pulling live config...' : 'Next'}
+              <ArrowRight size={16} />
+            </button>
+          </div>
         </section>
       )}
 
+      {(!showProvisioning || activeStep === 'configure') && (
       <section className="rounded-[10px] border-1 border-slate-300 bg-white p-4 sm:p-8">
         <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 className="text-base font-bold text-slate-950">Router configurations</h2>
-            <p className="mt-1 text-sm text-slate-600">Select PPPoE, Hotspot, or both, choose the physical ports, then assign.</p>
+            <p className="mt-1 text-sm text-slate-600">Live router configurations are loaded from the router before this step opens. Select PPPoE, Hotspot, or both, choose the physical ports, then assign.</p>
           </div>
-          <button type="button" className="btn-secondary" onClick={pullRouterStatus} disabled={pullingStatus}>
-            <Network size={17} />
-            {pullingStatus ? 'Pulling...' : 'Pull Router Config'}
-          </button>
         </div>
 
         {routerStatus ? (
@@ -287,7 +299,8 @@ export default function MikrotikSettings() {
                   return (
                     <label
                       key={key}
-                      className={`flex h-12 cursor-pointer items-center rounded-full border px-4 text-sm font-semibold transition ${active ? 'border-blue-600 bg-blue-50 text-slate-950' : 'border-slate-400 bg-white text-slate-700 hover:border-blue-300'}`}
+                      className="flex h-12 cursor-pointer items-center rounded-full border border-slate-400 bg-white px-4 text-sm font-semibold text-slate-700 transition hover:border-[var(--app-accent)]"
+                      style={active ? { borderColor: 'var(--app-accent)', background: 'var(--app-accent-muted)', color: 'var(--app-text)' } : undefined}
                     >
                       <input
                         className="sr-only"
@@ -295,7 +308,10 @@ export default function MikrotikSettings() {
                         checked={active}
                         onChange={() => toggleService(key)}
                       />
-                      <span className={`mr-4 flex h-7 w-7 items-center justify-center rounded-full border-2 ${active ? 'border-blue-600 bg-blue-600 text-white' : 'border-blue-600 bg-white text-blue-600'}`}>
+                      <span
+                        className="mr-4 flex h-7 w-7 items-center justify-center rounded-full border-2"
+                        style={active ? { borderColor: 'var(--app-accent)', background: 'var(--app-accent)', color: 'var(--app-accent-contrast)' } : { borderColor: 'var(--app-accent)', background: 'var(--app-panel)', color: 'var(--app-accent)' }}
+                      >
                         <Icon size={15} />
                       </span>
                       <span className="flex-1 text-center">{label}</span>
@@ -312,7 +328,8 @@ export default function MikrotikSettings() {
                     <button
                       key={item.id || item.name}
                       type="button"
-                      className={`h-13 rounded-[20px] border px-4 py-4 text-sm font-semibold transition ${selected ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-400 bg-white text-slate-700 hover:border-blue-300'} ${assigned ? 'ring-2 ring-orange-200' : ''}`}
+                      className={`h-13 rounded-[20px] border border-slate-400 bg-white px-4 py-4 text-sm font-semibold text-slate-700 transition hover:border-[var(--app-accent)] ${assigned ? 'ring-2 ring-[var(--app-focus-ring)]' : ''}`}
+                      style={selected ? { borderColor: 'var(--app-accent)', background: 'var(--app-accent)', color: 'var(--app-accent-contrast)' } : undefined}
                       onClick={() => togglePort(item.name)}
                       title={assigned ? `${portLabel(item.name)} assigned to ${serviceLabel(assigned.service_type)}` : portLabel(item.name)}
                     >
@@ -329,7 +346,7 @@ export default function MikrotikSettings() {
               )}
 
               <div className="mt-6 flex justify-end">
-                <button type="button" className="h-11 min-w-56 rounded-full border border-slate-400 bg-white px-6 text-sm font-semibold text-slate-800 transition hover:border-blue-400 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-50" onClick={assignPorts} disabled={assigning || selectedPorts.length === 0}>
+                <button type="button" className="h-11 min-w-56 rounded-full border border-slate-400 bg-white px-6 text-sm font-semibold text-slate-800 transition hover:border-[var(--app-accent)] hover:text-[var(--app-accent)] disabled:cursor-not-allowed disabled:opacity-50" onClick={assignPorts} disabled={assigning || selectedPorts.length === 0}>
                   {assigning ? 'Assigning...' : `Assign ${serviceLabel(selectedService)}`}
                 </button>
               </div>
@@ -337,10 +354,11 @@ export default function MikrotikSettings() {
           </div>
         ) : (
           <div className="rounded-3xl border border-slate-400 bg-white p-8 text-center">
-            <p className="text-sm font-semibold text-slate-700">Pull the router configuration to view board details and assign ports.</p>
+            <p className="text-sm font-semibold text-slate-700">Live router configuration was not available yet. Go back and click Next after the router has reported in.</p>
           </div>
         )}
       </section>
+      )}
     </div>
   );
 }

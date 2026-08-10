@@ -475,7 +475,20 @@ def public_tenant(request, tenant_id):
     tenant = ref(f"tenants/{tenant_id}").get()
     if not tenant:
         return ok({"message": "Tenant not found"}, 404)
-    return ok({"id": tenant_id, "business_name": tenant.get("business_name"), "phone": tenant.get("phone"), "status": tenant.get("status"), "logo_url": tenant.get("logo_url") or ""})
+    payment_methods = tenant.get("payment_methods") if isinstance(tenant.get("payment_methods"), list) else []
+    public_payment_methods = [
+        str(method).strip().lower()
+        for method in payment_methods
+        if str(method).strip().lower() in {"bank", "paybill", "buygoods", "daraja_paybill", "daraja_buygoods"}
+    ]
+    return ok({
+        "id": tenant_id,
+        "business_name": tenant.get("business_name"),
+        "phone": tenant.get("phone"),
+        "status": tenant.get("status"),
+        "logo_url": tenant.get("logo_url") or "",
+        "payment_methods": public_payment_methods,
+    })
 
 
 
@@ -882,6 +895,21 @@ def _tenant_team_members(tenant_id):
 
 def _save_tenant_team_members(tenant_id, members):
     ref(f"tenants/{tenant_id}").update({"team_members": members})
+
+
+@csrf_exempt
+@api_view(["GET"])
+@tenant_required
+def staff_members(request):
+    members = request.tenant.get("team_members") if isinstance(request.tenant, dict) else None
+    if not isinstance(members, dict):
+        members = _tenant_team_members(request.tenant["id"])
+    active_members = [
+        _team_member_payload(member_id, member)
+        for member_id, member in members.items()
+        if member.get("status", "active") == "active"
+    ]
+    return as_collection_response(request, active_members)
 
 
 @csrf_exempt
@@ -1533,8 +1561,13 @@ def tickets(request, ticket_id=None):
                 "title": str(data.get("title") or "").strip(),
                 "description": str(data.get("description") or "").strip(),
                 "customer_id": str(data.get("customer_id") or "").strip(),
+                "assigned_to": str(data.get("assigned_to") or "").strip(),
+                "assigned_to_name": str(data.get("assigned_to_name") or "").strip(),
+                "assigned_to_role": str(data.get("assigned_to_role") or "").strip(),
                 "status": data.get("status") or "open",
                 "priority": data.get("priority") or "medium",
+                "created_at": iso_now(),
+                "updated_at": iso_now(),
             }
         )
         return ok({"success": True, "message": "Ticket created", "ticketId": ticket_ref.key}, 201)
@@ -1545,7 +1578,7 @@ def tickets(request, ticket_id=None):
         return ok({"message": "Ticket not found"}, 404)
     if method(request, "PATCH"):
         data = body(request)
-        allowed = ["title", "description", "customer_id", "status", "priority"]
+        allowed = ["title", "description", "customer_id", "assigned_to", "assigned_to_name", "assigned_to_role", "status", "priority"]
         updates = {field: data[field] for field in allowed if field in data}
         if updates.get("status") in {"resolved", "closed"} and not ticket.get("resolved_at"):
             updates["resolved_at"] = iso_now()
