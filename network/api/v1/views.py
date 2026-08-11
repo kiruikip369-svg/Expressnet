@@ -39,6 +39,8 @@ from billing_api.services import (
     create_paystack_subaccount,
     selected_daraja_method,
     initiate_daraja_payment,
+    platform_daraja_config,
+    tenant_payout_details,
     make_daraja_callback_token,
     verify_daraja_callback_token,
     _build_port_command_script,
@@ -778,14 +780,13 @@ def captive_portal_page(request, tenant_id):
         if request.GET.get(key)
     )
     if packages:
-        configured_methods = tenant.get("payment_methods") if isinstance(tenant.get("payment_methods"), list) else []
-        selected_daraja_method = next((str(item).strip().lower() for item in configured_methods if str(item).strip().lower() in {"daraja_paybill", "daraja_buygoods"}), "")
+        selected_payment_method = selected_daraja_method(tenant)
         package_html = "".join(
             f"""
             <form class="card pkg" method="post" action="/api/captive/{html.escape(str(tenant_id))}/pay">
               <input type="hidden" name="package_id" value="{html.escape(str(pkg.get('id')))}">
               <input type="hidden" name="service_type" value="{html.escape(str(pkg.get('service_type') or 'hotspot'))}">
-              {f"<input type='hidden' name='payment_method' value='{html.escape(selected_daraja_method)}'>" if selected_daraja_method else ''}
+              <input type="hidden" name="payment_method" value="{html.escape(selected_payment_method)}">
               {hidden}
               <div>
                 <strong>{html.escape(str(pkg.get('name') or 'Package'))}</strong>
@@ -971,7 +972,6 @@ def _public_pay_impl(request, tenant_id):
         if not mac_address:
             return ok({"message": "Enter a valid TV MAC address"}, 400)
     daraja_method = selected_daraja_method(tenant, data.get("payment_method"))
-    uses_daraja = bool(daraja_method)
     payment_ref = ref(f"tenants/{tenant_id}/payments").push(
         {
             "customer_id": customer.get("id") if customer else None,
@@ -992,44 +992,18 @@ def _public_pay_impl(request, tenant_id):
             "link_login": link_login,
             "dst": dst,
             "source": "customer_portal",
-            "provider": "mpesa" if uses_daraja else "paystack",
-            "payment_method": daraja_method or "paystack",
+            "provider": "mpesa",
+            "payment_method": daraja_method,
+            "collection_account": "platform_daraja",
+            "tenant_settlement_status": "pending_payment",
+            "tenant_payout": tenant_payout_details(tenant),
         }
     )
     try:
-        if uses_daraja:
-            checkout = initiate_daraja_payment(
-                tenant,
-                payment_ref.key,
-                pkg.get("price"),
-                phone,
-                description=f"{pkg.get('name')} internet package",
-                metadata={
-                    "package_id": data["package_id"],
-                    "package_name": pkg.get("name"),
-                    "service_type": service_type,
-                    "username": customer.get("username") if customer else None,
-                    "mac_address": mac_address,
-                    "router_ip": router_ip,
-                    "router_mac": router_mac,
-                    "link_login": link_login,
-                    "dst": dst,
-                },
-                payment_method=daraja_method,
-            )
-            payment_ref.update({"daraja_checkout_request_id": checkout.get("checkout_request_id"), "daraja_merchant_request_id": checkout.get("merchant_request_id")})
-            return ok({
-                "success": True,
-                "message": checkout.get("customer_message") or "Check your phone and enter your M-Pesa PIN to complete payment.",
-                "paymentId": payment_ref.key,
-                "provider": "mpesa",
-                "checkoutRequestId": checkout.get("checkout_request_id"),
-            }, 201)
-        checkout = initiate_paystack_payment(
-            tenant,
+        checkout = initiate_daraja_payment(
+            platform_daraja_config(tenant),
             payment_ref.key,
             pkg.get("price"),
-            email=data.get("email"),
             phone=phone,
             description=f"{pkg.get('name')} internet package",
             metadata={
@@ -1043,37 +1017,33 @@ def _public_pay_impl(request, tenant_id):
                 "link_login": link_login,
                 "dst": dst,
             },
+            payment_method=daraja_method,
         )
+        payment_ref.update({"daraja_checkout_request_id": checkout.get("checkout_request_id"), "daraja_merchant_request_id": checkout.get("merchant_request_id"), "checkout_requested_at": iso_now()})
+        return ok({
+            "success": True,
+            "message": checkout.get("customer_message") or "Check your phone and enter your M-Pesa PIN to complete payment.",
+            "paymentId": payment_ref.key,
+            "provider": "mpesa",
+            "checkoutRequestId": checkout.get("checkout_request_id"),
+        }, 201)
     except PaymentProviderError as exc:
         logger.warning(
-            "Payment provider error for tenant=%s payment=%s provider=%s detail=%s",
+            "Daraja payment provider error for tenant=%s payment=%s detail=%s",
             tenant_id,
             payment_ref.key,
-            "daraja" if uses_daraja else "paystack",
             exc.detail,
         )
         payment_ref.update({"status": "failed", "failed_at": iso_now(), "callback_result_desc": exc.detail})
         return ok({"success": False, "message": exc.public_message, "paymentId": payment_ref.key}, exc.status_code)
     except Exception as exc:
         logger.exception(
-            "Unexpected payment initiation error for tenant=%s payment=%s provider=%s",
+            "Unexpected Daraja payment initiation error for tenant=%s payment=%s",
             tenant_id,
             payment_ref.key,
-            "daraja" if uses_daraja else "paystack",
         )
         payment_ref.update({"status": "failed", "failed_at": iso_now(), "callback_result_desc": str(exc)})
         return ok({"success": False, "message": "Payment gateway is temporarily unavailable. Please try again later.", "paymentId": payment_ref.key}, 503)
-    payment_ref.update(
-        {
-            "paystack_reference": checkout.get("reference"),
-            "paystack_access_code": checkout.get("access_code"),
-            "paystack_authorization_url": checkout.get("authorization_url"),
-            "paystack_customer_email": checkout.get("customer_email"),
-            "currency": checkout.get("currency"),
-            "checkout_requested_at": iso_now(),
-        }
-    )
-    return ok({"success": True, "message": "Redirecting to Paystack checkout", "paymentId": payment_ref.key, "reference": checkout.get("reference"), "authorizationUrl": checkout.get("authorization_url")})
 
 
 @csrf_exempt

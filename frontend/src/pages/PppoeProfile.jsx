@@ -19,7 +19,12 @@ export default function PppoeProfile() {
   const pay = async () => {
     const pkg = packages.find((item) => item.id === selected);
     if (!pkg) return toast.error('Select a PPPoE package');
-    try { const { data } = await api.post(`/public/${tenantId}/pay`, { package_id: pkg.id, phone: profile.customer.phone, service_type: 'pppoe', username: profile.customer.username }); if (data.authorizationUrl) window.location.href = data.authorizationUrl; else toast.error('Payment checkout was not returned'); } catch (e) { toast.error(e.response?.data?.message || 'Could not start payment'); }
+    try {
+      const { data } = await api.post(`/public/${tenantId}/pay`, { package_id: pkg.id, phone: profile.customer.phone, service_type: 'pppoe', username: profile.customer.username });
+      if (data.authorizationUrl) window.location.href = data.authorizationUrl;
+      else if (data.provider === 'mpesa' || data.checkoutRequestId) toast.success(data.message || 'Check your phone for the M-Pesa prompt');
+      else toast.error('Payment checkout was not returned');
+    } catch (e) { toast.error(e.response?.data?.message || 'Could not start payment'); }
   };
   if (loading) return <main className="flex min-h-screen items-center justify-center bg-slate-100">Loading profile...</main>;
   if (!profile) return <main className="flex min-h-screen items-center justify-center bg-slate-100">Profile unavailable.</main>;
