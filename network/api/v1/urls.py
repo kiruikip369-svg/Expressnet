@@ -17,6 +17,7 @@ urlpatterns = [
     path("packages/<str:package_id>", views.packages),
     path("packages/<str:package_id>/sync", views.package_sync),
     path("vouchers", views.vouchers),
+    path("vouchers/<str:voucher_id>", views.vouchers),
     path("router/status", views.router_status),
     path("router/ports", views.router_ports),
     path("router/suspend", views.router_suspend),

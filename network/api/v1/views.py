@@ -1272,7 +1272,7 @@ def public_voucher_login(request, tenant_id):
                 _queue_router_command_for_tenant(tenant_id, {"type": "sync_hotspot_login", "script": script}, tenant)
                 router_status = "queued"
                 if voucher and voucher.get("id"):
-                    ref(f"tenants/{tenant_id}/vouchers/{voucher['id']}").update({"router_status": "queued", "router_error": None})
+                    ref(f"tenants/{tenant_id}/vouchers/{voucher['id']}").update({"router_status": "queued", "router_error": ""})
             except Exception as exc:
                 logger.warning("Captive router queue failed tenant=%s kind=%s credential=%s error=%s", tenant_id, credential_kind, credential_label, exc)
     result = {
@@ -1518,7 +1518,7 @@ def vouchers(request, voucher_id=None):
         updates = {"status": status, "expired_at": iso_now(), "router_status": "expired"}
         try:
             _disable_voucher_on_router(request, voucher)
-            updates.update({"router_error": None})
+            updates.update({"router_error": ""})
         except Exception as exc:
             updates.update({"router_status": "queued", "router_error": str(exc)})
             try:
@@ -1580,7 +1580,7 @@ def vouchers(request, voucher_id=None):
         finally:
             api.close()
         voucher["router_status"] = "provisioned"
-        ref(f"{voucher_path}/{voucher_id}").update({"router_status": voucher["router_status"], "router_synced_at": iso_now(), "router_error": None})
+        ref(f"{voucher_path}/{voucher_id}").update({"router_status": voucher["router_status"], "router_synced_at": iso_now(), "router_error": ""})
     except Exception as exc:
         # Live push failed (e.g. WireGuard tunnel temporarily down) — still
         # save the voucher and queue the router-side creation for the

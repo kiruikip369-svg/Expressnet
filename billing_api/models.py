@@ -179,6 +179,11 @@ class Voucher(ExtraFieldsModel):
     router_error = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
 
+    def save(self, *args, **kwargs):
+        if self.router_error is None:
+            self.router_error = ""
+        super().save(*args, **kwargs)
+
     def as_dict(self, include_id=True, exclude=None):
         data = super().as_dict(include_id, exclude)
         data.pop("tenant", None)
