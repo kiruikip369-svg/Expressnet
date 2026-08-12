@@ -1853,7 +1853,10 @@ def _voucher_delete_script(voucher):
     username = _rsc_escape(voucher.get("username") or "")
     if not username:
         return ""
-    return f':do {{ /ip hotspot user remove [find name="{username}"] }} on-error={{}};'
+    return (
+        f':do {{ /ip hotspot active remove [find user="{username}"] }} on-error={{}};'
+        f':do {{ /ip hotspot user remove [find name="{username}"] }} on-error={{}};'
+    )
 
 
 def _disable_voucher_on_router(request, voucher):
@@ -1880,6 +1883,13 @@ def _delete_voucher_from_router(request, voucher):
         return
     api = router_connect(request.tenant)
     try:
+        active = api.path("ip", "hotspot", "active")
+        for item in list(active.select()):
+            if str(item.get("user") or "") == username and item.get(".id"):
+                try:
+                    active.remove(item[".id"])
+                except Exception:
+                    pass
         users = api.path("ip", "hotspot", "user")
         existing = next((item for item in users.select() if str(item.get("name") or "") == username), None)
         if existing and existing.get(".id"):

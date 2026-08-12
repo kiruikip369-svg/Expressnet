@@ -60,6 +60,7 @@ export default function Vouchers() {
   };
 
   const expireVoucher = async (voucher) => {
+    if (!voucher?.id) return toast.error('This voucher is missing its database id. Refresh the page and try again.');
     if (voucher.status === 'expired') return;
     setBusyId(voucher.id);
     try {
@@ -74,6 +75,7 @@ export default function Vouchers() {
   };
 
   const deleteVoucher = async (voucher) => {
+    if (!voucher?.id) return toast.error('This voucher is missing its database id. Refresh the page and try again.');
     if (!window.confirm(`Delete voucher ${voucher.code}?`)) return;
     setBusyId(voucher.id);
     try {
@@ -106,10 +108,17 @@ export default function Vouchers() {
     if (!window.confirm(`Delete ${idsToDelete.length} selected voucher${idsToDelete.length === 1 ? '' : 's'}?`)) return;
     setBusyId('bulk-delete');
     try {
-      await Promise.all(idsToDelete.map((id) => api.delete(`/vouchers/${id}`)));
-      setVouchers((current) => current.filter((item) => !idsToDelete.includes(item.id)));
-      setSelectedIds((current) => current.filter((id) => !idsToDelete.includes(id)));
-      toast.success(`${idsToDelete.length} voucher${idsToDelete.length === 1 ? '' : 's'} deleted`);
+      const results = await Promise.allSettled(idsToDelete.map((id) => api.delete(`/vouchers/${id}`)));
+      const deletedIds = idsToDelete.filter((_, index) => results[index].status === 'fulfilled');
+      const failedCount = idsToDelete.length - deletedIds.length;
+      setVouchers((current) => current.filter((item) => !deletedIds.includes(item.id)));
+      setSelectedIds((current) => current.filter((id) => !deletedIds.includes(id)));
+      if (failedCount) {
+        toast.error(`${failedCount} voucher${failedCount === 1 ? '' : 's'} could not be deleted`);
+        await load();
+      } else {
+        toast.success(`${deletedIds.length} voucher${deletedIds.length === 1 ? '' : 's'} deleted`);
+      }
     } catch (error) {
       toast.error(error.response?.data?.message || 'Failed to delete selected vouchers');
       await load();
@@ -202,7 +211,7 @@ export default function Vouchers() {
                         <XCircle size={14} />
                         Expire
                       </button>
-                      <button className="btn-danger" type="button" onClick={() => deleteVoucher(voucher)} disabled={busyId === voucher.id}>
+                      <button className="btn-danger" type="button" onClick={() => deleteVoucher(voucher)} disabled={!voucher.id || busyId === voucher.id}>
                         <Trash2 size={14} />
                         Delete
                       </button>
