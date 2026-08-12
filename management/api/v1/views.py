@@ -1326,6 +1326,21 @@ def dashboard_stats(request):
     else:
         internet_strength_percent = 100 if router_sample_source == "routeros_api" else 0
     traffic_percent = round(min((traffic_bps / 1_000_000), 100), 1) if router_sample_source == "routeros_api" and traffic_bps else 0
+    active_sessions = snapshot.get("active_sessions") if router_sample_source == "routeros_api" else {}
+    active_session_items = active_sessions.get("items") if isinstance(active_sessions, dict) else []
+    top_active_sessions = [
+        {
+            "username": item.get("username") or "-",
+            "service_type": item.get("service_type") or "",
+            "address": item.get("address") or "",
+            "mac_address": item.get("mac_address") or "",
+            "uptime": item.get("uptime") or "",
+            "data_used": float(item.get("data_used") or 0),
+            "server": item.get("server") or "",
+        }
+        for item in (active_session_items or [])[:5]
+        if isinstance(item, dict)
+    ]
 
     return ok(
         {
@@ -1347,7 +1362,8 @@ def dashboard_stats(request):
                 "network_traffic_bps": traffic_bps if router_sample_source == "routeros_api" else 0,
                 "network_rx_bps": traffic.get("rx_bps") if router_sample_source == "routeros_api" else 0,
                 "network_tx_bps": traffic.get("tx_bps") if router_sample_source == "routeros_api" else 0,
-                "active_sessions": snapshot.get("active_sessions") if router_sample_source == "routeros_api" else {},
+                "active_sessions": active_sessions,
+                "top_active_sessions": top_active_sessions,
                 "sample_source": router_sample_source,
                 "sampled_at": traffic.get("sampled_at") or iso_now(),
             },

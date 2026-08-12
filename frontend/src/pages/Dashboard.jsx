@@ -1,4 +1,4 @@
-import { Activity, AlertTriangle, Cpu, Filter, Gauge, Radio, TrendingUp, Users, Wifi } from 'lucide-react';
+import { Activity, AlertTriangle, Cpu, Filter, Gauge, Radio, RefreshCw, TrendingUp, Users, Wifi } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import api from '../api/axios';
@@ -100,31 +100,40 @@ export default function Dashboard() {
   const { tenant, token } = useAuth();
   const [dashboard, setDashboard] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [darkMode, setDarkMode] = useState(() => readDarkMode());
 
   useEffect(() => {
     setDarkMode(readDarkMode());
     let mounted = true;
-    async function load() {
+    async function load({ silent = false } = {}) {
       try {
+        if (silent) setRefreshing(true);
         const { data } = await api.get('/dashboard/stats');
         if (mounted) setDashboard(data);
       } catch (error) {
-        toast.error(error.response?.data?.message || 'Failed to load dashboard');
+        if (!silent) toast.error(error.response?.data?.message || 'Failed to load dashboard');
       } finally {
         if (mounted) setLoading(false);
+        if (mounted) setRefreshing(false);
       }
     }
     load();
-    return () => { mounted = false; };
+    const timer = window.setInterval(() => load({ silent: true }), 10000);
+    return () => {
+      mounted = false;
+      window.clearInterval(timer);
+    };
   }, []);
 
   const summary = dashboard?.summary || {};
   const router = dashboard?.router_health || {};
-  const topHotspotUsers = useMemo(() => {
+  const topActiveSessions = useMemo(() => {
+    const liveSessions = router?.top_active_sessions || [];
+    if (liveSessions.length) return liveSessions.slice(0, 5);
     const users = dashboard?.top_hotspot_active_users || dashboard?.most_active_users || [];
     return users.slice(0, 5);
-  }, [dashboard]);
+  }, [dashboard, router]);
 
   const stats = {
     totalUsers: Number(summary.total_customers || 0),
@@ -139,7 +148,11 @@ export default function Dashboard() {
   const cpuValue = Number(router.cpu_load_percent ?? router.cpu_load ?? 0);
   const internetStrength = Number(router.internet_strength_percent ?? (router.status === 'online' ? 96 : router.status === 'offline' ? 0 : 62));
   const trafficLabel = trafficBps ? formatBitrate(trafficBps) : `${trafficValue}%`;
+  const rxLabel = formatBitrate(router.network_rx_bps || 0);
+  const txLabel = formatBitrate(router.network_tx_bps || 0);
+  const activeSessionCount = Number(router.active_sessions?.total || 0);
   const sourceLabel = router.sample_source === 'routeros_api' ? 'Live MikroTik sample' : 'Latest router snapshot';
+  const sampledAt = router.sampled_at ? new Date(router.sampled_at) : null;
   const canViewEarnings = isTenantAdmin(tenant, token);
 
   if (loading) {
@@ -151,6 +164,10 @@ export default function Dashboard() {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="text-lg font-semibold">Dashboard</h1>
         <div className="flex flex-wrap gap-2">
+          <span className={`inline-flex h-8 items-center gap-2 rounded-md border px-3 text-[11px] font-semibold ${darkMode ? 'border-[#3a3b40] bg-[#25262a] text-[#c8ccdc]' : 'border-slate-200 bg-slate-50 text-slate-600'}`}>
+            <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
+            {sampledAt && !Number.isNaN(sampledAt.valueOf()) ? `Updated ${sampledAt.toLocaleTimeString()}` : 'Realtime router feed'}
+          </span>
           <button type="button" className="inline-flex h-8 items-center gap-2 rounded-md bg-red-600 px-3 text-[11px] font-semibold text-white"><AlertTriangle size={14} />Expires in 2 days. Click to renew</button>
           <button type="button" className={`inline-flex h-8 items-center gap-2 rounded-md border px-3 text-[11px] font-semibold ${darkMode ? 'border-[#3a3b40] bg-[#25262a] text-white' : 'border-slate-200 bg-slate-50 text-slate-700'}`}><Filter size={14} />Filters</button>
         </div>
@@ -173,30 +190,32 @@ export default function Dashboard() {
         <h2 className="text-sm font-semibold">Dashboard Overview</h2>
         <div className="grid gap-4 xl:grid-cols-2">
           <OverviewCard darkMode={darkMode} icon={Wifi} label="Internet strength" value={`${internetStrength}%`} helper={router.status ? `${sourceLabel} - ${router.status}` : sourceLabel} percent={internetStrength} />
-          <OverviewCard darkMode={darkMode} icon={Radio} label="Network traffic" value={trafficLabel} helper="Current live router throughput" percent={trafficValue} />
+          <OverviewCard darkMode={darkMode} icon={Radio} label="Network traffic" value={trafficLabel} helper={`RX ${rxLabel} / TX ${txLabel}`} percent={trafficValue} />
           <OverviewCard darkMode={darkMode} icon={Cpu} label="CPU status" value={`${cpuValue}%`} helper={router.board_name || sourceLabel} percent={cpuValue} />
           <section className={`rounded-lg border ${darkMode ? 'border-[#33343a] bg-[#222326] text-white' : 'border-slate-200 bg-white text-slate-950'}`}>
             <div className={`flex items-center gap-2 border-b px-4 py-3 ${darkMode ? 'border-[#36373d]' : 'border-slate-200'}`}>
               <Gauge size={17} style={{ color: 'var(--app-accent)' }} />
               <div>
-                <h2 className="text-sm font-semibold">Top 5 hotspot active users</h2>
-                <p className={`text-[11px] ${darkMode ? 'text-[#a9aec3]' : 'text-slate-500'}`}>Ranked by data usage</p>
+                <h2 className="text-sm font-semibold">Top 5 active sessions</h2>
+                <p className={`text-[11px] ${darkMode ? 'text-[#a9aec3]' : 'text-slate-500'}`}>{activeSessionCount.toLocaleString('en-KE')} sessions live on router</p>
               </div>
             </div>
             <div className="overflow-x-auto">
               <table className="min-w-full text-xs">
                 <thead className={`${darkMode ? 'bg-[#2a2b2f] text-[#d5d7e2]' : 'bg-slate-50 text-slate-600'} text-left uppercase`}>
-                  <tr><th className="px-4 py-3">User</th><th className="px-4 py-3">Data used</th><th className="px-4 py-3">Phone</th></tr>
+                  <tr><th className="px-4 py-3">User</th><th className="px-4 py-3">Service</th><th className="px-4 py-3">Data used</th><th className="px-4 py-3">Uptime</th><th className="px-4 py-3">Address</th></tr>
                 </thead>
                 <tbody className={darkMode ? 'divide-y divide-[#34353b]' : 'divide-y divide-slate-100'}>
-                  {topHotspotUsers.length ? topHotspotUsers.map((user) => (
-                    <tr key={user.username || user.phone}>
+                  {topActiveSessions.length ? topActiveSessions.map((user) => (
+                    <tr key={`${user.service_type || 'user'}-${user.username || user.address || user.phone}`}>
                       <td className="px-4 py-3 font-semibold" style={{ color: 'var(--app-accent)' }}>{user.username || '-'}</td>
+                      <td className="px-4 py-3">{user.service_type || '-'}</td>
                       <td className="px-4 py-3">{formatData(user.data_used)}</td>
-                      <td className="px-4 py-3">{user.phone || '-'}</td>
+                      <td className="px-4 py-3">{user.uptime || '-'}</td>
+                      <td className="px-4 py-3">{user.address || user.phone || '-'}</td>
                     </tr>
                   )) : (
-                    <tr><td className="px-4 py-8 text-center text-slate-500" colSpan="3">No active hotspot users found.</td></tr>
+                    <tr><td className="px-4 py-8 text-center text-slate-500" colSpan="5">No active router sessions found.</td></tr>
                   )}
                 </tbody>
               </table>

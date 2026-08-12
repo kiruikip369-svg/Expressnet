@@ -875,6 +875,40 @@ def router_interface_status(tenant):
     finally:
         api.close()
 
+    def session_bytes(row):
+        total = 0
+        for key in ("bytes-in", "bytes-out", "acct-input-octets", "acct-output-octets"):
+            try:
+                total += int(float(row.get(key) or 0))
+            except (TypeError, ValueError):
+                pass
+        return total
+
+    session_rows = [
+        {
+            "service_type": "hotspot",
+            "username": item.get("user") or item.get("name") or item.get("mac-address"),
+            "address": item.get("address"),
+            "mac_address": item.get("mac-address"),
+            "uptime": item.get("uptime"),
+            "data_used": session_bytes(item),
+            "server": item.get("server"),
+        }
+        for item in active_hotspot
+    ] + [
+        {
+            "service_type": "pppoe",
+            "username": item.get("name") or item.get("user"),
+            "address": item.get("address") or item.get("caller-id"),
+            "mac_address": item.get("caller-id"),
+            "uptime": item.get("uptime"),
+            "data_used": session_bytes(item),
+            "server": item.get("service") or item.get("interface"),
+        }
+        for item in active_ppp
+    ]
+    session_rows = sorted(session_rows, key=lambda item: item["data_used"], reverse=True)
+
     return {
         "device": {
             "board_name": resource.get("board-name") or routerboard.get("model"),
@@ -894,6 +928,7 @@ def router_interface_status(tenant):
             "hotspot": len(active_hotspot),
             "pppoe": len(active_ppp),
             "total": len(active_hotspot) + len(active_ppp),
+            "items": session_rows[:20],
         },
         "interfaces": [
             {
