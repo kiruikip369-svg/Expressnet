@@ -149,8 +149,6 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
     const nextErrors = {};
     if (!form.name.trim()) nextErrors.name = 'Name is required';
     if (!form.phone.trim()) nextErrors.phone = 'Phone is required';
-    if (!form.username.trim()) nextErrors.username = 'Username is required';
-    if (!editingId && !form.password.trim()) nextErrors.password = 'Password is required';
     if (!form.package_name) nextErrors.package_name = 'Package is required';
     const selectedPackage = packages.find((pkg) => pkg.name === form.package_name);
     const selectedService = form.service_type || serviceLocked || 'pppoe';
@@ -174,7 +172,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
     setSaving(true);
     try {
       if (editingId) {
-        await api.patch(`/customers/${editingId}`, {
+        const payload = {
           name: form.name,
           phone: form.phone,
           location: form.location,
@@ -185,11 +183,13 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
           support: form.support,
           package: form.package_name,
           service_type: form.service_type || 'pppoe',
-        });
+        };
+        if (form.password.trim()) payload.password = form.password;
+        await api.patch(`/customers/${editingId}`, payload);
         toast.success('Customer updated');
       } else {
         await api.post('/customers/add', { ...form, service_type: form.service_type || serviceLocked || 'pppoe' });
-        toast.success('Customer added');
+        toast.success('Customer added and credentials sent');
       }
       closeModal();
       await load();
@@ -453,14 +453,22 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
               </div>
               <div>
                 <label className="form-label" htmlFor="username">Username</label>
-                <input id="username" name="username" className="form-input" value={form.username} onChange={update} />
+                <input id="username" name="username" className="form-input" value={form.username} onChange={update} placeholder="Auto-generated if blank" />
                 {errors.username && <p className="form-error">{errors.username}</p>}
               </div>
-              {!editingId && <div>
+              <div>
                 <label className="form-label" htmlFor="password">Password</label>
-                <input id="password" name="password" type="password" className="form-input" value={form.password} onChange={update} />
+                <input
+                  id="password"
+                  name="password"
+                  type="text"
+                  className="form-input"
+                  value={form.password}
+                  onChange={update}
+                  placeholder={editingId ? 'Leave blank to keep current password' : 'Auto-generated if blank'}
+                />
                 {errors.password && <p className="form-error">{errors.password}</p>}
-              </div>}
+              </div>
               <div>
                 <label className="form-label" htmlFor="technician">Technician who attended</label>
                 <input id="technician" name="technician" className="form-input" value={form.technician} onChange={update} />
@@ -498,7 +506,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
                 <label className="form-label" htmlFor="package_name">Package</label>
                 <select id="package_name" name="package_name" className="form-input" value={form.package_name} onChange={update}>
                   <option value="">Select a package</option>
-                  {packages.map((pkg) => (
+                  {formPackageOptions.map((pkg) => (
                     <option key={pkg.id} value={pkg.name}>{pkg.name}</option>
                   ))}
                 </select>

@@ -115,6 +115,44 @@ MASKED = "••••••••"
 SENSITIVE_FIELDS = {"password", "mikrotik_pass", "paystack_secret_key"}
 
 
+def _customer_username_seed(name, phone):
+    base = "".join(ch for ch in str(name or "").lower() if ch.isalnum())
+    digits = "".join(ch for ch in str(phone or "") if ch.isdigit())
+    if base:
+        return base[:12]
+    if digits:
+        return f"user{digits[-6:]}"
+    return f"user{secrets.token_hex(3)}"
+
+
+def _generate_customer_username(tenant_id, name, phone):
+    existing = {
+        str(customer.get("username") or "").lower()
+        for customer in list_children(f"tenants/{tenant_id}/customers")
+    }
+    seed = _customer_username_seed(name, phone)
+    username = seed
+    while username.lower() in existing:
+        username = f"{seed}{secrets.randbelow(900) + 100}"
+    return username
+
+
+def _generate_customer_password():
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
+    return "".join(secrets.choice(alphabet) for _ in range(8))
+
+
+def _customer_credentials_sms(customer, tenant):
+    brand = tenant.get("business_name") or tenant.get("name") or "Expressnet"
+    service_type = str(customer.get("service_type") or "internet").upper()
+    return (
+        f"{brand} {service_type} login details: "
+        f"Username: {customer.get('username')}. "
+        f"Password: {customer.get('password')}. "
+        "Please keep them safe."
+    )
+
+
 def body(request):
     if hasattr(request, "data"):
         if hasattr(request.data, "dict"):
@@ -725,6 +763,7 @@ def customers(request, customer_id=None):
             "phone",
             "location",
             "username",
+            "password",
             "package",
             "service_type",
             "status",
@@ -738,8 +777,25 @@ def customers(request, customer_id=None):
         updates = {field: data[field] for field in allowed if field in data}
         if not updates:
             return ok({"message": "No customer fields provided"}, 400)
+        if "username" in updates:
+            duplicate = any(
+                str(item.get("id")) != str(customer_id)
+                and str(item.get("username", "")).lower() == str(updates["username"]).lower()
+                for item in list_children(f"tenants/{tenant['id']}/customers")
+            )
+            if duplicate:
+                return ok({"message": "A customer with this username already exists"}, 409)
         updates["updated_at"] = iso_now()
         ref(f"tenants/{tenant['id']}/customers/{customer_id}").update(updates)
+        if "password" in updates or "username" in updates:
+            try:
+                send_sms_message(
+                    updates.get("phone") or customer.get("phone"),
+                    _customer_credentials_sms({**customer, **updates}, tenant),
+                    tenant,
+                )
+            except Exception:
+                logger.exception("Failed to send customer credential SMS")
         return ok({"success": True, "message": "Customer updated", "customer": {"id": customer_id, **customer, **updates}})
     if method(request, "DELETE") and customer_id:
         customer = ref(f"tenants/{tenant['id']}/customers/{customer_id}").get()
@@ -759,9 +815,11 @@ def customers(request, customer_id=None):
 @tenant_required
 def customer_add(request):
     data = body(request)
-    required = ["name", "phone", "username", "password", "package_name"]
+    required = ["name", "phone", "package_name"]
     if any(not data.get(field) for field in required):
-        return ok({"message": "Name, phone, username, password, and package are required"}, 400)
+        return ok({"message": "Name, phone, and package are required"}, 400)
+    data["username"] = str(data.get("username") or "").strip() or _generate_customer_username(request.tenant["id"], data.get("name"), data.get("phone"))
+    data["password"] = str(data.get("password") or "").strip() or _generate_customer_password()
     if any(str(c.get("username", "")).lower() == str(data["username"]).lower() for c in list_children(f"tenants/{request.tenant['id']}/customers")):
         return ok({"message": "A customer with this username already exists"}, 409)
     service_type = str(data.get("service_type") or "hotspot").strip().lower()
@@ -808,8 +866,7 @@ def customer_add(request):
             })
             provisioning_status = "queued"
             provisioning_message = f"{service_type.upper()} access queued for MikroTik sync"
-    new_ref = ref(f"tenants/{request.tenant['id']}/customers").push(
-        {
+    customer_payload = {
             "name": data["name"],
             "phone": data["phone"],
             "location": data.get("location") or "",
@@ -828,7 +885,11 @@ def customer_add(request):
             "auto_reconnect": True,
             "created_at": iso_now(),
         }
-    )
+    new_ref = ref(f"tenants/{request.tenant['id']}/customers").push(customer_payload)
+    try:
+        send_sms_message(data["phone"], _customer_credentials_sms(customer_payload, request.tenant), request.tenant)
+    except Exception:
+        logger.exception("Failed to send customer credential SMS")
     # Sync to Postgres + RADIUS if tenant has RADIUS enabled
     if request.tenant.get("radius_enabled"):
         try:

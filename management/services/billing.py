@@ -232,15 +232,23 @@ def verify_paystack_signature(raw_body, signature, secret):
 
 def platform_daraja_config(tenant=None):
     tenant = tenant or {}
+    mpesa_environment = os.getenv("MPESA_ENVIRONMENT")
+    use_mpesa_aliases_first = str(mpesa_environment or "").strip().lower() == "sandbox"
+    consumer_key = os.getenv("MPESA_CONSUMER_KEY") if use_mpesa_aliases_first else None
+    consumer_secret = os.getenv("MPESA_CONSUMER_SECRET") if use_mpesa_aliases_first else None
+    shortcode = (os.getenv("MPESA_SHORTCODE") or os.getenv("MPESA_BUSINESS_SHORTCODE")) if use_mpesa_aliases_first else None
+    passkey = os.getenv("MPESA_PASSKEY") if use_mpesa_aliases_first else None
+    till_number = (os.getenv("MPESA_TILL_NUMBER") or os.getenv("MPESA_BUSINESS_SHORTCODE")) if use_mpesa_aliases_first else None
+    shortcode_type = os.getenv("MPESA_SHORTCODE_TYPE") if use_mpesa_aliases_first else None
     return {
         **tenant,
-        "daraja_consumer_key": os.getenv("DARAJA_CONSUMER_KEY") or os.getenv("MPESA_CONSUMER_KEY") or tenant.get("daraja_consumer_key"),
-        "daraja_consumer_secret": os.getenv("DARAJA_CONSUMER_SECRET") or os.getenv("MPESA_CONSUMER_SECRET") or tenant.get("daraja_consumer_secret"),
-        "daraja_shortcode": os.getenv("DARAJA_SHORTCODE") or os.getenv("MPESA_SHORTCODE") or os.getenv("MPESA_BUSINESS_SHORTCODE") or tenant.get("daraja_shortcode"),
-        "daraja_passkey": os.getenv("DARAJA_PASSKEY") or os.getenv("MPESA_PASSKEY") or tenant.get("daraja_passkey"),
-        "daraja_till_number": os.getenv("DARAJA_TILL_NUMBER") or os.getenv("MPESA_TILL_NUMBER") or os.getenv("MPESA_BUSINESS_SHORTCODE") or tenant.get("daraja_till_number"),
-        "daraja_environment": os.getenv("DARAJA_ENVIRONMENT") or os.getenv("MPESA_ENVIRONMENT") or tenant.get("daraja_environment") or "production",
-        "daraja_shortcode_type": os.getenv("DARAJA_SHORTCODE_TYPE") or os.getenv("MPESA_SHORTCODE_TYPE") or tenant.get("daraja_shortcode_type") or "CustomerPayBillOnline",
+        "daraja_consumer_key": consumer_key or os.getenv("DARAJA_CONSUMER_KEY") or os.getenv("MPESA_CONSUMER_KEY") or tenant.get("daraja_consumer_key"),
+        "daraja_consumer_secret": consumer_secret or os.getenv("DARAJA_CONSUMER_SECRET") or os.getenv("MPESA_CONSUMER_SECRET") or tenant.get("daraja_consumer_secret"),
+        "daraja_shortcode": shortcode or os.getenv("DARAJA_SHORTCODE") or os.getenv("MPESA_SHORTCODE") or os.getenv("MPESA_BUSINESS_SHORTCODE") or tenant.get("daraja_shortcode"),
+        "daraja_passkey": passkey or os.getenv("DARAJA_PASSKEY") or os.getenv("MPESA_PASSKEY") or tenant.get("daraja_passkey"),
+        "daraja_till_number": till_number or os.getenv("DARAJA_TILL_NUMBER") or os.getenv("MPESA_TILL_NUMBER") or os.getenv("MPESA_BUSINESS_SHORTCODE") or tenant.get("daraja_till_number"),
+        "daraja_environment": mpesa_environment or os.getenv("DARAJA_ENVIRONMENT") or tenant.get("daraja_environment") or "production",
+        "daraja_shortcode_type": shortcode_type or os.getenv("DARAJA_SHORTCODE_TYPE") or os.getenv("MPESA_SHORTCODE_TYPE") or tenant.get("daraja_shortcode_type") or "CustomerPayBillOnline",
     }
 
 
@@ -435,6 +443,16 @@ def initiate_daraja_payment(tenant, payment_id, amount, phone, description=None,
 
     party_b = (creds["till_number"] or business_shortcode) if payment_method == "daraja_buygoods" else business_shortcode
     transaction_type = "CustomerBuyGoodsOnline" if payment_method == "daraja_buygoods" else "CustomerPayBillOnline"
+    logger.info(
+        "Daraja STK config tenant=%s payment=%s environment=%s method=%s shortcode=%s transaction_type=%s callback_base_set=%s",
+        tenant_id,
+        payment_id,
+        tenant.get("daraja_environment"),
+        payment_method,
+        business_shortcode,
+        transaction_type,
+        bool(base_url),
+    )
     payload = {
         "BusinessShortCode": business_shortcode,
         "Password": password,
