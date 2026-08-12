@@ -22,6 +22,7 @@ import Emails from './pages/Emails';
 import Equipment from './pages/Equipment';
 import Expenses from './pages/Expenses';
 import Home from './pages/Home';
+import Invoices from './pages/Invoices';
 import IspOperations from './pages/IspOperations';
 import Login from './pages/Login';
 import Messages from './pages/Messages';
@@ -35,6 +36,7 @@ import PppoeProfile from './pages/PppoeProfile';
 import Register from './pages/Register';
 import Reports from './pages/Reports';
 import Requisitions from './pages/Requisitions';
+import Salary from './pages/Salary';
 import StaffReports from './pages/StaffReports';
 import StaffRequisitions from './pages/StaffRequisitions';
 import StaffTasks from './pages/StaffTasks';
@@ -79,6 +81,8 @@ function DashboardLayout() {
             <Route path="/vouchers" element={<Vouchers />} />
             <Route path="/requisitions" element={<Requisitions />} />
             <Route path="/expenses" element={<Expenses />} />
+            <Route path="/salary" element={<Salary />} />
+            <Route path="/invoices" element={<Invoices />} />
             <Route path="/reports" element={<Reports />} />
             <Route path="/reports/finance" element={<Reports type="finance" />} />
             <Route path="/reports/management" element={<Reports type="management" />} />

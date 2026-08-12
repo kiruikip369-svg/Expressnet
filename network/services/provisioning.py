@@ -22,7 +22,7 @@ from firebase_admin import credentials, db as firebase_db
 from billing_api.models import AdminAuditLog, AdminUser, Customer, InternetPackage, Payment, SiteSettings, Tenant, Ticket, Voucher
 
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 logger = logging.getLogger(__name__)
 
 
@@ -433,7 +433,7 @@ def expressnet_hotspot_file_html(page, portal_url):
     source_name = page_name
     if source_name in {"status.html", "radvert.html"}:
         source_name = "rlogin.html"
-    template_path = BASE_DIR / "centipeed" / "centipid-hotspot" / source_name
+    template_path = PROJECT_ROOT / "centipeed" / "centipid-hotspot" / source_name
     if not template_path.exists():
         return None
 
@@ -455,6 +455,16 @@ def expressnet_hotspot_file_html(page, portal_url):
     content = content.replace('value="71785"', 'value="$(server-address)"')
     content = content.replace('name="mikrotik_error"', 'name="error"')
     content = content.replace("mikrotik_error=$(error)", "error=$(error)")
+    if "link-orig" not in content and "name=\"dst\"" not in content:
+        content = content.replace(
+            '<input name="link_login" type="hidden" value="$(link-login)" />',
+            '<input name="link_login" type="hidden" value="$(link-login)" />\n'
+            '            <input name="dst" type="hidden" value="$(link-orig)" />',
+        )
+        content = content.replace(
+            "&link_login=$(link-login)&error=$(error)",
+            "&link_login=$(link-login)&dst=$(link-orig)&error=$(error)",
+        )
     if 'name="link_login"' not in content:
         content = content.replace(
             '<input name="router_ip" type="hidden" value="$(server-address)" />',
@@ -464,12 +474,12 @@ def expressnet_hotspot_file_html(page, portal_url):
     return content
 
 def hotspot_login_redirect_html(portal_url):
-    target = hotspot_portal_target(portal_url, "ip=$(ip)&mac=$(mac)&router_ip=$(server-address)&link_login=$(link-login)&error=$(error)")
+    target = hotspot_portal_target(portal_url, "ip=$(ip)&mac=$(mac)&router_ip=$(server-address)&link_login=$(link-login)&dst=$(link-orig)&error=$(error)")
     return hotspot_portal_landing_html(target, "Internet Access")
 
 
 def hotspot_error_redirect_html(portal_url):
-    target = hotspot_portal_target(portal_url, "ip=$(ip)&mac=$(mac)&router_ip=$(server-address)&link_login=$(link-login)&error=$(error)")
+    target = hotspot_portal_target(portal_url, "ip=$(ip)&mac=$(mac)&router_ip=$(server-address)&link_login=$(link-login)&dst=$(link-orig)&error=$(error)")
     return hotspot_portal_landing_html(target, "Internet Access")
 
 

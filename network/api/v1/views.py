@@ -628,6 +628,17 @@ def _router_login_form_html(username, password, router_ip="", link_login="", dst
     )
 
 
+def _router_ip_from_captive_data(data, tenant=None, fallback_payment=None):
+    """Return the MikroTik login host, never the client's leased hotspot IP."""
+    return str(
+        data.get("router_ip")
+        or data.get("server-address")
+        or (fallback_payment or {}).get("router_ip")
+        or (tenant or {}).get("mikrotik_hotspot_address")
+        or "172.31.0.1"
+    ).strip()
+
+
 def _is_captive_form_request(request, data=None):
     data = data or {}
     content_type = str(request.META.get("CONTENT_TYPE") or "").lower()
@@ -747,7 +758,7 @@ def captive_portal_page(request, tenant_id):
     if reference:
         _, _, payment = find_payment_by_paystack_reference(reference, tenant_id=tenant_id)
         if payment and payment.get("status") == "success":
-            router_ip = payment.get("router_ip") or request.GET.get("ip") or ""
+            router_ip = _router_ip_from_captive_data(request.GET, tenant, payment)
             link_login = payment.get("link_login") or request.GET.get("link_login") or request.GET.get("link-login") or ""
             dst = payment.get("dst") or request.GET.get("dst") or request.GET.get("link-orig") or "http://connectivitycheck.gstatic.com/generate_204"
             username = payment.get("access_username") or payment.get("username") or ""
@@ -956,7 +967,7 @@ def _public_pay_impl(request, tenant_id):
         return ok({"message": "Package not found"}, 404)
     tenant = {"id": tenant_id, **tenant_data}
     phone = normalize_phone(data["phone"])
-    router_ip = str(data.get("ip") or data.get("router_ip") or "").strip()
+    router_ip = _router_ip_from_captive_data(data, tenant)
     router_mac = str(data.get("mac") or data.get("router_mac") or "").strip()
     link_login = str(data.get("link_login") or data.get("link-login") or "").strip()
     dst = str(data.get("dst") or data.get("link-orig") or "").strip()
@@ -1104,7 +1115,7 @@ def public_redeem(request, tenant_id):
             "username": payment.get("access_username"),
             "password": payment.get("access_password"),
             "mac_address": payment.get("access_mac_address") or payment.get("mac_address"),
-            "router_ip": data.get("router_ip") or data.get("ip") or payment.get("router_ip"),
+            "router_ip": _router_ip_from_captive_data(data, tenant, payment),
             "router_mac": payment.get("router_mac"),
             "link_login": data.get("link_login") or data.get("link-login") or payment.get("link_login"),
             "dst": data.get("dst") or data.get("link-orig") or payment.get("dst"),
@@ -1268,7 +1279,7 @@ def public_voucher_login(request, tenant_id):
         "success": True,
         "username": access_payload.get("username"),
         "password": access_payload.get("password"),
-        "router_ip": data.get("router_ip") or data.get("ip") or tenant.get("mikrotik_last_seen_ip") or "",
+        "router_ip": _router_ip_from_captive_data(data, tenant),
         "link_login": data.get("link_login") or data.get("link-login") or "",
         "dst": data.get("dst") or data.get("link-orig") or "http://connectivitycheck.gstatic.com/generate_204",
         "package_name": access_payload.get("package"),

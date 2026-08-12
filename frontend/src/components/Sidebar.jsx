@@ -70,8 +70,8 @@ const sections = [
     links: [
       { to: '/payments', label: 'Payments', icon: CreditCard },
       { to: '/expenses', label: 'Expenses', icon: Receipt },
-      { to: '/expenses', label: 'Salary', icon: ShoppingBag },
-      { to: '/payments', label: 'Invoices', icon: FileText },
+      { to: '/salary', label: 'Salary', icon: ShoppingBag },
+      { to: '/invoices', label: 'Invoices', icon: FileText },
       { to: '/reports/finance', label: 'Financial Report', icon: FileBarChart },
     ],
   },
