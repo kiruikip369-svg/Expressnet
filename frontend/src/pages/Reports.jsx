@@ -33,6 +33,24 @@ const fallbackSeries = {
   sms: [['Thu', 70], ['Fri', 190], ['Sat', 190], ['Sun', 170], ['Mon', 190], ['Tue', 40]],
 };
 
+const reportCopy = {
+  finance: {
+    title: 'Financial Report',
+    subtitle: 'Payments, revenue, settlements, and money movement.',
+    exportName: 'financial-report.csv',
+  },
+  management: {
+    title: 'Management Report',
+    subtitle: 'Work progress, staff activity, operational tasks, and customer follow-up.',
+    exportName: 'management-report.csv',
+  },
+  network: {
+    title: 'Network Report',
+    subtitle: 'Router health, sessions, traffic, provisioning, and MikroTik activity.',
+    exportName: 'network-report.csv',
+  },
+};
+
 function maxValue(data, index = 1) {
   return Math.max(...data.map((item) => Number(item[index]) || 0), 1);
 }
@@ -46,15 +64,15 @@ function points(data, index, width = 320, height = 190, pad = 18) {
   }).join(' ');
 }
 
-function ChartCard({ title, subtitle, children }) {
+function ChartCard({ title, subtitle, children, action = 'This week' }) {
   return (
-    <section className="min-h-[318px] rounded-lg border border-slate-200 bg-white text-slate-950">
+    <section className="theme-card min-h-[318px] rounded-lg border">
       <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-3">
         <div>
-          <h2 className="text-sm font-semibold">{title}</h2>
-          <p className="mt-1 text-[11px] text-slate-500">{subtitle}</p>
+          <h2 className="theme-text text-sm font-medium">{title}</h2>
+          <p className="theme-muted mt-1 text-[11px]">{subtitle}</p>
         </div>
-        <button type="button" className="h-8 rounded-md border border-slate-200 bg-slate-50 px-3 text-[11px] font-semibold text-slate-700">This week</button>
+        <button type="button" className="theme-card-muted h-8 rounded-md border px-3 text-[11px] font-medium">{action}</button>
       </div>
       <div className="p-4">{children}</div>
     </section>
@@ -93,13 +111,13 @@ function sameDay(a, b) {
   return a && a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
 
-function exportCsv(rows) {
+function exportCsv(rows, filename = 'report.csv') {
   const headers = ['customer_name', 'phone', 'payment_code', 'amount', 'status', 'paid_at', 'provider'];
   const csv = [headers.join(','), ...rows.map((item) => headers.map((key) => JSON.stringify(item[key] ?? '')).join(','))].join('\n');
   const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
   const link = document.createElement('a');
   link.href = url;
-  link.download = 'payment-report.csv';
+  link.download = filename;
   link.click();
   URL.revokeObjectURL(url);
 }
@@ -107,9 +125,9 @@ function exportCsv(rows) {
 function MetricCard({ title, value, helper }) {
   return (
     <div className="rounded-md p-4 shadow-[0_18px_30px_rgba(15,23,42,0.12)]" style={{ background: 'var(--app-accent-soft)', color: 'var(--app-text)' }}>
-      <p className="text-xs font-semibold">{title}</p>
+      <p className="text-xs font-medium">{title}</p>
       <div className="mt-3 flex items-center gap-2">
-        <p className="text-xl font-bold">{formatKES(value)}</p>
+        <p className="text-xl font-semibold">{formatKES(value)}</p>
         <Eye size={14} />
       </div>
       <p className="mt-2 text-xs">{helper}</p>
@@ -117,7 +135,19 @@ function MetricCard({ title, value, helper }) {
   );
 }
 
-export default function Reports() {
+function PlainMetricCard({ title, value, helper }) {
+  return (
+    <div className="theme-card rounded-md border p-4">
+      <p className="theme-muted text-xs font-medium">{title}</p>
+      <p className="theme-text mt-3 text-2xl font-semibold">{value}</p>
+      <p className="theme-muted mt-2 text-xs">{helper}</p>
+    </div>
+  );
+}
+
+export default function Reports({ type = 'finance' }) {
+  const reportType = reportCopy[type] ? type : 'finance';
+  const copy = reportCopy[reportType];
   const [payments, setPayments] = useState([]);
   const [dashboard, setDashboard] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -136,7 +166,7 @@ export default function Reports() {
         setPayments(Array.isArray(paymentData) ? paymentData : paymentData.results || []);
         setDashboard(dashboardResponse.data);
       } catch (error) {
-        toast.error(error.response?.data?.message || 'Failed to load payment report');
+        toast.error(error.response?.data?.message || 'Failed to load report');
       } finally {
         setLoading(false);
       }
@@ -177,36 +207,78 @@ export default function Reports() {
     sms: dashboard?.sms_chart?.length ? dashboard.sms_chart : fallbackSeries.sms,
   }), [dashboard]);
 
+  const routerCount = Number(dashboard?.router_count || dashboard?.active_routers || 0);
+  const totalUsers = Number(dashboard?.total_customers || dashboard?.total_users || 0);
+  const activeUsers = Number(dashboard?.active_customers || dashboard?.active_users || 0);
+  const staffCount = Number(dashboard?.staff_count || dashboard?.team_members || 0);
+  const taskCount = Number(dashboard?.open_tickets || dashboard?.tasks_open || 0);
+
   return (
     <div className="space-y-7">
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <h1 className="text-xl font-semibold text-black">Reports</h1>
+          <div>
+            <h1 className="theme-text text-xl font-medium">{copy.title}</h1>
+            <p className="theme-muted mt-1 text-xs">{copy.subtitle}</p>
+          </div>
           <span className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-900 text-[10px]">i</span>
         </div>
-        <button type="button" className="btn-primary h-9 px-4 shadow-md" onClick={() => exportCsv(rows)}>
+        <button type="button" className="btn-primary h-9 px-4 shadow-md" onClick={() => exportCsv(rows, copy.exportName)}>
           <Download size={14} />
           Export Report
         </button>
       </div>
 
-      <section className="grid gap-6 md:grid-cols-2 xl:grid-cols-4">
-        <MetricCard title="Daily Earnings" value={totals.daily} helper="Total earnings today" />
-        <MetricCard title="Weekly Earnings" value={totals.weekly} helper="Total earnings this week" />
-        <MetricCard title="Monthly Earnings" value={totals.monthly} helper="Total earnings this month" />
-        <MetricCard title="Mobile Money (This Month)" value={totals.monthly} helper="Excluding voucher payments" />
-      </section>
+      {reportType === 'finance' && (
+        <section className="grid gap-6 md:grid-cols-2 xl:grid-cols-4">
+          <MetricCard title="Daily Earnings" value={totals.daily} helper="Total earnings today" />
+          <MetricCard title="Weekly Earnings" value={totals.weekly} helper="Total earnings this week" />
+          <MetricCard title="Monthly Earnings" value={totals.monthly} helper="Total earnings this month" />
+          <MetricCard title="Mobile Money (This Month)" value={totals.monthly} helper="Excluding voucher payments" />
+        </section>
+      )}
+
+      {reportType === 'management' && (
+        <section className="grid gap-6 md:grid-cols-2 xl:grid-cols-4">
+          <PlainMetricCard title="Open Tasks" value={taskCount.toLocaleString('en-KE')} helper="Current staff work queue" />
+          <PlainMetricCard title="Staff Members" value={staffCount.toLocaleString('en-KE')} helper="Team members with system access" />
+          <PlainMetricCard title="Active Customers" value={activeUsers.toLocaleString('en-KE')} helper="Customers requiring ongoing service" />
+          <PlainMetricCard title="Total Customers" value={totalUsers.toLocaleString('en-KE')} helper="Operational customer base" />
+        </section>
+      )}
+
+      {reportType === 'network' && (
+        <section className="grid gap-6 md:grid-cols-2 xl:grid-cols-4">
+          <PlainMetricCard title="Routers" value={routerCount.toLocaleString('en-KE')} helper="Linked MikroTik routers" />
+          <PlainMetricCard title="Active Users" value={activeUsers.toLocaleString('en-KE')} helper="Current service activity" />
+          <PlainMetricCard title="PPPoE Users" value={Number(dashboard?.pppoe_customers || 0).toLocaleString('en-KE')} helper="Router-backed PPPoE customers" />
+          <PlainMetricCard title="Hotspot Users" value={Number(dashboard?.hotspot_customers || 0).toLocaleString('en-KE')} helper="Captive portal users" />
+        </section>
+      )}
 
       <section className="grid gap-4 xl:grid-cols-2">
-        <ChartCard title="Payments" subtitle="Payments and expenses trend."><BarChart data={chartData.payments} height={230} /></ChartCard>
-        <ChartCard title="Active Users" subtitle="Active and new users trend."><LineChart data={chartData.activeUsers} indexes={[1, 2]} colors={[ACCENT, ACCENT_SOFT]} height={230} /></ChartCard>
-        <ChartCard title="Customer retention rate" subtitle="Recurring and active customer movement."><LineChart data={chartData.retention} indexes={[1, 2, 3]} colors={[ACCENT, '#16a34a', '#ef4444']} height={230} /></ChartCard>
-        <ChartCard title="Data Usage" subtitle="Data usage trend for PPPoE and Hotspot users."><LineChart data={chartData.dataUsage} indexes={[1]} colors={[ACCENT]} height={230} /></ChartCard>
-        <ChartCard title="Revenue Forecast" subtitle="Expected revenue trend."><LineChart data={chartData.forecast} indexes={[1]} colors={[ACCENT]} height={230} /></ChartCard>
-        <ChartCard title="Sent SMS" subtitle="SMS sent from the system."><BarChart data={chartData.sms} height={230} /></ChartCard>
+        {reportType === 'finance' && (
+          <>
+            <ChartCard title="Payments" subtitle="Payments and expenses trend."><BarChart data={chartData.payments} height={230} /></ChartCard>
+            <ChartCard title="Revenue Forecast" subtitle="Expected revenue trend."><LineChart data={chartData.forecast} indexes={[1]} colors={[ACCENT]} height={230} /></ChartCard>
+          </>
+        )}
+        {reportType === 'management' && (
+          <>
+            <ChartCard title="Work Progress" subtitle="Open, active, and completed work movement."><LineChart data={chartData.activeUsers} indexes={[1, 2]} colors={[ACCENT, ACCENT_SOFT]} height={230} /></ChartCard>
+            <ChartCard title="Staff Communication" subtitle="SMS and customer follow-up activity."><BarChart data={chartData.sms} height={230} /></ChartCard>
+            <ChartCard title="Customer Retention" subtitle="Recurring and active customer movement."><LineChart data={chartData.retention} indexes={[1, 2, 3]} colors={[ACCENT, '#16a34a', '#ef4444']} height={230} /></ChartCard>
+          </>
+        )}
+        {reportType === 'network' && (
+          <>
+            <ChartCard title="Data Usage" subtitle="Router data usage trend for PPPoE and Hotspot users."><LineChart data={chartData.dataUsage} indexes={[1]} colors={[ACCENT]} height={230} /></ChartCard>
+            <ChartCard title="Active Sessions" subtitle="Router-backed active and new sessions."><LineChart data={chartData.activeUsers} indexes={[1, 2]} colors={[ACCENT, ACCENT_SOFT]} height={230} /></ChartCard>
+          </>
+        )}
       </section>
 
-      <section className="border-b border-slate-200">
+      {reportType === 'finance' && <section className="border-b border-slate-200">
         <div className="flex gap-6">
           {[
             ['checked', 'Checked payments', CheckCheck],
@@ -218,9 +290,9 @@ export default function Reports() {
             </button>
           ))}
         </div>
-      </section>
+      </section>}
 
-      <section className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+      {reportType === 'finance' && <section className="overflow-hidden rounded-lg border border-slate-200 bg-white">
         <div className="flex justify-end border-b border-slate-200 p-3">
           <label className="relative block w-full max-w-xs">
             <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -261,7 +333,7 @@ export default function Reports() {
             </tbody>
           </table>
         </div>
-      </section>
+      </section>}
     </div>
   );
 }

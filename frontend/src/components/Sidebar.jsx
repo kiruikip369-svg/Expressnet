@@ -2,6 +2,7 @@ import {
   BriefcaseBusiness,
   ChevronDown,
   ChevronLeft,
+  ChevronRight,
   CreditCard,
   Database,
   FileBarChart,
@@ -22,6 +23,7 @@ import {
   Wrench,
   X,
 } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { canAccessPage, pageForPath } from '../utils/permissions';
@@ -35,8 +37,8 @@ const sections = [
     icon: Users,
     links: [
       { to: '/pppoe-customers', label: 'PPPoE', icon: RadioTower },
-      { to: '/customers', label: 'Hotspot', icon: Wifi },
-      { to: '/customers', label: 'Static', icon: Database },
+      { to: '/hotspot-customers', label: 'Hotspot', icon: Wifi },
+      { to: '/static-customers', label: 'Static', icon: Database },
     ],
   },
   {
@@ -46,7 +48,7 @@ const sections = [
       { to: '/tickets', label: 'Tasks', icon: Ticket },
       { to: '/packages', label: 'Packages', icon: Package },
       { to: '/vouchers', label: 'Vouchers', icon: WalletCards },
-      { to: '/reports', label: 'Management Report', icon: FileBarChart },
+      { to: '/reports/management', label: 'Management Report', icon: FileBarChart },
     ],
   },
   {
@@ -57,6 +59,7 @@ const sections = [
       { to: '/expenses', label: 'Expenses', icon: Receipt },
       { to: '/expenses', label: 'Salary', icon: ShoppingBag },
       { to: '/payments', label: 'Invoices', icon: FileText },
+      { to: '/reports/finance', label: 'Financial Report', icon: FileBarChart },
     ],
   },
   {
@@ -65,7 +68,7 @@ const sections = [
     links: [
       { to: '/mikrotik', label: 'Mikrotik', icon: Gauge },
       { to: '/mikrotik/link', label: 'TR-069', icon: Gauge },
-      { to: '/reports', label: 'Network Report', icon: RadioTower },
+      { to: '/reports/network', label: 'Network Report', icon: RadioTower },
     ],
   },
   {
@@ -89,6 +92,7 @@ function tenantInitial(tenant) {
 export default function Sidebar({ open, onClose }) {
   const { tenant } = useAuth();
   const location = useLocation();
+  const [collapsedSections, setCollapsedSections] = useState({});
 
   const visibleLinks = (links) => links.filter(({ to }) => canAccessPage(tenant, pageForPath(to)));
 
@@ -97,9 +101,30 @@ export default function Sidebar({ open, onClose }) {
     return location.pathname === link.to || location.pathname.startsWith(`${link.to}/`);
   });
 
+  const initiallyOpen = useMemo(() => {
+    return sections.reduce((state, section) => {
+      if (section.title) state[section.title] = isGroupActive(section.links);
+      return state;
+    }, {});
+  }, [location.pathname]);
+
+  useEffect(() => {
+    setCollapsedSections((current) => {
+      const next = { ...current };
+      Object.entries(initiallyOpen).forEach(([title, active]) => {
+        if (active) next[title] = true;
+      });
+      return next;
+    });
+  }, [initiallyOpen]);
+
+  const toggleSection = (title) => {
+    setCollapsedSections((current) => ({ ...current, [title]: !(current[title] ?? true) }));
+  };
+
   const navClass = ({ isActive }) =>
     [
-      'flex h-9 items-center gap-3 rounded-md px-3 text-[13px] font-semibold transition',
+      'flex h-9 items-center gap-3 rounded-md px-3 text-[13px] font-medium transition',
       isActive
         ? 'bg-[var(--sidebar-active)] text-white shadow-[inset_3px_0_0_rgba(255,255,255,0.28)]'
         : 'text-white/88 hover:bg-white/10 hover:text-white',
@@ -142,6 +167,7 @@ export default function Sidebar({ open, onClose }) {
             if (!links.length) return null;
             const SectionIcon = section.icon;
             const groupActive = isGroupActive(links);
+            const expanded = collapsedSections[section.title] ?? groupActive;
 
             if (!section.title) {
               return (
@@ -159,27 +185,34 @@ export default function Sidebar({ open, onClose }) {
 
             return (
               <div key={section.title} className="border-t border-white/10 pt-3 first:border-t-0 first:pt-0">
-                <div className={`flex h-8 items-center gap-3 rounded-md px-3 text-[13px] font-semibold ${groupActive ? 'text-white' : 'text-white/88'}`}>
+                <button
+                  type="button"
+                  className={`flex h-8 w-full items-center gap-3 rounded-md px-3 text-left text-[13px] font-medium transition hover:bg-white/10 ${groupActive ? 'text-white' : 'text-white/88'}`}
+                  onClick={() => toggleSection(section.title)}
+                  aria-expanded={expanded}
+                >
                   {SectionIcon && <SectionIcon size={16} strokeWidth={2.1} />}
                   <span className="min-w-0 flex-1 truncate">{section.title}</span>
-                  <ChevronDown size={15} />
-                </div>
-                <div className="mt-1 space-y-0.5">
-                  {links.map(({ to, label, icon: Icon }) => (
-                    <NavLink
-                      key={`${section.title}-${label}-${to}`}
-                      to={to}
-                      className={({ isActive }) => [
-                        'ml-7 flex h-7 items-center gap-2 rounded-md px-2 text-[13px] font-medium transition',
-                        isActive ? 'bg-[var(--sidebar-active)] text-white' : 'text-white/84 hover:bg-white/10 hover:text-white',
-                      ].join(' ')}
-                      onClick={onClose}
-                    >
-                      <Icon size={13} strokeWidth={2.2} />
-                      <span className="min-w-0 flex-1 truncate">{label}</span>
-                    </NavLink>
-                  ))}
-                </div>
+                  {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+                </button>
+                {expanded && (
+                  <div className="mt-1 space-y-0.5">
+                    {links.map(({ to, label, icon: Icon }) => (
+                      <NavLink
+                        key={`${section.title}-${label}-${to}`}
+                        to={to}
+                        className={({ isActive }) => [
+                          'ml-7 flex h-7 items-center gap-2 rounded-md px-2 text-[13px] font-normal transition',
+                          isActive ? 'bg-[var(--sidebar-active)] text-white' : 'text-white/84 hover:bg-white/10 hover:text-white',
+                        ].join(' ')}
+                        onClick={onClose}
+                      >
+                        <Icon size={13} strokeWidth={2.2} />
+                        <span className="min-w-0 flex-1 truncate">{label}</span>
+                      </NavLink>
+                    ))}
+                  </div>
+                )}
               </div>
             );
           })}

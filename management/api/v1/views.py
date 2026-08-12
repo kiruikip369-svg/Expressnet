@@ -823,9 +823,11 @@ def customer_add(request):
     if any(str(c.get("username", "")).lower() == str(data["username"]).lower() for c in list_children(f"tenants/{request.tenant['id']}/customers")):
         return ok({"message": "A customer with this username already exists"}, 409)
     service_type = str(data.get("service_type") or "hotspot").strip().lower()
-    if service_type not in {"pppoe", "hotspot"}:
-        return ok({"message": "Customer service type must be PPPoE or Hotspot"}, 400)
+    if service_type not in {"pppoe", "hotspot", "static"}:
+        return ok({"message": "Customer service type must be PPPoE, Hotspot, or Static"}, 400)
     provision = data.get("provision_mikrotik", False)
+    if provision and service_type == "static":
+        return ok({"message": "Static customers can be saved here, but MikroTik auto-provisioning is only available for PPPoE and Hotspot customers"}, 400)
     linked_routers = request.tenant.get("linked_routers") or {}
     mikrotik_router_id = str(data.get("mikrotik_router_id") or "").strip()
     if provision and linked_routers:

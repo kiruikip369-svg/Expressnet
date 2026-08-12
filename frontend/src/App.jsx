@@ -65,6 +65,8 @@ function DashboardLayout() {
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/customers" element={<Customers title="Users" />} />
             <Route path="/pppoe-customers" element={<Customers initialFilter="pppoe" serviceLocked="pppoe" title="PPPoE Customers" />} />
+            <Route path="/hotspot-customers" element={<Customers initialFilter="hotspot" serviceLocked="hotspot" title="Hotspot Customers" />} />
+            <Route path="/static-customers" element={<Customers initialFilter="static" serviceLocked="static" title="Static Customers" />} />
             <Route path="/active-users" element={<Navigate to="/customers" replace />} />
             
             <Route path="/tickets" element={<IspOperations module="tickets" />} />
@@ -73,6 +75,9 @@ function DashboardLayout() {
             <Route path="/vouchers" element={<Vouchers />} />
             <Route path="/expenses" element={<Expenses />} />
             <Route path="/reports" element={<Reports />} />
+            <Route path="/reports/finance" element={<Reports type="finance" />} />
+            <Route path="/reports/management" element={<Reports type="management" />} />
+            <Route path="/reports/network" element={<Reports type="network" />} />
             <Route path="/messages" element={<Messages />} />
             <Route path="/emails" element={<Emails />} />
             <Route path="/mikrotik" element={<MikrotikSettings />} />

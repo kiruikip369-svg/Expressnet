@@ -1,4 +1,4 @@
-import { CreditCard, Download, Pause, Pencil, PlugZap, Plus, RefreshCw, Router, Search, Trash2, Users, Wifi } from 'lucide-react';
+import { CreditCard, Database, Download, Pause, Pencil, PlugZap, Plus, RefreshCw, Router, Search, Trash2, Users, Wifi } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import api from '../api/axios';
@@ -32,6 +32,17 @@ function formatDate(value) {
   return date && !Number.isNaN(date.valueOf()) ? date.toLocaleDateString() : '-';
 }
 
+function serviceTypeOf(customer) {
+  return String(customer?.service_type || 'pppoe').toLowerCase();
+}
+
+function serviceLabel(serviceType) {
+  if (serviceType === 'pppoe') return 'PPPoE';
+  if (serviceType === 'hotspot') return 'Hotspot';
+  if (serviceType === 'static') return 'Static';
+  return 'User';
+}
+
 export default function Customers({ initialFilter = 'all', serviceLocked = null, title = 'Users' }) {
   const [customers, setCustomers] = useState([]);
   const [packages, setPackages] = useState([]);
@@ -63,49 +74,58 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
   }, [mikrotikRouters]);
 
   const formPackageOptions = useMemo(() => {
-    const selectedService = form.service_type || serviceLocked || 'pppoe';
+    const selectedService = serviceLocked || form.service_type || 'pppoe';
     return packages.filter((pkg) => (pkg.service_type || 'hotspot') === selectedService);
   }, [form.service_type, packages, serviceLocked]);
 
+  const scopedCustomers = useMemo(() => {
+    if (!serviceLocked) return customers;
+    return customers.filter((customer) => serviceTypeOf(customer) === serviceLocked);
+  }, [customers, serviceLocked]);
+
   const userStats = useMemo(() => {
-    const active = customers.filter((customer) => customer.status === 'active').length;
-    const hotspot = customers.filter((customer) => (customer.service_type || 'pppoe') === 'hotspot').length;
-    const pppoe = customers.filter((customer) => (customer.service_type || 'pppoe') === 'pppoe').length;
-    const paused = customers.filter((customer) => ['paused', 'suspended', 'inactive'].includes(String(customer.status || '').toLowerCase())).length;
-    const offline = customers.filter((customer) => ['offline', 'expired'].includes(String(customer.status || '').toLowerCase())).length;
+    const active = scopedCustomers.filter((customer) => customer.status === 'active').length;
+    const hotspot = scopedCustomers.filter((customer) => serviceTypeOf(customer) === 'hotspot').length;
+    const pppoe = scopedCustomers.filter((customer) => serviceTypeOf(customer) === 'pppoe').length;
+    const staticUsers = scopedCustomers.filter((customer) => serviceTypeOf(customer) === 'static').length;
+    const paused = scopedCustomers.filter((customer) => ['paused', 'suspended', 'inactive'].includes(String(customer.status || '').toLowerCase())).length;
+    const offline = scopedCustomers.filter((customer) => ['offline', 'expired'].includes(String(customer.status || '').toLowerCase())).length;
     return {
-      total: customers.length,
+      total: scopedCustomers.length,
       active,
-      inactive: customers.length - active,
+      inactive: scopedCustomers.length - active,
       hotspot,
       pppoe,
+      static: staticUsers,
       paused,
       offline,
     };
-  }, [customers]);
+  }, [scopedCustomers]);
 
   const filteredCustomers = useMemo(() => {
-    return customers.filter((customer) => {
+    return scopedCustomers.filter((customer) => {
       const isActive = customer.status === 'active';
+      const serviceType = serviceTypeOf(customer);
       if (statusFilter === 'active' && !isActive) return false;
       if (statusFilter === 'inactive' && isActive) return false;
-      if (serviceLocked && (customer.service_type || 'pppoe') !== serviceLocked) return false;
-      if (statusFilter === 'hotspot' && (customer.service_type || 'pppoe') !== 'hotspot') return false;
-      if (statusFilter === 'pppoe' && (customer.service_type || 'pppoe') !== 'pppoe') return false;
+      if (statusFilter === 'hotspot' && serviceType !== 'hotspot') return false;
+      if (statusFilter === 'pppoe' && serviceType !== 'pppoe') return false;
+      if (statusFilter === 'static' && serviceType !== 'static') return false;
       if (statusFilter === 'paused' && !['paused', 'suspended', 'inactive'].includes(String(customer.status || '').toLowerCase())) return false;
       if (statusFilter === 'offline' && !['offline', 'expired'].includes(String(customer.status || '').toLowerCase())) return false;
       const haystack = `${customer.name || ''} ${customer.phone || ''} ${customer.location || ''} ${customer.username || ''} ${customer.package || ''} ${customer.technician || ''}`.toLowerCase();
       return haystack.includes(search.toLowerCase());
     });
-  }, [customers, search, serviceLocked, statusFilter]);
+  }, [scopedCustomers, search, statusFilter]);
 
   const userFilterTabs = useMemo(() => ([
     ['all', 'All', userStats.total, Users],
     ['hotspot', 'Hotspot', userStats.hotspot, Wifi],
     ['pppoe', 'PPPoE', userStats.pppoe, CreditCard],
+    ['static', 'Static', userStats.static, Database],
     ['paused', 'Paused', userStats.paused, Pause],
     ['offline', 'Offline', userStats.offline, PlugZap],
-  ]), [userStats]);
+  ].filter(([key]) => !serviceLocked || ['all', serviceLocked, 'paused', 'offline'].includes(key))), [serviceLocked, userStats]);
 
   async function load() {
     setLoading(true);
@@ -134,6 +154,11 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
     load();
   }, []);
 
+  useEffect(() => {
+    setStatusFilter(initialFilter);
+    setForm((current) => ({ ...current, service_type: serviceLocked || initialForm.service_type }));
+  }, [initialFilter, serviceLocked]);
+
   const update = (event) => {
     const { name, type, checked, value } = event.target;
     setForm((current) => ({
@@ -151,7 +176,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
     if (!form.phone.trim()) nextErrors.phone = 'Phone is required';
     if (!form.package_name) nextErrors.package_name = 'Package is required';
     const selectedPackage = packages.find((pkg) => pkg.name === form.package_name);
-    const selectedService = form.service_type || serviceLocked || 'pppoe';
+    const selectedService = serviceLocked || form.service_type || 'pppoe';
     if (selectedPackage && (selectedPackage.service_type || 'hotspot') !== selectedService) nextErrors.package_name = `Select a ${selectedService.toUpperCase()} package`;
     if ((form.provision_mikrotik || form.mikrotik_router_id) && mikrotikRouters.length > 0 && !form.mikrotik_router_id) nextErrors.mikrotik_router_id = 'Select the MikroTik for this customer';
     setErrors(nextErrors);
@@ -188,7 +213,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
         await api.patch(`/customers/${editingId}`, payload);
         toast.success('Customer updated');
       } else {
-        await api.post('/customers/add', { ...form, service_type: form.service_type || serviceLocked || 'pppoe' });
+        await api.post('/customers/add', { ...form, service_type: serviceLocked || form.service_type || 'pppoe' });
         toast.success('Customer added and credentials sent');
       }
       closeModal();
@@ -214,7 +239,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
       support: customer.support || '',
       package_name: customer.package || '',
       provision_mikrotik: false,
-      service_type: customer.service_type || 'pppoe',
+      service_type: serviceTypeOf(customer),
     });
     setModalOpen(true);
   };
@@ -281,7 +306,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
         phone: customer.phone,
         amount: selectedPackage?.price,
         package_name: customer.package,
-        service_type: 'pppoe',
+        service_type: serviceTypeOf(customer),
       });
       if (data.authorizationUrl) {
         window.open(data.authorizationUrl, '_blank', 'noopener,noreferrer');
@@ -312,7 +337,11 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="page-title">{title}</h1>
-          <p className="page-subtitle">{serviceLocked === 'pppoe' ? 'Manage PPPoE subscribers, renewals, expiry, and MikroTik provisioning.' : 'Manage PPPoE and Hotspot users from one page, with active and inactive filters.'}</p>
+          <p className="page-subtitle">
+            {serviceLocked
+              ? `Manage ${serviceLabel(serviceLocked)} customers only, including renewals, expiry, and MikroTik provisioning.`
+              : 'Manage PPPoE, Hotspot, and Static users from one page, with active and inactive filters.'}
+          </p>
         </div>
         <div className="flex gap-2">
           <button type="button" className="btn-secondary" onClick={exportCsv}>
@@ -503,6 +532,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
                   <select id="service_type" name="service_type" className="form-input" value={form.service_type || 'pppoe'} onChange={update}>
                     <option value="pppoe">PPPoE</option>
                     <option value="hotspot">Hotspot</option>
+                    <option value="static">Static</option>
                   </select>
                 </div>
               )}
@@ -527,7 +557,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
                 <span>
                   <span className="block font-semibold text-slate-800">Also create this customer on MikroTik now</span>
                   <span className="mt-1 block">
-                    This creates a PPPoE secret on MikroTik using the selected package/profile and keeps it disabled until payment.
+                    This creates the customer on MikroTik using the selected service package/profile and keeps it disabled until payment.
                   </span>
                 </span>
               </label>

@@ -5,7 +5,7 @@ export const DEFAULT_TENANT_THEME = {
   themeColor: '#fa8200',
   themeMode: 'light',
   darkMode: false,
-  font: 'Roboto',
+  font: 'Inter',
 };
 
 function canUseDom() {
