@@ -914,10 +914,14 @@ def captive_hotspot_file(request, tenant_id, page):
 def captive_portal_pay(request, tenant_id):
     data = body(request)
     try:
-        response = public_pay(request, tenant_id)
+        response = _public_pay_impl(request, tenant_id)
     except Exception as exc:
         logger.exception("Captive portal payment failed before provider response tenant=%s error=%s", tenant_id, exc)
-        return _html_page("Payment unavailable", "<main><div class='alert'>Payment could not be started. Please try again or contact the provider.</div></main>", 503)
+        return _html_page(
+            "Payment unavailable",
+            "<main><div class='alert'>M-Pesa payment could not be started. Please confirm the phone number and try again. If it continues, contact the provider.</div></main>",
+            503,
+        )
     payload = getattr(response, "data", {}) or {}
     if response.status_code >= 400:
         back = f"/api/captive/{html.escape(str(tenant_id))}"
@@ -1107,7 +1111,8 @@ def public_redeem(request, tenant_id):
             "expires_at": payment.get("access_expires_at"),
         }
     accept_header = str(request.headers.get("Accept") or "")
-    if "text/html" in accept_header and not request.headers.get("X-Requested-With"):
+    wants_html = _is_captive_form_request(request, data) or ("text/html" in accept_header and not request.headers.get("X-Requested-With"))
+    if wants_html:
         link_login = payload.get("link_login") or (f"http://{payload.get('router_ip')}/login" if payload.get("router_ip") else "")
         if link_login and payload.get("username") and payload.get("password"):
             return _html_page(
@@ -1198,7 +1203,7 @@ def public_voucher_login(request, tenant_id):
             credential_kind = "customer"
     if not access_payload:
         logger.info("Captive login rejected tenant=%s kind=%s code=%s username=%s reason=invalid_inactive_or_expired", tenant_id, credential_kind, code, username)
-        wants_html = "text/html" in str(request.headers.get("Accept") or "") and not request.headers.get("X-Requested-With")
+        wants_html = _is_captive_form_request(request, data) or ("text/html" in str(request.headers.get("Accept") or "") and not request.headers.get("X-Requested-With"))
         back = f"/api/captive/{html.escape(str(tenant_id))}"
         if code:
             if wants_html:
@@ -1240,7 +1245,7 @@ def public_voucher_login(request, tenant_id):
             set_customer_enabled({"id": tenant_id, **tenant}, access_payload.get("username"), "hotspot", True)
             router_status = "active"
         except Exception as exc:
-            if "text/html" in str(request.headers.get("Accept") or "") and not request.headers.get("X-Requested-With"):
+            if _is_captive_form_request(request, data) or ("text/html" in str(request.headers.get("Accept") or "") and not request.headers.get("X-Requested-With")):
                 return _html_page("Login unavailable", f"<main><div class='alert'>Credentials were accepted, but router access could not be prepared: {html.escape(str(exc))}</div><p><a href='/api/captive/{html.escape(str(tenant_id))}'>Back to portal</a></p></main>", 503)
             return ok({"message": f"Credentials were accepted, but router access could not be prepared: {exc}"}, 503)
     elif _router_is_agent_linked(tenant):
