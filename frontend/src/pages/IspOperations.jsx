@@ -345,44 +345,53 @@ export default function IspOperations() {
         {loading ? (
           <div className="py-16 text-center text-sm text-slate-400">Loading tasks...</div>
         ) : (
-          <div className="grid gap-4 p-4 md:grid-cols-2 xl:grid-cols-4">
-            {statusColumns.map(([status, label]) => (
-              <div key={status} className="rounded-lg border border-slate-100 bg-slate-50 p-3">
-                <h2 className="mb-3 text-sm font-semibold text-slate-700">{label}</h2>
-                <div className="space-y-3">
-                  {filtered.filter((ticket) => ticket.status === status).map((ticket) => (
-                    <article key={ticket.id} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
-                      <div className="flex items-start justify-between gap-2">
-                        <h3 className="text-sm font-semibold text-slate-900">{ticket.title}</h3>
-                        <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${priorityClass(ticket.priority)}`}>{ticket.priority}</span>
-                      </div>
-                      <p className="mt-2 line-clamp-3 text-xs text-slate-500">{ticket.description || 'No description'}</p>
-                      {ticket.mikrotik_name && (
-                        <p className="mt-1 text-xs text-slate-500">
-                          Mikrotik: <span className="font-semibold text-slate-700">{ticket.mikrotik_name}</span>
-                        </p>
-                      )}
-                      {ticket.customer_id && (
-                        <p className="mt-1 text-xs text-slate-500">
-                          Customer: <span className="font-semibold text-slate-700">{ticket.customer_id}</span>
-                        </p>
-                      )}
-                      <p className="mt-3 text-xs text-slate-500">
-                        Assigned to: <span className="font-semibold text-slate-700">{ticket.assigned_to_name || 'Unassigned'}</span>
-                        {ticket.assigned_to_role ? <span> ({ticket.assigned_to_role})</span> : null}
-                      </p>
+          <div className="overflow-x-auto">
+            <table className="min-w-[980px] w-full divide-y divide-slate-200">
+              <thead className="table-head">
+                <tr>
+                  <th className="px-4 py-3">Task</th>
+                  <th className="px-4 py-3">Description</th>
+                  <th className="px-4 py-3">Customer</th>
+                  <th className="px-4 py-3">Mikrotik</th>
+                  <th className="px-4 py-3">Assigned to</th>
+                  <th className="px-4 py-3">Status</th>
+                  <th className="px-4 py-3">Priority</th>
+                  <th className="px-4 py-3 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {filtered.length === 0 ? (
+                  <tr><td className="table-cell text-slate-500" colSpan="8">No tasks found.</td></tr>
+                ) : filtered.map((ticket) => (
+                  <tr key={ticket.id} className="bg-white">
+                    <td className="table-cell font-semibold text-slate-950">{ticket.title}</td>
+                    <td className="table-cell max-w-xs truncate text-slate-500">{ticket.description || 'No description'}</td>
+                    <td className="table-cell">{ticket.customer_id || '-'}</td>
+                    <td className="table-cell">{ticket.mikrotik_name || '-'}</td>
+                    <td className="table-cell">
+                      <span className="font-semibold text-slate-700">{ticket.assigned_to_name || 'Unassigned'}</span>
+                      {ticket.assigned_to_role ? <span className="text-slate-500"> ({ticket.assigned_to_role})</span> : null}
+                    </td>
+                    <td className="table-cell">
+                      <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold capitalize text-slate-700">
+                        {statusColumns.find(([value]) => value === ticket.status)?.[1] || ticket.status || 'Pending'}
+                      </span>
+                    </td>
+                    <td className="table-cell">
+                      <span className={`rounded-full px-2 py-1 text-xs font-semibold ${priorityClass(ticket.priority)}`}>{ticket.priority}</span>
+                    </td>
+                    <td className="table-cell">
                       {(canEdit || canDelete) && (
-                        <div className="mt-3 flex justify-end gap-2">
+                        <div className="flex justify-end gap-2">
                           {canEdit && <button type="button" className="btn-secondary px-2 py-1 text-xs" onClick={() => edit(ticket)}><Pencil size={13} />Edit</button>}
                           {canDelete && <button type="button" className="btn-secondary px-2 py-1 text-xs text-red-600" onClick={() => remove(ticket)}><Trash2 size={13} />Delete</button>}
                         </div>
                       )}
-                    </article>
-                  ))}
-                  {filtered.filter((ticket) => ticket.status === status).length === 0 && <p className="py-8 text-center text-xs text-slate-400">No tasks</p>}
-                </div>
-              </div>
-            ))}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
       </section>
