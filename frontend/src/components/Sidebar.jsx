@@ -150,7 +150,7 @@ export default function Sidebar({ open, onClose }) {
             if (!links.length) return null;
             const SectionIcon = section.icon;
             const groupActive = isGroupActive(links);
-            const expanded = collapsedSections[section.title] ?? false;
+            const expanded = !(collapsedSections[section.title] ?? false);
 
             if (!section.title) {
               return (

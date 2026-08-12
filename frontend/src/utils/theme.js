@@ -96,6 +96,7 @@ export function applyTenantTheme(settings = getStoredTenantSettings()) {
   const accentStrong = mixWithBlack(theme.themeColor);
   const accentMuted = mixWithWhite(theme.themeColor, 0.9);
   const resolvedMode = resolveThemeMode(theme.themeMode);
+  const isDark = resolvedMode === 'dark';
 
   root.style.setProperty('--dashboard-color', theme.themeColor);
   root.style.setProperty('--dashboard-color-soft', accentSoft);
@@ -105,14 +106,14 @@ export function applyTenantTheme(settings = getStoredTenantSettings()) {
   root.style.setProperty('--app-accent-muted', accentMuted);
   root.style.setProperty('--app-accent-contrast', contrastColor(theme.themeColor));
   root.style.setProperty('--app-focus-ring', mixWithWhite(theme.themeColor, 0.82));
-  root.style.setProperty('--app-tint-bg', mixWithWhite(theme.themeColor, 0.96));
-  root.style.setProperty('--app-tint-panel', mixWithWhite(theme.themeColor, 0.985));
-  root.style.setProperty('--sidebar-top', mixWithBlack(theme.themeColor, 0.12));
-  root.style.setProperty('--sidebar-middle', theme.themeColor);
-  root.style.setProperty('--sidebar-bottom', mixWithBlack(theme.themeColor, 0.28));
-  root.style.setProperty('--sidebar-active', mixWithWhite(theme.themeColor, 0.18));
-  root.style.setProperty('--sidebar-border', mixWithWhite(theme.themeColor, 0.34));
-  root.style.setProperty('--sidebar-avatar', mixWithWhite(theme.themeColor, 0.22));
+  root.style.setProperty('--app-tint-bg', isDark ? '#111318' : mixWithWhite(theme.themeColor, 0.96));
+  root.style.setProperty('--app-tint-panel', isDark ? '#1f2127' : mixWithWhite(theme.themeColor, 0.985));
+  root.style.setProperty('--sidebar-top', isDark ? '#111318' : mixWithBlack(theme.themeColor, 0.12));
+  root.style.setProperty('--sidebar-middle', isDark ? '#191c23' : theme.themeColor);
+  root.style.setProperty('--sidebar-bottom', isDark ? '#0b0d12' : mixWithBlack(theme.themeColor, 0.28));
+  root.style.setProperty('--sidebar-active', isDark ? '#2a2d35' : mixWithWhite(theme.themeColor, 0.18));
+  root.style.setProperty('--sidebar-border', isDark ? '#343946' : mixWithWhite(theme.themeColor, 0.34));
+  root.style.setProperty('--sidebar-avatar', isDark ? theme.themeColor : mixWithWhite(theme.themeColor, 0.22));
   root.style.setProperty('--app-font-family', `${theme.font}, Roboto, ui-sans-serif, system-ui, sans-serif`);
   root.dataset.theme = resolvedMode;
   root.dataset.themeMode = theme.themeMode;
