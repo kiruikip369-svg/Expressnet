@@ -23,7 +23,7 @@ import {
   Wrench,
   X,
 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { canAccessPage, pageForPath } from '../utils/permissions';
@@ -101,25 +101,8 @@ export default function Sidebar({ open, onClose }) {
     return location.pathname === link.to || location.pathname.startsWith(`${link.to}/`);
   });
 
-  const initiallyOpen = useMemo(() => {
-    return sections.reduce((state, section) => {
-      if (section.title) state[section.title] = isGroupActive(section.links);
-      return state;
-    }, {});
-  }, [location.pathname]);
-
-  useEffect(() => {
-    setCollapsedSections((current) => {
-      const next = { ...current };
-      Object.entries(initiallyOpen).forEach(([title, active]) => {
-        if (active) next[title] = true;
-      });
-      return next;
-    });
-  }, [initiallyOpen]);
-
   const toggleSection = (title) => {
-    setCollapsedSections((current) => ({ ...current, [title]: !(current[title] ?? true) }));
+    setCollapsedSections((current) => ({ ...current, [title]: !(current[title] ?? false) }));
   };
 
   const navClass = ({ isActive }) =>
@@ -167,7 +150,7 @@ export default function Sidebar({ open, onClose }) {
             if (!links.length) return null;
             const SectionIcon = section.icon;
             const groupActive = isGroupActive(links);
-            const expanded = collapsedSections[section.title] ?? groupActive;
+            const expanded = collapsedSections[section.title] ?? false;
 
             if (!section.title) {
               return (
