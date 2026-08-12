@@ -2010,20 +2010,39 @@ def router_resources(request):
         device = status.get("device", {})
         total = float(device.get("total_memory") or 0)
         free = float(device.get("free_memory") or 0)
+        traffic = status.get("traffic") or {}
+        rx_bps = int(traffic.get("rx_bps") or 0)
+        tx_bps = int(traffic.get("tx_bps") or 0)
         wireless_signals = [
             item.get("signal_strength")
             for item in status.get("interfaces", [])
             if item.get("signal_strength") not in {None, ""}
         ]
+        numeric_signals = []
+        for signal in wireless_signals:
+            try:
+                numeric_signals.append(int(float(signal)))
+            except (TypeError, ValueError):
+                pass
+        strongest_signal = max(numeric_signals) if numeric_signals else None
+        internet_strength = max(0, min(100, round((strongest_signal + 90) / 40 * 100))) if strongest_signal is not None else (100 if source == "routeros_api" else 0)
+        active_sessions = status.get("active_sessions") or {}
+        active_session_items = active_sessions.get("items") if isinstance(active_sessions, dict) else []
         return {
             "cpu_load_percent": device.get("cpu_load"),
             "uptime": device.get("uptime"),
             "memory_used_bytes": max(0, total - free),
             "memory_total_bytes": total,
             "memory_used_percent": round((1 - free / total) * 100, 1) if total else None,
-            "traffic": status.get("traffic") or {},
-            "active_sessions": status.get("active_sessions") or {},
-            "wireless_signal_strength": max(wireless_signals) if wireless_signals else None,
+            "traffic": traffic,
+            "network_traffic_bps": rx_bps + tx_bps,
+            "network_rx_bps": rx_bps,
+            "network_tx_bps": tx_bps,
+            "traffic_percent": round(min(((rx_bps + tx_bps) / 1_000_000), 100), 1) if rx_bps or tx_bps else 0,
+            "active_sessions": active_sessions,
+            "top_active_sessions": active_session_items[:5] if isinstance(active_session_items, list) else [],
+            "wireless_signal_strength": strongest_signal,
+            "internet_strength_percent": internet_strength,
             "interfaces": [
                 {
                     "name": item.get("name"),

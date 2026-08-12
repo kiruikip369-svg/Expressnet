@@ -99,6 +99,7 @@ function OverviewCard({ icon: Icon, label, value, helper, percent, darkMode }) {
 export default function Dashboard() {
   const { tenant, token } = useAuth();
   const [dashboard, setDashboard] = useState(null);
+  const [routerResources, setRouterResources] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [darkMode, setDarkMode] = useState(() => readDarkMode());
@@ -109,8 +110,12 @@ export default function Dashboard() {
     async function load({ silent = false } = {}) {
       try {
         if (silent) setRefreshing(true);
-        const { data } = await api.get('/dashboard/stats');
+        const [{ data }, resourcesResult] = await Promise.all([
+          api.get('/dashboard/stats'),
+          api.get('/router/resources').catch((error) => ({ error })),
+        ]);
         if (mounted) setDashboard(data);
+        if (mounted && resourcesResult.data) setRouterResources(resourcesResult.data);
       } catch (error) {
         if (!silent) toast.error(error.response?.data?.message || 'Failed to load dashboard');
       } finally {
@@ -127,13 +132,29 @@ export default function Dashboard() {
   }, []);
 
   const summary = dashboard?.summary || {};
-  const router = dashboard?.router_health || {};
+  const statsRouter = dashboard?.router_health || {};
+  const router = routerResources
+    ? {
+        ...statsRouter,
+        status: routerResources.live ? 'online' : statsRouter.status,
+        board_name: routerResources.board_name || statsRouter.board_name,
+        cpu_load_percent: routerResources.cpu_load_percent ?? statsRouter.cpu_load_percent,
+        internet_strength_percent: routerResources.internet_strength_percent ?? statsRouter.internet_strength_percent,
+        traffic_percent: routerResources.traffic_percent ?? statsRouter.traffic_percent,
+        network_traffic_bps: routerResources.network_traffic_bps ?? statsRouter.network_traffic_bps,
+        network_rx_bps: routerResources.network_rx_bps ?? statsRouter.network_rx_bps,
+        network_tx_bps: routerResources.network_tx_bps ?? statsRouter.network_tx_bps,
+        active_sessions: routerResources.active_sessions || statsRouter.active_sessions,
+        top_active_sessions: routerResources.top_active_sessions || statsRouter.top_active_sessions,
+        sample_source: routerResources.source || statsRouter.sample_source,
+        sampled_at: routerResources.sampled_at || statsRouter.sampled_at,
+        message: routerResources.message,
+      }
+    : statsRouter;
   const topActiveSessions = useMemo(() => {
     const liveSessions = router?.top_active_sessions || [];
-    if (liveSessions.length) return liveSessions.slice(0, 5);
-    const users = dashboard?.top_hotspot_active_users || dashboard?.most_active_users || [];
-    return users.slice(0, 5);
-  }, [dashboard, router]);
+    return liveSessions.slice(0, 5);
+  }, [router]);
 
   const stats = {
     totalUsers: Number(summary.total_customers || 0),
@@ -187,7 +208,13 @@ export default function Dashboard() {
       </section>
 
       <section className="space-y-3">
-        <h2 className="text-sm font-semibold">Dashboard Overview</h2>
+        <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <h2 className="text-sm font-semibold">Router Realtime Overview</h2>
+            <p className={`text-[11px] ${darkMode ? 'text-[#a9aec3]' : 'text-slate-500'}`}>{router.message || sourceLabel}</p>
+          </div>
+          <p className={`text-[11px] ${darkMode ? 'text-[#a9aec3]' : 'text-slate-500'}`}>{activeSessionCount.toLocaleString('en-KE')} live sessions</p>
+        </div>
         <div className="grid gap-4 xl:grid-cols-2">
           <OverviewCard darkMode={darkMode} icon={Wifi} label="Internet strength" value={`${internetStrength}%`} helper={router.status ? `${sourceLabel} - ${router.status}` : sourceLabel} percent={internetStrength} />
           <OverviewCard darkMode={darkMode} icon={Radio} label="Network traffic" value={trafficLabel} helper={`RX ${rxLabel} / TX ${txLabel}`} percent={trafficValue} />
