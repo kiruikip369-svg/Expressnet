@@ -130,6 +130,7 @@ export default function Packages() {
     setSaving(true);
     try {
       const payload = {
+        service_type: form.service_type,
         name: form.name,
         speed: form.speed,
         duration_value: Number(form.duration_value),
@@ -139,9 +140,6 @@ export default function Packages() {
         price: Number(form.price),
         is_active: form.is_active,
       };
-      if (!editingPackage || form.service_type !== packageType(editingPackage)) {
-        payload.service_type = form.service_type;
-      }
 
       if (editingPackage) {
         await api.patch(`/packages/${editingPackage.id}`, payload);
@@ -161,7 +159,7 @@ export default function Packages() {
   };
 
   const deletePackage = async (pkg) => {
-    if (!window.confirm(`Delete ${pkg.name}? This will remove the router PPP profile if connected.`)) return;
+    if (!window.confirm(`Delete ${pkg.name}? This will remove the matching router profile if connected.`)) return;
 
     setDeletingId(pkg.id);
     try {

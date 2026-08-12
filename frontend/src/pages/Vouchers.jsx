@@ -79,9 +79,14 @@ export default function Vouchers() {
     if (!window.confirm(`Delete voucher ${voucher.code}?`)) return;
     setBusyId(voucher.id);
     try {
-      await api.delete(`/vouchers/${voucher.id}`);
+      const { data } = await api.delete(`/vouchers/${voucher.id}`);
       setVouchers((current) => current.filter((item) => item.id !== voucher.id));
-      toast.success('Voucher deleted');
+      setSelectedIds((current) => current.filter((id) => id !== voucher.id));
+      if (data?.router_status === 'queued') {
+        toast.success('Voucher deleted. Router removal queued.');
+      } else {
+        toast.success('Voucher deleted');
+      }
     } catch (error) {
       toast.error(error.response?.data?.message || 'Failed to delete voucher');
     } finally {
@@ -113,9 +118,12 @@ export default function Vouchers() {
       const failedCount = idsToDelete.length - deletedIds.length;
       setVouchers((current) => current.filter((item) => !deletedIds.includes(item.id)));
       setSelectedIds((current) => current.filter((id) => !deletedIds.includes(id)));
+      const queuedCount = results.filter((result) => result.status === 'fulfilled' && result.value?.data?.router_status === 'queued').length;
       if (failedCount) {
         toast.error(`${failedCount} voucher${failedCount === 1 ? '' : 's'} could not be deleted`);
         await load();
+      } else if (queuedCount) {
+        toast.success(`${deletedIds.length} voucher${deletedIds.length === 1 ? '' : 's'} deleted. Router removal queued.`);
       } else {
         toast.success(`${deletedIds.length} voucher${deletedIds.length === 1 ? '' : 's'} deleted`);
       }

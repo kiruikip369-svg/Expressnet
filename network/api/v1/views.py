@@ -1419,6 +1419,11 @@ def packages(request, package_id=None):
         updates = {key: data[key] for key in ["name", "speed", "duration_days", "duration_unit", "duration_value", "duration_hours", "price", "is_active", "service_type"] if key in data}
         if not updates:
             return ok({"message": "No package fields provided"}, 400)
+        if "service_type" in updates:
+            requested_service_type = str(updates["service_type"] or "").strip().lower()
+            if requested_service_type not in {"hotspot", "pppoe"}:
+                return ok({"message": "Package type must be Hotspot or PPPoE"}, 400)
+            updates["service_type"] = requested_service_type
         if "price" in updates:
             updates["price"] = float(updates["price"])
         if "is_active" in updates:
@@ -1448,10 +1453,35 @@ def packages(request, package_id=None):
         else:
             router_updates.update({"ppp_profile_status": "pending"})
         ref(f"tenants/{tenant_id}/packages/{package_id}").update({**updates, **router_updates})
-        return ok({"success": True, "message": "Package and MikroTik hotspot profile updated"})
+        return ok({"success": True, "message": "Package and MikroTik profile updated"})
     if method(request, "DELETE") and package_id:
+        existing = ref(f"tenants/{tenant_id}/packages/{package_id}").get()
+        if not existing:
+            return ok({"message": "Package not found"}, 404)
+        router_error = None
+        package_for_router = {"id": package_id, **existing}
+        try:
+            _delete_package_profile_from_router(request.tenant, package_for_router)
+        except Exception as exc:
+            router_error = str(exc)
+            script = _package_profile_delete_script(package_for_router)
+            if script and _router_is_agent_linked(request.tenant):
+                try:
+                    _queue_router_command(request, {"type": "delete_package_profile", "script": script, "package_ids": [package_id]})
+                except Exception as queue_exc:
+                    router_error = f"{router_error}; queue failed: {queue_exc}"
+        if not has_mikrotik_credentials(request.tenant) and _router_is_agent_linked(request.tenant):
+            script = _package_profile_delete_script(package_for_router)
+            if script:
+                try:
+                    _queue_router_command(request, {"type": "delete_package_profile", "script": script, "package_ids": [package_id]})
+                except Exception as queue_exc:
+                    router_error = str(queue_exc)
         ref(f"tenants/{tenant_id}/packages/{package_id}").delete()
-        return ok({"success": True, "message": "Package deleted"})
+        response = {"success": True, "message": "Package deleted"}
+        if router_error:
+            response["router_error"] = router_error
+        return ok(response)
     return ok({"message": "Method not allowed"}, 405)
 
 
@@ -1532,16 +1562,23 @@ def vouchers(request, voucher_id=None):
         if not voucher:
             return ok({"message": "Voucher not found"}, 404)
         router_error = None
-        try:
-            _delete_voucher_from_router(request, voucher)
-        except Exception as exc:
-            router_error = str(exc)
+        router_queued = False
+        script = _voucher_delete_script(voucher)
+        if _router_is_agent_linked(request.tenant) and script:
             try:
-                _queue_router_command(request, {"type": "delete_voucher", "script": _voucher_delete_script(voucher)})
+                _queue_router_command(request, {"type": "delete_voucher", "script": script, "voucher_id": voucher_id})
+                router_queued = True
             except Exception as queue_exc:
-                router_error = f"{router_error}; queue failed: {queue_exc}"
+                router_error = str(queue_exc)
+        elif has_mikrotik_credentials(request.tenant):
+            try:
+                _delete_voucher_from_router(request, voucher)
+            except Exception as exc:
+                router_error = str(exc)
         ref(f"{voucher_path}/{voucher_id}").delete()
         response = {"success": True, "message": "Voucher deleted"}
+        if router_queued:
+            response["router_status"] = "queued"
         if router_error:
             response["router_error"] = router_error
         return ok(response)
@@ -1851,11 +1888,13 @@ def _voucher_disable_script(voucher):
 
 def _voucher_delete_script(voucher):
     username = _rsc_escape(voucher.get("username") or "")
+    code = _rsc_escape(voucher.get("code") or "")
     if not username:
-        return ""
+        return f':do {{ /ip hotspot user remove [find comment="billing-saas-voucher:{code}"] }} on-error={{}};' if code else ""
     return (
         f':do {{ /ip hotspot active remove [find user="{username}"] }} on-error={{}};'
         f':do {{ /ip hotspot user remove [find name="{username}"] }} on-error={{}};'
+        f':do {{ /ip hotspot user remove [find comment="billing-saas-voucher:{code}"] }} on-error={{}};'
     )
 
 
@@ -1879,21 +1918,28 @@ def _delete_voucher_from_router(request, voucher):
     if not has_mikrotik_credentials(request.tenant):
         raise RuntimeError("Router API credentials are not configured")
     username = str(voucher.get("username") or "").strip()
-    if not username:
+    comment = f"billing-saas-voucher:{voucher.get('code') or ''}".strip()
+    if not username and not voucher.get("code"):
         return
     api = router_connect(request.tenant)
     try:
         active = api.path("ip", "hotspot", "active")
-        for item in list(active.select()):
-            if str(item.get("user") or "") == username and item.get(".id"):
+        if username:
+            for item in list(active.select()):
+                if str(item.get("user") or "") == username and item.get(".id"):
+                    try:
+                        active.remove(item[".id"])
+                    except Exception:
+                        pass
+        users = api.path("ip", "hotspot", "user")
+        for item in list(users.select()):
+            matches_username = username and str(item.get("name") or "") == username
+            matches_comment = voucher.get("code") and str(item.get("comment") or "") == comment
+            if (matches_username or matches_comment) and item.get(".id"):
                 try:
-                    active.remove(item[".id"])
+                    users.remove(item[".id"])
                 except Exception:
                     pass
-        users = api.path("ip", "hotspot", "user")
-        existing = next((item for item in users.select() if str(item.get("name") or "") == username), None)
-        if existing and existing.get(".id"):
-            users.remove(existing[".id"])
     finally:
         api.close()
 
@@ -1926,6 +1972,38 @@ def _package_profile_script(package):
         f'}} on-error={{ :log warning "Billing SaaS agent: Hotspot profile sync failed for {name}"; :error "Hotspot profile sync failed for {name}" }};'
         f':if ([:len [/ip hotspot user profile find name="{name}"]] = 0) do={{ :error "Hotspot profile missing after sync: {name}" }};'
     )
+
+
+def _package_profile_delete_script(package):
+    """Generate an .rsc snippet that removes the package profile from the right RouterOS store."""
+    name = _rsc_escape(package.get("name") or "")
+    if not name:
+        return ""
+    if package_service_type(package) == "pppoe":
+        return f':do {{ /ppp profile remove [find name="{name}" comment="billing-saas-package"] }} on-error={{}};'
+    return f':do {{ /ip hotspot user profile remove [find name="{name}"] }} on-error={{}};'
+
+
+def _delete_package_profile_from_router(tenant, package):
+    if not has_mikrotik_credentials(tenant):
+        return None
+    name = str(package.get("name") or "").strip()
+    if not name:
+        return None
+    service_type = package_service_type(package)
+    api = router_connect(tenant)
+    try:
+        path = ("ppp", "profile") if service_type == "pppoe" else ("ip", "hotspot", "user", "profile")
+        router_path = api.path(*path)
+        for item in list(router_path.select()):
+            if str(item.get("name") or "") != name or not item.get(".id"):
+                continue
+            if service_type == "pppoe" and str(item.get("comment") or "") != "billing-saas-package":
+                continue
+            router_path.remove(item[".id"])
+        return True
+    finally:
+        api.close()
 
 
 def _hotspot_captive_file_script(tenant, base_url=None):

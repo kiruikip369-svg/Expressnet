@@ -827,6 +827,10 @@ def customer_add(request):
     service_type = str(data.get("service_type") or "hotspot").strip().lower()
     if service_type not in {"pppoe", "hotspot", "static"}:
         return ok({"message": "Customer service type must be PPPoE, Hotspot, or Static"}, 400)
+    customer_status = str(data.get("status") or "active").strip().lower()
+    if customer_status not in {"active", "inactive", "paused", "suspended"}:
+        return ok({"message": "Customer status must be active, inactive, paused, or suspended"}, 400)
+    router_disabled = customer_status != "active"
     provision = data.get("provision_mikrotik", False)
     if provision and service_type == "static":
         return ok({"message": "Static customers can be saved here, but MikroTik auto-provisioning is only available for PPPoE and Hotspot customers"}, 400)
@@ -851,14 +855,14 @@ def customer_add(request):
                     create_ppp_profile(request.tenant, pkg["name"], pkg.get("speed"))
                 else:
                     create_hotspot_profile(request.tenant, pkg["name"], pkg.get("speed"))
-                upsert_customer_access(request.tenant, {**data, "service_type": service_type}, disabled=True)
+                upsert_customer_access(request.tenant, {**data, "service_type": service_type, "status": customer_status}, disabled=router_disabled)
                 provisioning_status = "provisioned"
-                provisioning_message = f"{service_type.upper()} access created on MikroTik and kept disabled until payment"
+                provisioning_message = f"{service_type.upper()} access created on MikroTik"
             except (TimeoutError, OSError):
                 _queue_router_command(request, {
                     "type": "sync_secrets",
                     "router_id": mikrotik_router_id,
-                    "script": _customer_secret_script({**data, "package": data["package_name"], "speed": pkg.get("speed"), "service_type": service_type, "status": "inactive"}),
+                    "script": _customer_secret_script({**data, "package": data["package_name"], "speed": pkg.get("speed"), "service_type": service_type, "status": customer_status}),
                 })
                 provisioning_status = "queued"
                 provisioning_message = f"{service_type.upper()} access queued for MikroTik sync"
@@ -866,7 +870,7 @@ def customer_add(request):
             _queue_router_command(request, {
                 "type": "sync_secrets",
                 "router_id": mikrotik_router_id,
-                "script": _customer_secret_script({**data, "package": data["package_name"], "speed": pkg.get("speed"), "service_type": service_type, "status": "inactive"}),
+                "script": _customer_secret_script({**data, "package": data["package_name"], "speed": pkg.get("speed"), "service_type": service_type, "status": customer_status}),
             })
             provisioning_status = "queued"
             provisioning_message = f"{service_type.upper()} access queued for MikroTik sync"
@@ -884,7 +888,7 @@ def customer_add(request):
             "service_type": service_type,
             "provisioning_status": provisioning_status,
             "provisioning_message": provisioning_message,
-            "status": "inactive",
+            "status": customer_status,
             "expiry_date": None,
             "auto_reconnect": True,
             "created_at": iso_now(),
@@ -900,7 +904,7 @@ def customer_add(request):
             from billing_api.radius_provisioning import upsert_pg_customer, sync_radius_customer
             from billing_api.models import Tenant as TenantModel
             tenant_obj = TenantModel.objects.get(pk=request.tenant["id"])
-            pg_customer = upsert_pg_customer(tenant_obj, {**data, "service_type": service_type})
+            pg_customer = upsert_pg_customer(tenant_obj, {**data, "service_type": service_type, "status": customer_status})
             if pg_customer:
                 sync_radius_customer(tenant_obj, pg_customer)
         except Exception:

@@ -557,7 +557,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
                 <span>
                   <span className="block font-semibold text-slate-800">Also create this customer on MikroTik now</span>
                   <span className="mt-1 block">
-                    This creates the customer on MikroTik using the selected service package/profile and keeps it disabled until payment.
+                    This creates the customer on MikroTik using the selected service package/profile.
                   </span>
                 </span>
               </label>
