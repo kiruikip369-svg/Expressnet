@@ -451,24 +451,28 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
                 <label className="form-label" htmlFor="location">Location</label>
                 <input id="location" name="location" className="form-input" value={form.location} onChange={update} />
               </div>
-              <div>
-                <label className="form-label" htmlFor="username">Username</label>
-                <input id="username" name="username" className="form-input" value={form.username} onChange={update} placeholder="Auto-generated if blank" />
-                {errors.username && <p className="form-error">{errors.username}</p>}
-              </div>
-              <div>
-                <label className="form-label" htmlFor="password">Password</label>
-                <input
-                  id="password"
-                  name="password"
-                  type="text"
-                  className="form-input"
-                  value={form.password}
-                  onChange={update}
-                  placeholder={editingId ? 'Leave blank to keep current password' : 'Auto-generated if blank'}
-                />
-                {errors.password && <p className="form-error">{errors.password}</p>}
-              </div>
+              {editingId && (
+                <>
+                  <div>
+                    <label className="form-label" htmlFor="username">Username</label>
+                    <input id="username" name="username" className="form-input" value={form.username} onChange={update} />
+                    {errors.username && <p className="form-error">{errors.username}</p>}
+                  </div>
+                  <div>
+                    <label className="form-label" htmlFor="password">Password</label>
+                    <input
+                      id="password"
+                      name="password"
+                      type="text"
+                      className="form-input"
+                      value={form.password}
+                      onChange={update}
+                      placeholder="Leave blank to keep current password"
+                    />
+                    {errors.password && <p className="form-error">{errors.password}</p>}
+                  </div>
+                </>
+              )}
               <div>
                 <label className="form-label" htmlFor="technician">Technician who attended</label>
                 <input id="technician" name="technician" className="form-input" value={form.technician} onChange={update} />
