@@ -93,17 +93,28 @@ export function applyTenantTheme(settings = getStoredTenantSettings()) {
   const theme = normalizeTenantTheme(settings);
   const root = document.documentElement;
   const accentSoft = mixWithWhite(theme.themeColor);
+  const accentStrong = mixWithBlack(theme.themeColor);
+  const accentMuted = mixWithWhite(theme.themeColor, 0.9);
+  const resolvedMode = resolveThemeMode(theme.themeMode);
 
   root.style.setProperty('--dashboard-color', theme.themeColor);
   root.style.setProperty('--dashboard-color-soft', accentSoft);
   root.style.setProperty('--app-accent', theme.themeColor);
   root.style.setProperty('--app-accent-soft', accentSoft);
-  root.style.setProperty('--app-accent-strong', mixWithBlack(theme.themeColor));
-  root.style.setProperty('--app-accent-muted', mixWithWhite(theme.themeColor, 0.9));
+  root.style.setProperty('--app-accent-strong', accentStrong);
+  root.style.setProperty('--app-accent-muted', accentMuted);
   root.style.setProperty('--app-accent-contrast', contrastColor(theme.themeColor));
   root.style.setProperty('--app-focus-ring', mixWithWhite(theme.themeColor, 0.82));
+  root.style.setProperty('--app-tint-bg', mixWithWhite(theme.themeColor, 0.96));
+  root.style.setProperty('--app-tint-panel', mixWithWhite(theme.themeColor, 0.985));
+  root.style.setProperty('--sidebar-top', mixWithBlack(theme.themeColor, 0.12));
+  root.style.setProperty('--sidebar-middle', theme.themeColor);
+  root.style.setProperty('--sidebar-bottom', mixWithBlack(theme.themeColor, 0.28));
+  root.style.setProperty('--sidebar-active', mixWithWhite(theme.themeColor, 0.18));
+  root.style.setProperty('--sidebar-border', mixWithWhite(theme.themeColor, 0.34));
+  root.style.setProperty('--sidebar-avatar', mixWithWhite(theme.themeColor, 0.22));
   root.style.setProperty('--app-font-family', `${theme.font}, Roboto, ui-sans-serif, system-ui, sans-serif`);
-  root.dataset.theme = resolveThemeMode(theme.themeMode);
+  root.dataset.theme = resolvedMode;
   root.dataset.themeMode = theme.themeMode;
 
   return theme;

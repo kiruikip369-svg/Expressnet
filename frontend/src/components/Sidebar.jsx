@@ -101,7 +101,7 @@ export default function Sidebar({ open, onClose }) {
     [
       'flex h-9 items-center gap-3 rounded-md px-3 text-[13px] font-semibold transition',
       isActive
-        ? 'bg-emerald-400/18 text-white shadow-[inset_3px_0_0_rgba(255,255,255,0.28)]'
+        ? 'bg-[var(--sidebar-active)] text-white shadow-[inset_3px_0_0_rgba(255,255,255,0.28)]'
         : 'text-white/88 hover:bg-white/10 hover:text-white',
     ].join(' ');
 
@@ -118,7 +118,7 @@ export default function Sidebar({ open, onClose }) {
         className={`fixed inset-y-0 left-0 z-40 flex w-72 flex-col px-3 py-4 text-white shadow-2xl transition-transform lg:w-[232px] lg:translate-x-0 ${
           open ? 'translate-x-0' : '-translate-x-full'
         }`}
-        style={{ background: 'linear-gradient(180deg, #006453 0%, #007a61 46%, #007154 100%)' }}
+        style={{ background: 'linear-gradient(180deg, var(--sidebar-top) 0%, var(--sidebar-middle) 46%, var(--sidebar-bottom) 100%)' }}
       >
         <div className="mb-4 flex h-12 items-start justify-between px-1">
           <div>
@@ -171,7 +171,7 @@ export default function Sidebar({ open, onClose }) {
                       to={to}
                       className={({ isActive }) => [
                         'ml-7 flex h-7 items-center gap-2 rounded-md px-2 text-[13px] font-medium transition',
-                        isActive ? 'bg-white/13 text-white' : 'text-white/84 hover:bg-white/10 hover:text-white',
+                        isActive ? 'bg-[var(--sidebar-active)] text-white' : 'text-white/84 hover:bg-white/10 hover:text-white',
                       ].join(' ')}
                       onClick={onClose}
                     >
@@ -185,9 +185,9 @@ export default function Sidebar({ open, onClose }) {
           })}
         </nav>
 
-        <div className="mt-4 rounded-md border border-white/10 bg-emerald-950/10 p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
+        <div className="mt-4 rounded-md border p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]" style={{ background: 'color-mix(in srgb, var(--sidebar-bottom) 28%, transparent)', borderColor: 'color-mix(in srgb, var(--sidebar-border) 32%, transparent)' }}>
           <div className="flex items-center gap-3">
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#21d64f] text-lg font-bold text-white shadow-sm">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-lg font-bold text-white shadow-sm" style={{ background: 'var(--sidebar-avatar)' }}>
               {tenantInitial(tenant)}
             </span>
             <div className="min-w-0 flex-1">

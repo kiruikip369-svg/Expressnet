@@ -11,6 +11,15 @@
     --app-accent-strong: #cd6a00;
     --app-accent-muted: #fff3e6;
     --app-accent-contrast: #111827;
+    --app-focus-ring: #ffe8cf;
+    --app-tint-bg: #fffaf5;
+    --app-tint-panel: #fffefd;
+    --sidebar-top: #dc7200;
+    --sidebar-middle: #fa8200;
+    --sidebar-bottom: #b55e00;
+    --sidebar-active: #fbb15c;
+    --sidebar-border: #fcc891;
+    --sidebar-avatar: #fba44d;
     --app-bg: #ffffff;
     --app-panel: #ffffff;
     --app-panel-muted: #f8fafc;
@@ -65,6 +74,10 @@
 .tenant-app .bg-slate-50 { background-color: var(--app-panel-muted) !important; }
 .tenant-app .bg-slate-100 { background-color: var(--app-bg) !important; }
 .tenant-app .bg-slate-200 { background-color: var(--app-border) !important; }
+.tenant-app .bg-app-accent { background-color: var(--app-accent) !important; }
+.tenant-app .bg-app-accent\/5 { background-color: var(--app-accent-muted) !important; }
+.tenant-app .text-app-accent { color: var(--app-accent) !important; }
+.tenant-app .border-app-accent { border-color: var(--app-accent) !important; }
 .tenant-app .text-black,
 .tenant-app .text-slate-950,
 .tenant-app .text-slate-900,
@@ -175,7 +188,7 @@ html[data-theme="dark"] .tenant-app tr.bg-slate-50 { background-color: var(--app
   }
 
   .theme-page {
-    background: var(--app-bg);
+    background: linear-gradient(180deg, var(--app-tint-bg) 0%, var(--app-bg) 28%);
     color: var(--app-text);
   }
 
