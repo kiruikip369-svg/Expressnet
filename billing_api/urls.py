@@ -82,6 +82,7 @@ urlpatterns = [
     path("packages/<str:package_id>/sync", network_views.package_sync),
     path("payments", management_views.payments),
     path("vouchers", network_views.vouchers),
+    path("vouchers/<str:voucher_id>", network_views.vouchers),
     path("payments/", management_views.payments),
     path("payments/pay", management_views.payments),
     path("payments/<str:payment_id>/mark-paid", management_views.payment_mark_paid),

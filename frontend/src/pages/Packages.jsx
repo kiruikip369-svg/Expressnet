@@ -23,7 +23,9 @@ function packageDuration(pkg) {
 }
 
 function packageType(pkg) {
-  return pkg.service_type === 'pppoe' ? 'pppoe' : 'hotspot';
+  const value = String(pkg?.service_type || pkg?.package_type || pkg?.type || '').trim().toLowerCase();
+  if (['pppoe', 'ppoe', 'ppp', 'broadband'].includes(value)) return 'pppoe';
+  return 'hotspot';
 }
 
 export default function Packages() {
@@ -129,7 +131,6 @@ export default function Packages() {
     try {
       const payload = {
         ...form,
-        service_type: form.service_type,
         duration_value: Number(form.duration_value),
         duration_unit: form.service_type === 'pppoe' ? 'days' : form.duration_unit,
         duration_days: form.service_type !== 'pppoe' && form.duration_unit === 'hours' ? 1 : Number(form.duration_value),
@@ -137,6 +138,9 @@ export default function Packages() {
         price: Number(form.price),
         is_active: form.is_active,
       };
+      if (!editingPackage || form.service_type !== packageType(editingPackage)) {
+        payload.service_type = form.service_type;
+      }
 
       if (editingPackage) {
         await api.patch(`/packages/${editingPackage.id}`, payload);

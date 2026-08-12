@@ -286,10 +286,10 @@ def package_duration_delta(package):
         return timedelta(days=1)
 
 
-def normalized_package_payload(data):
+def normalized_package_payload(data, default_service_type="hotspot"):
     service_type = package_service_type(data or {})
     if service_type not in {"hotspot", "pppoe"}:
-        service_type = "hotspot"
+        service_type = default_service_type if default_service_type in {"hotspot", "pppoe"} else "hotspot"
     duration_unit = "hours" if str((data or {}).get("duration_unit") or "").lower().startswith("hour") else "days"
     if service_type == "pppoe":
         duration_unit = "days"

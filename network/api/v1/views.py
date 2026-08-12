@@ -238,10 +238,10 @@ def package_duration_delta(package):
         return timedelta(days=1)
 
 
-def normalized_package_payload(data):
+def normalized_package_payload(data, default_service_type="hotspot"):
     service_type = package_service_type(data or {})
     if service_type not in {"hotspot", "pppoe"}:
-        service_type = "hotspot"
+        service_type = default_service_type if default_service_type in {"hotspot", "pppoe"} else "hotspot"
     duration_unit = "hours" if str((data or {}).get("duration_unit") or "").lower().startswith("hour") else "days"
     if service_type == "pppoe":
         duration_unit = "days"
@@ -1358,6 +1358,9 @@ def packages(request, package_id=None):
         return as_collection_response(request, list_children(f"tenants/{tenant_id}/packages"))
     if method(request, "PATCH") and package_id:
         data = body(request)
+        existing = ref(f"tenants/{tenant_id}/packages/{package_id}").get()
+        if not existing:
+            return ok({"message": "Package not found"}, 404)
         updates = {key: data[key] for key in ["name", "speed", "duration_days", "duration_unit", "duration_value", "duration_hours", "price", "is_active", "service_type"] if key in data}
         if not updates:
             return ok({"message": "No package fields provided"}, 400)
@@ -1366,10 +1369,7 @@ def packages(request, package_id=None):
         if "is_active" in updates:
             updates["is_active"] = bool(updates["is_active"])
         if any(key in data for key in ["service_type", "duration_unit", "duration_value", "duration_days", "duration_hours"]):
-            updates.update(normalized_package_payload({**data, **updates}))
-        existing = ref(f"tenants/{tenant_id}/packages/{package_id}").get()
-        if not existing:
-            return ok({"message": "Package not found"}, 404)
+            updates.update(normalized_package_payload({**existing, **data, **updates}, package_service_type(existing)))
         router_updates = {"updated_at": iso_now()}
         if has_mikrotik_credentials(request.tenant):
             package_for_router = {"id": package_id, **existing, **updates}
@@ -1441,13 +1441,51 @@ def package_add(request):
 
 
 @csrf_exempt
-@api_view(["GET", "POST"])
+@api_view(["GET", "POST", "PATCH", "DELETE"])
 @tenant_required
-def vouchers(request):
+def vouchers(request, voucher_id=None):
     tenant_id = request.tenant["id"]
     voucher_path = f"tenants/{tenant_id}/vouchers"
-    if method(request, "GET"):
+    if method(request, "GET") and not voucher_id:
         return ok(list_children(voucher_path))
+    if method(request, "PATCH") and voucher_id:
+        voucher = ref(f"{voucher_path}/{voucher_id}").get()
+        if not voucher:
+            return ok({"message": "Voucher not found"}, 404)
+        data = body(request)
+        status = str(data.get("status") or "").strip().lower()
+        if status not in {"expired", "inactive"}:
+            return ok({"message": "Voucher status must be expired or inactive"}, 400)
+        updates = {"status": status, "expired_at": iso_now(), "router_status": "expired"}
+        try:
+            _disable_voucher_on_router(request, voucher)
+            updates.update({"router_error": None})
+        except Exception as exc:
+            updates.update({"router_status": "queued", "router_error": str(exc)})
+            try:
+                _queue_router_command(request, {"type": "expire_voucher", "script": _voucher_disable_script(voucher)})
+            except Exception as queue_exc:
+                updates["router_error"] = f"{updates['router_error']}; queue failed: {queue_exc}"
+        ref(f"{voucher_path}/{voucher_id}").update(updates)
+        return ok({"success": True, "message": "Voucher expired", "voucher": {"id": voucher_id, **voucher, **updates}})
+    if method(request, "DELETE") and voucher_id:
+        voucher = ref(f"{voucher_path}/{voucher_id}").get()
+        if not voucher:
+            return ok({"message": "Voucher not found"}, 404)
+        router_error = None
+        try:
+            _delete_voucher_from_router(request, voucher)
+        except Exception as exc:
+            router_error = str(exc)
+            try:
+                _queue_router_command(request, {"type": "delete_voucher", "script": _voucher_delete_script(voucher)})
+            except Exception as queue_exc:
+                router_error = f"{router_error}; queue failed: {queue_exc}"
+        ref(f"{voucher_path}/{voucher_id}").delete()
+        response = {"success": True, "message": "Voucher deleted"}
+        if router_error:
+            response["router_error"] = router_error
+        return ok(response)
     data = body(request)
     package_id = str(data.get("package_id") or "")
     package = ref(f"tenants/{tenant_id}/packages/{package_id}").get() if package_id else None
@@ -1743,6 +1781,52 @@ def _voucher_hotspot_user_script(voucher, package=None):
         f'profile="{profile_name}" disabled=no comment="billing-saas-voucher:{code}" }} else={{'
         f' /ip hotspot user set [find name="{username}"] password="{password}" profile="{profile_name}" disabled=no comment="billing-saas-voucher:{code}" }};'
     )
+
+
+def _voucher_disable_script(voucher):
+    username = _rsc_escape(voucher.get("username") or "")
+    if not username:
+        return ""
+    return f':do {{ /ip hotspot user set [find name="{username}"] disabled=yes }} on-error={{}};'
+
+
+def _voucher_delete_script(voucher):
+    username = _rsc_escape(voucher.get("username") or "")
+    if not username:
+        return ""
+    return f':do {{ /ip hotspot user remove [find name="{username}"] }} on-error={{}};'
+
+
+def _disable_voucher_on_router(request, voucher):
+    if not has_mikrotik_credentials(request.tenant):
+        raise RuntimeError("Router API credentials are not configured")
+    username = str(voucher.get("username") or "").strip()
+    if not username:
+        return
+    api = router_connect(request.tenant)
+    try:
+        users = api.path("ip", "hotspot", "user")
+        existing = next((item for item in users.select() if str(item.get("name") or "") == username), None)
+        if existing and existing.get(".id"):
+            users.update(**{".id": existing[".id"], "disabled": "yes"})
+    finally:
+        api.close()
+
+
+def _delete_voucher_from_router(request, voucher):
+    if not has_mikrotik_credentials(request.tenant):
+        raise RuntimeError("Router API credentials are not configured")
+    username = str(voucher.get("username") or "").strip()
+    if not username:
+        return
+    api = router_connect(request.tenant)
+    try:
+        users = api.path("ip", "hotspot", "user")
+        existing = next((item for item in users.select() if str(item.get("name") or "") == username), None)
+        if existing and existing.get(".id"):
+            users.remove(existing[".id"])
+    finally:
+        api.close()
 
 
 def _package_profile_script(package):
