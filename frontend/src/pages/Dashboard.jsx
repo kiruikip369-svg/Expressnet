@@ -24,6 +24,28 @@ import { Link } from 'react-router-dom';
 import api from '../api/axios';
 import { useAuth } from '../context/AuthContext';
 
+// ---------------------------------------------------------------------------
+// Shared type scale (kept in one place so headings/labels stay consistent
+// across every card instead of drifting between arbitrary px values).
+// ---------------------------------------------------------------------------
+const TYPE = {
+  pageTitle: 'text-2xl font-semibold tracking-tight',
+  eyebrow: 'text-xs font-medium',
+  cardTitle: 'text-sm font-semibold tracking-tight',
+  kpiValue: 'text-2xl font-semibold leading-none tracking-tight',
+  metricValue: 'text-xl font-semibold leading-none tracking-tight',
+  label: 'text-xs font-medium',
+  helper: 'text-xs',
+  tableHead: 'text-[11px] font-semibold uppercase tracking-wide',
+  tableCell: 'text-xs',
+  pill: 'text-xs font-medium',
+};
+
+// Hairline / muted stroke color used across every inline SVG chart so grid
+// lines and axis labels track the active theme instead of hardcoded slate.
+const GRID_LINE = 'var(--app-border, #e2e8f0)';
+const AXIS_TEXT = 'var(--app-muted, #64748b)';
+
 function readDarkMode() {
   try {
     const settings = JSON.parse(localStorage.getItem('tenant_settings') || '{}');
@@ -92,21 +114,24 @@ function KpiCard({ icon: Icon, title, value, helper, pills = [], action, to, chi
         <div className="flex items-start gap-3">
           <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md" style={{ background: 'var(--app-accent-muted)', color: 'var(--app-accent)' }}><Icon size={18} /></span>
           <div>
-            <p className="theme-muted text-xs font-medium">{title}</p>
-            <p className="theme-text mt-1 text-[22px] font-medium leading-none">{value}</p>
-            {helper && <p className="theme-muted mt-2 text-[11px]">{helper}</p>}
+            <p className={`theme-muted ${TYPE.eyebrow}`}>{title}</p>
+            <p className={`theme-text mt-1 ${TYPE.kpiValue}`}>{value}</p>
+            {helper && <p className={`theme-muted mt-2 ${TYPE.helper}`}>{helper}</p>}
           </div>
         </div>
-        <span className="theme-muted text-base leading-none">...</span>
       </div>
       {children}
       {pills.length > 0 && (
         <div className="mt-4 flex flex-wrap gap-2">
-          {pills.map((pill) => <span key={pill} className="rounded-md px-2.5 py-1 text-[11px] font-medium" style={{ background: 'var(--app-accent-muted)', color: 'var(--app-text)' }}>{pill}</span>)}
+          {pills.map((pill) => (
+            <span key={pill} className={`rounded-md px-2.5 py-1 ${TYPE.pill}`} style={{ background: 'var(--app-accent-muted)', color: 'var(--app-text)' }}>
+              {pill}
+            </span>
+          ))}
         </div>
       )}
       {action && (
-        <Link to={to} className="mt-4 inline-flex items-center gap-3 border-t border-slate-100 pt-3 text-xs font-medium" style={{ color: 'var(--app-accent)' }}>
+        <Link to={to} className={`mt-4 inline-flex items-center gap-3 border-t pt-3 ${TYPE.eyebrow}`} style={{ borderColor: GRID_LINE, color: 'var(--app-accent)' }}>
           {action}
           <span aria-hidden="true">{'->'}</span>
         </Link>
@@ -120,15 +145,15 @@ function MetricTile({ icon: Icon, title, value, helper, percent }) {
   return (
     <div className="theme-card-muted rounded-md border p-3">
       <div className="flex items-start gap-3">
-        <span className="flex h-8 w-8 items-center justify-center rounded-md" style={{ background: 'var(--app-accent-muted)', color: 'var(--app-accent)' }}><Icon size={16} /></span>
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md" style={{ background: 'var(--app-accent-muted)', color: 'var(--app-accent)' }}><Icon size={16} /></span>
         <div className="min-w-0">
-          <p className="theme-muted text-[11px] font-medium">{title}</p>
-          <p className="theme-text mt-1 text-xl font-medium leading-none">{value}</p>
-          <p className="theme-muted mt-2 truncate text-[11px]">{helper || '-'}</p>
+          <p className={`theme-muted ${TYPE.eyebrow}`}>{title}</p>
+          <p className={`theme-text mt-1 ${TYPE.metricValue}`}>{value}</p>
+          <p className={`theme-muted mt-2 truncate ${TYPE.helper}`}>{helper || '-'}</p>
         </div>
       </div>
       {percent !== undefined && (
-        <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-200">
+        <div className="mt-3 h-1.5 overflow-hidden rounded-full" style={{ background: 'var(--app-panel-muted, #e2e8f0)' }}>
           <div className="h-full rounded-full" style={{ width: `${width}%`, background: 'var(--app-accent)' }} />
         </div>
       )}
@@ -143,22 +168,22 @@ function TrafficChart({ rx, tx }) {
   return (
     <div className="theme-card-muted rounded-md border p-3">
       <div className="flex items-center justify-between gap-3">
-        <h3 className="theme-text text-xs font-medium">Traffic (Last 24h)</h3>
-        <div className="theme-muted flex gap-4 text-[10px] font-medium">
+        <h3 className={`theme-text ${TYPE.cardTitle}`}>Traffic (Last 24h)</h3>
+        <div className={`theme-muted flex gap-4 ${TYPE.eyebrow}`}>
           <span className="inline-flex items-center gap-1"><span className="h-1.5 w-4 rounded-full" style={{ background: 'var(--app-accent)' }} />Upload</span>
           <span className="inline-flex items-center gap-1"><span className="h-1.5 w-4 rounded-full" style={{ background: 'var(--app-accent-soft)' }} />Download</span>
         </div>
       </div>
       <svg viewBox="0 0 280 130" className="mt-4 h-36 w-full" aria-label="Router traffic chart">
-        {[0, 1, 2, 3, 4].map((i) => <line key={`h-${i}`} x1="0" x2="280" y1={20 + i * 22} y2={20 + i * 22} stroke="#e2e8f0" />)}
-        {[0, 1, 2, 3, 4].map((i) => <line key={`v-${i}`} y1="16" y2="108" x1={i * 70} x2={i * 70} stroke="#eef2f7" />)}
+        {[0, 1, 2, 3, 4].map((i) => <line key={`h-${i}`} x1="0" x2="280" y1={20 + i * 22} y2={20 + i * 22} stroke={GRID_LINE} />)}
+        {[0, 1, 2, 3, 4].map((i) => <line key={`v-${i}`} y1="16" y2="108" x1={i * 70} x2={i * 70} stroke={GRID_LINE} opacity="0.6" />)}
         <polyline points={upload.join(' ')} fill="none" stroke="var(--app-accent)" strokeWidth="2" />
         <polyline points={download.join(' ')} fill="none" stroke="var(--app-accent-soft)" strokeWidth="2" />
-        <text x="0" y="122" fontSize="10" fill="#64748b">00:00</text>
-        <text x="74" y="122" fontSize="10" fill="#64748b">06:00</text>
-        <text x="142" y="122" fontSize="10" fill="#64748b">12:00</text>
-        <text x="210" y="122" fontSize="10" fill="#64748b">18:00</text>
-        <text x="252" y="122" fontSize="10" fill="#64748b">24:00</text>
+        <text x="0" y="122" fontSize="10" fill={AXIS_TEXT}>00:00</text>
+        <text x="74" y="122" fontSize="10" fill={AXIS_TEXT}>06:00</text>
+        <text x="142" y="122" fontSize="10" fill={AXIS_TEXT}>12:00</text>
+        <text x="210" y="122" fontSize="10" fill={AXIS_TEXT}>18:00</text>
+        <text x="252" y="122" fontSize="10" fill={AXIS_TEXT}>24:00</text>
       </svg>
     </div>
   );
@@ -167,11 +192,11 @@ function TrafficChart({ rx, tx }) {
 function Donut({ rows }) {
   const total = rows.reduce((sum, row) => sum + row.value, 0) || 1;
   let offset = 25;
-  const colors = ['var(--app-accent)', 'var(--app-accent-soft)', 'var(--app-focus-ring)', '#cbd5e1'];
+  const colors = ['var(--app-accent)', 'var(--app-accent-soft)', 'var(--app-focus-ring)', 'var(--app-muted, #94a3b8)'];
   return (
     <div className="flex items-center gap-6">
       <svg viewBox="0 0 42 42" className="h-28 w-28 shrink-0">
-        <circle cx="21" cy="21" r="15.915" fill="transparent" stroke="#e2e8f0" strokeWidth="8" />
+        <circle cx="21" cy="21" r="15.915" fill="transparent" stroke={GRID_LINE} strokeWidth="8" />
         {rows.map((row, index) => {
           const dash = (row.value / total) * 100;
           const circle = <circle key={row.label} cx="21" cy="21" r="15.915" fill="transparent" stroke={colors[index]} strokeWidth="8" strokeDasharray={`${dash} ${100 - dash}`} strokeDashoffset={offset} />;
@@ -179,11 +204,11 @@ function Donut({ rows }) {
           return circle;
         })}
       </svg>
-      <div className="flex-1 space-y-3 text-xs">
+      <div className={`flex-1 space-y-3 ${TYPE.tableCell}`}>
         {rows.map((row, index) => (
           <div key={row.label} className="flex items-center justify-between gap-3">
             <span className="theme-muted inline-flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-sm" style={{ background: colors[index] }} />{row.label}</span>
-            <strong className="theme-text font-medium">{row.value} ({Math.round((row.value / total) * 100)}%)</strong>
+            <strong className="theme-text font-semibold">{row.value} ({Math.round((row.value / total) * 100)}%)</strong>
           </div>
         ))}
       </div>
@@ -277,22 +302,37 @@ export default function Dashboard() {
     { label: 'Expired', value: Math.max(0, totalUsers - activeUsers) },
   ];
 
-  if (loading) return <div className="theme-card rounded-lg border p-4 text-xs">Loading dashboard...</div>;
+  const quickActions = [
+    ['/customers', UserPlus, 'Add Customer'],
+    ['/packages', Box, 'Create Package'],
+    ['/vouchers', Zap, 'Generate Voucher'],
+    ['/expenses', Receipt, 'Add Expense'],
+    ['/messages', MessageSquare, 'Send Message'],
+    ['/payments', Wallet, 'View Payments'],
+    ['/mikrotik', Router, 'Router Status'],
+    ['/reports/finance', FileText, 'Reports'],
+  ];
+
+  if (loading) return <div className={`theme-card rounded-lg border p-4 ${TYPE.tableCell}`}>Loading dashboard...</div>;
 
   return (
     <div className={`theme-page min-h-[calc(100vh-96px)] space-y-4 rounded-lg p-3 sm:p-4 ${darkMode ? 'text-white' : 'text-slate-950'}`}>
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
-          <p className="theme-muted text-[11px]">Business / <span className="theme-text font-medium">{tenant?.business_name || tenant?.name || 'Expressnet'}</span></p>
-          <h1 className="theme-text mt-0.5 text-xl font-medium">Dashboard</h1>
+          <p className={`theme-muted ${TYPE.helper}`}>Business / <span className="theme-text font-medium">{tenant?.business_name || tenant?.name || 'Expressnet'}</span></p>
+          <h1 className={`theme-text mt-0.5 ${TYPE.pageTitle}`}>Dashboard</h1>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <span className="theme-muted inline-flex h-8 items-center gap-2 rounded-md px-2 text-[11px] font-medium">
+          <span className={`theme-muted inline-flex h-8 items-center gap-2 rounded-md px-2 ${TYPE.eyebrow}`}>
             <RefreshCw size={15} className={refreshing ? 'animate-spin' : ''} />
             Updated: {sampledAt && !Number.isNaN(sampledAt.valueOf()) ? sampledAt.toLocaleTimeString() : '--'}
           </span>
-          <button type="button" className="inline-flex h-8 items-center gap-2 rounded-md border px-3 text-[11px] font-medium" style={{ borderColor: 'var(--app-accent-soft)', background: 'var(--app-accent-muted)', color: 'var(--app-accent)' }}><AlertTriangle size={14} />Expires in 2 days. Click to renew</button>
-          <button type="button" className="theme-card theme-muted inline-flex h-8 items-center gap-2 rounded-md border px-3 text-[11px] font-medium"><Filter size={14} />Filters</button>
+          <button type="button" className={`inline-flex h-8 items-center gap-2 rounded-md border px-3 ${TYPE.eyebrow}`} style={{ borderColor: 'var(--app-accent-soft)', background: 'var(--app-accent-muted)', color: 'var(--app-accent)' }}>
+            <AlertTriangle size={14} />Expires in 2 days. Click to renew
+          </button>
+          <button type="button" className={`theme-card theme-muted inline-flex h-8 items-center gap-2 rounded-md border px-3 ${TYPE.eyebrow}`}>
+            <Filter size={14} />Filters
+          </button>
         </div>
       </div>
 
@@ -309,10 +349,10 @@ export default function Dashboard() {
         <Card className="p-4">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <h2 className="theme-text text-base font-medium">Router Overview</h2>
-              <p className="theme-muted text-xs">{router.message || sourceLabel}</p>
+              <h2 className={`theme-text ${TYPE.cardTitle}`}>Router Overview</h2>
+              <p className={`theme-muted ${TYPE.helper}`}>{router.message || sourceLabel}</p>
             </div>
-            <span className="inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-[11px] font-medium" style={router.status === 'online' ? { background: 'var(--app-accent-muted)', color: 'var(--app-accent)' } : { background: 'var(--app-panel-muted)', color: 'var(--app-muted)' }}>
+            <span className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1 ${TYPE.pill}`} style={router.status === 'online' ? { background: 'var(--app-accent-muted)', color: 'var(--app-accent)' } : { background: 'var(--app-panel-muted)', color: 'var(--app-muted)' }}>
               <span className="h-2 w-2 rounded-full bg-current" />{router.status || 'offline'}
             </span>
           </div>
@@ -328,28 +368,28 @@ export default function Dashboard() {
         </Card>
 
         <Card className="overflow-hidden">
-          <div className="flex items-center justify-between border-b border-slate-100 px-4 py-4">
-            <h2 className="theme-text text-base font-medium">Top Active Sessions</h2>
-            <span className="theme-muted text-xs">{activeSessionCount.toLocaleString('en-KE')} live sessions</span>
+          <div className="flex items-center justify-between border-b px-4 py-4" style={{ borderColor: GRID_LINE }}>
+            <h2 className={`theme-text ${TYPE.cardTitle}`}>Top Active Sessions</h2>
+            <span className={`theme-muted ${TYPE.helper}`}>{activeSessionCount.toLocaleString('en-KE')} live sessions</span>
           </div>
           <div className="overflow-x-auto">
-            <table className="min-w-full text-xs">
-              <thead className="theme-card-muted text-left text-[10px] font-medium uppercase">
+            <table className="min-w-full">
+              <thead className={`theme-card-muted text-left ${TYPE.tableHead}`}>
                 <tr><th className="px-4 py-3">User</th><th className="px-4 py-3">Service</th><th className="px-4 py-3">Data Used</th><th className="px-4 py-3">Uptime</th><th className="px-4 py-3">Address</th></tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
+              <tbody className="divide-y" style={{ borderColor: GRID_LINE }}>
                 {sessions.length ? sessions.map((session) => (
-                  <tr key={`${session.service_type}-${session.username}-${session.address}`}>
-                    <td className="theme-text px-4 py-3 font-medium">{session.username || '-'}</td>
-                    <td className="theme-muted px-4 py-3">{session.service_type || '-'}</td>
-                    <td className="theme-muted px-4 py-3">{formatData(session.data_used)}</td>
-                    <td className="theme-muted px-4 py-3">{session.uptime || '-'}</td>
-                    <td className="theme-muted px-4 py-3">{session.address || session.mac_address || '-'}</td>
+                  <tr key={`${session.service_type}-${session.username}-${session.address}`} className="divide-y" style={{ borderColor: GRID_LINE }}>
+                    <td className={`theme-text px-4 py-3 font-medium ${TYPE.tableCell}`}>{session.username || '-'}</td>
+                    <td className={`theme-muted px-4 py-3 ${TYPE.tableCell}`}>{session.service_type || '-'}</td>
+                    <td className={`theme-muted px-4 py-3 ${TYPE.tableCell}`}>{formatData(session.data_used)}</td>
+                    <td className={`theme-muted px-4 py-3 ${TYPE.tableCell}`}>{session.uptime || '-'}</td>
+                    <td className={`theme-muted px-4 py-3 ${TYPE.tableCell}`}>{session.address || session.mac_address || '-'}</td>
                   </tr>
                 )) : (
                   <tr>
-                    <td colSpan="5" className="theme-muted px-4 py-12 text-center">
-                      <PackagePlus className="mx-auto mb-3 text-slate-300" size={56} />
+                    <td colSpan="5" className={`theme-muted px-4 py-12 text-center ${TYPE.tableCell}`}>
+                      <PackagePlus className="mx-auto mb-3" size={56} style={{ color: 'var(--app-muted)', opacity: 0.4 }} />
                       No active router sessions found.
                     </td>
                   </tr>
@@ -363,39 +403,34 @@ export default function Dashboard() {
       <section className="grid gap-4 xl:grid-cols-[0.95fr_0.95fr_1.5fr]">
         <Card className="p-4">
           <div className="flex items-center justify-between">
-            <h2 className="theme-text text-base font-medium">Revenue This Month</h2>
-            <button type="button" className="theme-card theme-muted rounded-md border px-3 py-1 text-[11px]">This Month</button>
+            <h2 className={`theme-text ${TYPE.cardTitle}`}>Revenue This Month</h2>
+            <button type="button" className={`theme-card theme-muted rounded-md border px-3 py-1 ${TYPE.eyebrow}`}>This Month</button>
           </div>
-          <p className="theme-text mt-2 text-[22px] font-medium">{formatKES(summary.revenue_this_month)}</p>
-          <p className="theme-muted text-xs">vs last month</p>
+          <p className={`theme-text mt-2 ${TYPE.kpiValue}`}>{formatKES(summary.revenue_this_month)}</p>
+          <p className={`theme-muted ${TYPE.helper}`}>vs last month</p>
           <svg viewBox="0 0 300 72" className="mt-4 h-20 w-full">
-            <line x1="0" y1="50" x2="300" y2="50" stroke="#dbeafe" />
+            <line x1="0" y1="50" x2="300" y2="50" stroke={GRID_LINE} />
             <polyline points="0,50 50,50 100,50 150,50 200,50 250,50 300,50" fill="none" stroke="var(--app-accent)" strokeWidth="2" />
-            {[1, 5, 10, 15, 20, 25, 30].map((day, index) => <text key={day} x={index * 49} y="70" fontSize="10" fill="#64748b">{day}</text>)}
+            {[1, 5, 10, 15, 20, 25, 30].map((day, index) => <text key={day} x={index * 49} y="70" fontSize="10" fill={AXIS_TEXT}>{day}</text>)}
           </svg>
         </Card>
 
         <Card className="p-4">
-          <h2 className="theme-text text-base font-medium">Package Distribution</h2>
+          <h2 className={`theme-text ${TYPE.cardTitle}`}>Package Distribution</h2>
           <div className="mt-4">
             <Donut rows={packageRows} />
           </div>
         </Card>
 
         <Card className="p-4">
-          <h2 className="theme-text text-base font-medium">Quick Actions</h2>
+          <h2 className={`theme-text ${TYPE.cardTitle}`}>Quick Actions</h2>
           <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4">
-            {[
-              ['/customers', UserPlus, 'Add Customer'],
-              ['/packages', Box, 'Create Package'],
-              ['/vouchers', Zap, 'Generate Voucher'],
-              ['/expenses', Receipt, 'Add Expense'],
-              ['/messages', MessageSquare, 'Send Message'],
-              ['/payments', Wallet, 'View Payments'],
-              ['/mikrotik', Router, 'Router Status'],
-              ['/reports/finance', FileText, 'Reports'],
-            ].map(([to, Icon, label, tone]) => (
-              <Link key={label} to={to} className="theme-card-muted flex h-14 flex-col items-center justify-center gap-1.5 rounded-md border text-center text-[11px] font-medium transition hover:bg-slate-100">
+            {quickActions.map(([to, Icon, label]) => (
+              <Link
+                key={label}
+                to={to}
+                className={`theme-card-muted flex h-14 flex-col items-center justify-center gap-1.5 rounded-md border text-center ${TYPE.eyebrow} transition hover:bg-[var(--app-accent-muted)] hover:border-[var(--app-accent-soft)]`}
+              >
                 <Icon size={17} style={{ color: 'var(--app-accent)' }} />
                 {label}
               </Link>
@@ -405,27 +440,27 @@ export default function Dashboard() {
       </section>
 
       <Card className="overflow-hidden">
-        <div className="flex items-center justify-between border-b border-slate-100 px-4 py-4">
-          <h2 className="theme-text text-base font-medium">Recent Payments</h2>
-          <Link to="/payments" className="text-xs font-medium" style={{ color: 'var(--app-accent)' }}>View all</Link>
+        <div className="flex items-center justify-between border-b px-4 py-4" style={{ borderColor: GRID_LINE }}>
+          <h2 className={`theme-text ${TYPE.cardTitle}`}>Recent Payments</h2>
+          <Link to="/payments" className={`${TYPE.eyebrow}`} style={{ color: 'var(--app-accent)' }}>View all</Link>
         </div>
         <div className="overflow-x-auto">
-          <table className="min-w-full text-xs">
-            <thead className="theme-card-muted text-left text-[10px] font-medium uppercase">
+          <table className="min-w-full">
+            <thead className={`theme-card-muted text-left ${TYPE.tableHead}`}>
               <tr><th className="px-5 py-3">Reference</th><th className="px-5 py-3">Customer</th><th className="px-5 py-3">Amount</th><th className="px-5 py-3">Method</th><th className="px-5 py-3">Status</th><th className="px-5 py-3">Date</th></tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody className="divide-y" style={{ borderColor: GRID_LINE }}>
               {payments.length ? payments.map((payment) => (
-                <tr key={payment.id || payment.reference}>
-                  <td className="theme-text px-5 py-4 font-medium">{payment.reference || payment.payment_code || '-'}</td>
-                  <td className="theme-muted px-5 py-4">{payment.customer_name || '-'}</td>
-                  <td className="theme-muted px-5 py-4">{formatKES(payment.amount)}</td>
-                  <td className="theme-muted px-5 py-4">{payment.provider || payment.method || '-'}</td>
-                  <td className="theme-muted px-5 py-4">{payment.status || '-'}</td>
-                  <td className="theme-muted px-5 py-4">{payment.created_at ? new Date(payment.created_at).toLocaleDateString() : '-'}</td>
+                <tr key={payment.id || payment.reference} className="divide-y" style={{ borderColor: GRID_LINE }}>
+                  <td className={`theme-text px-5 py-4 font-medium ${TYPE.tableCell}`}>{payment.reference || payment.payment_code || '-'}</td>
+                  <td className={`theme-muted px-5 py-4 ${TYPE.tableCell}`}>{payment.customer_name || '-'}</td>
+                  <td className={`theme-muted px-5 py-4 ${TYPE.tableCell}`}>{formatKES(payment.amount)}</td>
+                  <td className={`theme-muted px-5 py-4 ${TYPE.tableCell}`}>{payment.provider || payment.method || '-'}</td>
+                  <td className={`theme-muted px-5 py-4 ${TYPE.tableCell}`}>{payment.status || '-'}</td>
+                  <td className={`theme-muted px-5 py-4 ${TYPE.tableCell}`}>{payment.created_at ? new Date(payment.created_at).toLocaleDateString() : '-'}</td>
                 </tr>
               )) : (
-                <tr><td colSpan="6" className="theme-muted px-5 py-8 text-center"><FileText className="mx-auto mb-2 text-slate-300" size={18} />No recent payments</td></tr>
+                <tr><td colSpan="6" className={`theme-muted px-5 py-8 text-center ${TYPE.tableCell}`}><FileText className="mx-auto mb-2" size={18} style={{ color: 'var(--app-muted)', opacity: 0.5 }} />No recent payments</td></tr>
               )}
             </tbody>
           </table>
