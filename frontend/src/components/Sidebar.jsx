@@ -27,7 +27,7 @@ import {
 import { useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { canAccessPage, pageForPath } from '../utils/permissions';
+import { canAccessPage, isTenantAdmin, pageForPath } from '../utils/permissions';
 
 const sections = [
   {
@@ -56,6 +56,7 @@ const sections = [
   },
   {
     title: 'Staff Workspace',
+    staffOnly: true,
     icon: ClipboardCheck,
     links: [
       { to: '/staff/tasks', label: 'My Tasks', icon: Ticket },
@@ -150,6 +151,7 @@ export default function Sidebar({ open, onClose }) {
 
         <nav className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
           {sections.map((section, index) => {
+            if (section.staffOnly && isTenantAdmin(tenant)) return null;
             const links = visibleLinks(section.links);
             if (!links.length) return null;
             const SectionIcon = section.icon;
