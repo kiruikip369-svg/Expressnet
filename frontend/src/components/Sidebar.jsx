@@ -5,10 +5,11 @@ import {
   ChevronRight,
   CreditCard,
   Database,
+  ClipboardCheck,
+  ClipboardList,
   FileBarChart,
   FileText,
   Gauge,
-  HardHat,
   LayoutDashboard,
   Network,
   Package,
@@ -48,7 +49,18 @@ const sections = [
       { to: '/tickets', label: 'Tasks', icon: Ticket },
       { to: '/packages', label: 'Packages', icon: Package },
       { to: '/vouchers', label: 'Vouchers', icon: WalletCards },
+      { to: '/equipment', label: 'Tools & Equipments', icon: Wrench },
+      { to: '/requisitions', label: 'Requisitions', icon: ClipboardList },
       { to: '/reports/management', label: 'Management Report', icon: FileBarChart },
+    ],
+  },
+  {
+    title: 'Staff Workspace',
+    icon: ClipboardCheck,
+    links: [
+      { to: '/staff/tasks', label: 'My Tasks', icon: Ticket },
+      { to: '/staff/reports', label: 'Work Reports', icon: FileText },
+      { to: '/staff/requisitions', label: 'My Requisitions', icon: ClipboardList },
     ],
   },
   {
@@ -69,14 +81,6 @@ const sections = [
       { to: '/mikrotik', label: 'Mikrotik', icon: Gauge },
       { to: '/mikrotik/link', label: 'TR-069', icon: Gauge },
       { to: '/reports/network', label: 'Network Report', icon: RadioTower },
-    ],
-  },
-  {
-    title: 'Tools / Equipments',
-    icon: Wrench,
-    links: [
-      { to: '/equipment', label: 'Report', icon: FileBarChart },
-      { to: '/equipment', label: 'Requisitions', icon: HardHat },
     ],
   },
   {

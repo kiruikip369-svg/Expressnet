@@ -1024,6 +1024,159 @@ def team_member_permissions(request, member_id):
 
 
 
+def _tenant_extra_dict(tenant_id, key):
+    tenant = ref(f"tenants/{tenant_id}").get() or {}
+    value = tenant.get(key) or {}
+    return value if isinstance(value, dict) else {}
+
+
+def _save_tenant_extra_dict(tenant_id, key, value):
+    ref(f"tenants/{tenant_id}").update({key: value})
+
+
+def _current_member_payload(request):
+    member = getattr(request, "tenant_member", None) or {}
+    return {
+        "id": member.get("id") or request.tenant.get("member_id") or "",
+        "name": member.get("name") or request.tenant.get("name") or request.tenant.get("email") or "",
+        "role": member.get("role") or request.tenant.get("role") or "",
+    }
+
+
+@csrf_exempt
+@api_view(["GET", "POST", "PATCH", "DELETE"])
+@tenant_required
+def requisitions(request, requisition_id=None):
+    tenant_id = request.tenant["id"]
+    items = _tenant_extra_dict(tenant_id, "requisitions")
+    if method(request, "GET") and not requisition_id:
+        return as_collection_response(request, [{"id": item_id, **item} for item_id, item in items.items()])
+    if method(request, "POST") and not requisition_id:
+        data = body(request)
+        item_type = str(data.get("type") or data.get("item_type") or "").strip()
+        title = str(data.get("title") or data.get("item") or "").strip()
+        if not item_type or not title:
+            return ok({"message": "Requisition type and item are required"}, 400)
+        requester = _current_member_payload(request)
+        new_id = secrets.token_hex(8)
+        item = {
+            "type": item_type,
+            "title": title,
+            "quantity": str(data.get("quantity") or "1").strip(),
+            "reason": str(data.get("reason") or "").strip(),
+            "status": str(data.get("status") or "pending").strip(),
+            "requested_by": str(data.get("requested_by") or requester["id"]).strip(),
+            "requested_by_name": str(data.get("requested_by_name") or requester["name"]).strip(),
+            "requested_by_role": str(data.get("requested_by_role") or requester["role"]).strip(),
+            "created_at": iso_now(),
+            "updated_at": iso_now(),
+        }
+        items[new_id] = item
+        _save_tenant_extra_dict(tenant_id, "requisitions", items)
+        return ok({"success": True, "message": "Requisition created", "requisition": {"id": new_id, **item}}, 201)
+    if not requisition_id:
+        return ok({"message": "Requisition id is required"}, 400)
+    item = items.get(requisition_id)
+    if not item:
+        return ok({"message": "Requisition not found"}, 404)
+    if method(request, "PATCH"):
+        data = body(request)
+        allowed = ["type", "title", "quantity", "reason", "status", "admin_note"]
+        updates = {field: str(data[field]).strip() for field in allowed if field in data}
+        updates["updated_at"] = iso_now()
+        if updates.get("status") in {"approved", "rejected", "issued"}:
+            updates["reviewed_at"] = iso_now()
+        items[requisition_id] = {**item, **updates}
+        _save_tenant_extra_dict(tenant_id, "requisitions", items)
+        return ok({"success": True, "message": "Requisition updated", "requisition": {"id": requisition_id, **items[requisition_id]}})
+    if method(request, "DELETE"):
+        items.pop(requisition_id, None)
+        _save_tenant_extra_dict(tenant_id, "requisitions", items)
+        return ok({"success": True, "message": "Requisition deleted"})
+    return ok({"message": "Method not allowed"}, 405)
+
+
+@csrf_exempt
+@api_view(["GET", "PATCH"])
+@tenant_required
+def staff_tasks(request, ticket_id=None):
+    member = _current_member_payload(request)
+    member_id = member["id"]
+    tenant_id = request.tenant["id"]
+    if method(request, "GET") and not ticket_id:
+        tasks = [
+            item for item in list_children(f"tenants/{tenant_id}/tickets")
+            if str(item.get("assigned_to") or "") == str(member_id)
+        ]
+        return as_collection_response(request, tasks)
+    if not ticket_id:
+        return ok({"message": "Task id is required"}, 400)
+    ticket = ref(f"tenants/{tenant_id}/tickets/{ticket_id}").get()
+    if not ticket or str(ticket.get("assigned_to") or "") != str(member_id):
+        return ok({"message": "Assigned task not found"}, 404)
+    data = body(request)
+    updates = {}
+    status = str(data.get("status") or "").strip()
+    if status in {"pending", "in_progress", "complete", "bounced"}:
+        updates["status"] = status
+    if "bounce_reason" in data:
+        updates["bounce_reason"] = str(data.get("bounce_reason") or "").strip()
+        updates["bounced_at"] = iso_now()
+        updates["status"] = "bounced"
+    if "work_report" in data:
+        updates["work_report"] = str(data.get("work_report") or "").strip()
+        updates["reported_at"] = iso_now()
+    if not updates:
+        return ok({"message": "No task updates provided"}, 400)
+    updates["updated_at"] = iso_now()
+    ref(f"tenants/{tenant_id}/tickets/{ticket_id}").update(updates)
+    return ok({"success": True, "message": "Task updated", "task": {"id": ticket_id, **ticket, **updates}})
+
+
+@csrf_exempt
+@api_view(["GET", "POST"])
+@tenant_required
+def staff_reports(request):
+    tenant_id = request.tenant["id"]
+    member = _current_member_payload(request)
+    reports = _tenant_extra_dict(tenant_id, "staff_work_reports")
+    if method(request, "GET"):
+        mine = [{"id": report_id, **report} for report_id, report in reports.items() if str(report.get("staff_id") or "") == str(member["id"])]
+        return as_collection_response(request, mine)
+    data = body(request)
+    report = str(data.get("report") or "").strip()
+    if not report:
+        return ok({"message": "Work report is required"}, 400)
+    task_id = str(data.get("task_id") or "").strip()
+    report_id = secrets.token_hex(8)
+    item = {
+        "task_id": task_id,
+        "task_title": str(data.get("task_title") or "").strip(),
+        "staff_id": member["id"],
+        "staff_name": member["name"],
+        "staff_role": member["role"],
+        "report": report,
+        "created_at": iso_now(),
+    }
+    reports[report_id] = item
+    _save_tenant_extra_dict(tenant_id, "staff_work_reports", reports)
+    if task_id:
+        ref(f"tenants/{tenant_id}/tickets/{task_id}").update({"work_report": report, "reported_at": iso_now(), "updated_at": iso_now()})
+    return ok({"success": True, "message": "Work report submitted", "report": {"id": report_id, **item}}, 201)
+
+
+@csrf_exempt
+@api_view(["GET", "POST"])
+@tenant_required
+def staff_requisitions(request):
+    if method(request, "GET"):
+        member = _current_member_payload(request)
+        items = _tenant_extra_dict(request.tenant["id"], "requisitions")
+        mine = [{"id": item_id, **item} for item_id, item in items.items() if str(item.get("requested_by") or "") == str(member["id"])]
+        return as_collection_response(request, mine)
+    return requisitions(request)
+
+
 @csrf_exempt
 @api_view(["GET", "POST"])
 @tenant_required
@@ -1606,6 +1759,8 @@ def tickets(request, ticket_id=None):
                 "assigned_to": str(data.get("assigned_to") or "").strip(),
                 "assigned_to_name": str(data.get("assigned_to_name") or "").strip(),
                 "assigned_to_role": str(data.get("assigned_to_role") or "").strip(),
+                "mikrotik_id": str(data.get("mikrotik_id") or "").strip(),
+                "mikrotik_name": str(data.get("mikrotik_name") or "").strip(),
                 "status": data.get("status") or "open",
                 "priority": data.get("priority") or "medium",
                 "created_at": iso_now(),
@@ -1620,7 +1775,7 @@ def tickets(request, ticket_id=None):
         return ok({"message": "Ticket not found"}, 404)
     if method(request, "PATCH"):
         data = body(request)
-        allowed = ["title", "description", "customer_id", "assigned_to", "assigned_to_name", "assigned_to_role", "status", "priority"]
+        allowed = ["title", "description", "customer_id", "assigned_to", "assigned_to_name", "assigned_to_role", "mikrotik_id", "mikrotik_name", "status", "priority"]
         updates = {field: data[field] for field in allowed if field in data}
         if updates.get("status") in {"resolved", "closed"} and not ticket.get("resolved_at"):
             updates["resolved_at"] = iso_now()

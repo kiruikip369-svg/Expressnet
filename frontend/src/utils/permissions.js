@@ -5,6 +5,7 @@ export const PAGE_PERMISSIONS = {
   packages: ['/packages'],
   payments: ['/payments'],
   vouchers: ['/vouchers'],
+  requisitions: ['/requisitions'],
   expenses: ['/expenses'],
   reports: ['/reports', '/reports/finance', '/reports/management', '/reports/network'],
   messages: ['/messages'],
@@ -13,7 +14,12 @@ export const PAGE_PERMISSIONS = {
   equipment: ['/equipment'],
   settings: ['/settings', '/settings/expresswifi/edit'],
   profile: ['/profile'],
+  staff_tasks: ['/staff/tasks'],
+  staff_reports: ['/staff/reports'],
+  staff_requisitions: ['/staff/requisitions'],
 };
+
+const DEFAULT_STAFF_PAGES = new Set(['staff_tasks', 'staff_reports', 'staff_requisitions']);
 
 export function isTenantAdmin(tenant) {
   return Boolean(tenant?.is_admin || tenant?.is_owner || ['admin', 'tenant_admin', 'owner'].includes(String(tenant?.role || '').toLowerCase()));
@@ -26,6 +32,7 @@ export function pageForPath(pathname) {
 
 export function canAccessPage(tenant, pageKey) {
   if (!pageKey || pageKey === 'profile') return true;
+  if (DEFAULT_STAFF_PAGES.has(pageKey) && !isTenantAdmin(tenant)) return true;
   if (isTenantAdmin(tenant)) return true;
   const permission = tenant?.permissions?.[pageKey];
   return Boolean(permission?.access && permission?.view);
@@ -33,6 +40,7 @@ export function canAccessPage(tenant, pageKey) {
 
 export function canPerformAction(tenant, pageKey, action) {
   if (!pageKey || pageKey === 'profile') return true;
+  if (DEFAULT_STAFF_PAGES.has(pageKey) && !isTenantAdmin(tenant)) return true;
   if (isTenantAdmin(tenant)) return true;
   const permission = tenant?.permissions?.[pageKey];
   return Boolean(permission?.access && permission?.[action]);

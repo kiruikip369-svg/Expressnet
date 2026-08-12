@@ -6,6 +6,9 @@ from .models import Tenant
 from .services import decode_admin_token, decode_tenant_token, ref
 
 PAGE_RULES = [
+    ("staff_tasks", ("staff/tasks",)),
+    ("staff_reports", ("staff/reports",)),
+    ("staff_requisitions", ("staff/requisitions",)),
     ("dashboard", ("dashboard/",)),
     ("customers", ("customers",)),
     ("packages", ("packages",)),
@@ -17,9 +20,12 @@ PAGE_RULES = [
     ("emails", ()),
     ("mikrotik", ("router/", "settings/mikrotik")),
     ("equipment", ()),
+    ("requisitions", ("requisitions",)),
     ("settings", ("settings/", "team/")),
     ("tickets", ("tickets",)),
 ]
+
+DEFAULT_MEMBER_PAGES = {"staff_tasks", "staff_reports", "staff_requisitions"}
 
 
 def _request_page_key(request):
@@ -50,6 +56,8 @@ def _request_action(request):
 
 
 def _member_allows(member, page_key, action):
+    if page_key in DEFAULT_MEMBER_PAGES:
+        return True
     permissions = member.get("permissions") if isinstance(member, dict) else {}
     page = permissions.get(page_key) if isinstance(permissions, dict) else {}
     return bool(page.get("access") and page.get(action, action == "view"))

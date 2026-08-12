@@ -34,6 +34,10 @@ import Profile from './pages/Profile';
 import PppoeProfile from './pages/PppoeProfile';
 import Register from './pages/Register';
 import Reports from './pages/Reports';
+import Requisitions from './pages/Requisitions';
+import StaffReports from './pages/StaffReports';
+import StaffRequisitions from './pages/StaffRequisitions';
+import StaffTasks from './pages/StaffTasks';
 import Vouchers from './pages/Vouchers';
 import { ADMIN_DASHBOARD_PATH, ADMIN_LOGIN_PATH, ADMIN_PATH, adminPath } from './config/adminPaths';
 import { TENANT_THEME_EVENT, applyTenantTheme } from './utils/theme';
@@ -73,6 +77,7 @@ function DashboardLayout() {
             <Route path="/packages" element={<Packages />} />
             <Route path="/payments" element={<Payments />} />
             <Route path="/vouchers" element={<Vouchers />} />
+            <Route path="/requisitions" element={<Requisitions />} />
             <Route path="/expenses" element={<Expenses />} />
             <Route path="/reports" element={<Reports />} />
             <Route path="/reports/finance" element={<Reports type="finance" />} />
@@ -83,6 +88,9 @@ function DashboardLayout() {
             <Route path="/mikrotik" element={<MikrotikSettings />} />
             <Route path="/mikrotik/link" element={<MikrotikLink />} />
             <Route path="/equipment" element={<Equipment />} />
+            <Route path="/staff/tasks" element={<StaffTasks />} />
+            <Route path="/staff/reports" element={<StaffReports />} />
+            <Route path="/staff/requisitions" element={<StaffRequisitions />} />
             <Route path="/profile" element={<Profile />} />
             <Route path="/settings" element={<BusinessSettings />} />
             <Route path="/settings/expresswifi/edit" element={<BusinessSettings />} />

@@ -17,6 +17,7 @@ export default function Vouchers() {
   const [modalOpen, setModalOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [busyId, setBusyId] = useState('');
+  const [selectedIds, setSelectedIds] = useState([]);
 
   const load = async () => {
     try {
@@ -38,6 +39,8 @@ export default function Vouchers() {
     () => vouchers.filter((item) => `${item.code} ${item.package} ${item.username}`.toLowerCase().includes(query.toLowerCase())),
     [query, vouchers]
   );
+  const filteredIds = useMemo(() => filtered.map((voucher) => voucher.id).filter(Boolean), [filtered]);
+  const allFilteredSelected = filteredIds.length > 0 && filteredIds.every((id) => selectedIds.includes(id));
 
   const createVoucher = async (event) => {
     event.preventDefault();
@@ -84,6 +87,37 @@ export default function Vouchers() {
     }
   };
 
+  const toggleVoucherSelection = (voucherId) => {
+    setSelectedIds((current) => (
+      current.includes(voucherId) ? current.filter((id) => id !== voucherId) : [...current, voucherId]
+    ));
+  };
+
+  const toggleAllFiltered = () => {
+    setSelectedIds((current) => {
+      if (allFilteredSelected) return current.filter((id) => !filteredIds.includes(id));
+      return Array.from(new Set([...current, ...filteredIds]));
+    });
+  };
+
+  const deleteSelectedVouchers = async () => {
+    const idsToDelete = selectedIds.filter((id) => vouchers.some((voucher) => voucher.id === id));
+    if (idsToDelete.length === 0) return;
+    if (!window.confirm(`Delete ${idsToDelete.length} selected voucher${idsToDelete.length === 1 ? '' : 's'}?`)) return;
+    setBusyId('bulk-delete');
+    try {
+      await Promise.all(idsToDelete.map((id) => api.delete(`/vouchers/${id}`)));
+      setVouchers((current) => current.filter((item) => !idsToDelete.includes(item.id)));
+      setSelectedIds((current) => current.filter((id) => !idsToDelete.includes(id)));
+      toast.success(`${idsToDelete.length} voucher${idsToDelete.length === 1 ? '' : 's'} deleted`);
+    } catch (error) {
+      toast.error(error.response?.data?.message || 'Failed to delete selected vouchers');
+      await load();
+    } finally {
+      setBusyId('');
+    }
+  };
+
   const copyCode = (code) => {
     navigator.clipboard?.writeText(code);
     toast.success('Voucher code copied');
@@ -103,17 +137,33 @@ export default function Vouchers() {
       </section>
 
       <section className="surface-card">
-        <div className="flex items-center justify-between gap-3 border-b border-slate-200 p-4">
+        <div className="flex flex-col gap-3 border-b border-slate-200 p-4 lg:flex-row lg:items-center lg:justify-between">
           <label className="relative block w-full max-w-sm">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
             <input className="form-input mt-0 pl-9" placeholder="Search vouchers" value={query} onChange={(event) => setQuery(event.target.value)} />
           </label>
-          <span className="text-xs text-slate-500">{filtered.length} vouchers</span>
+          <div className="flex flex-wrap items-center gap-2">
+            {selectedIds.length > 0 && (
+              <button type="button" className="btn-danger" onClick={deleteSelectedVouchers} disabled={busyId === 'bulk-delete'}>
+                <Trash2 size={14} />
+                {busyId === 'bulk-delete' ? 'Deleting...' : `Delete selected (${selectedIds.length})`}
+              </button>
+            )}
+            <span className="text-xs text-slate-500">{filtered.length} vouchers</span>
+          </div>
         </div>
         <div className="overflow-x-auto">
-          <table className="min-w-[900px] divide-y divide-slate-200">
+          <table className="min-w-[940px] divide-y divide-slate-200">
             <thead className="table-head">
               <tr>
+                <th className="px-4 py-3">
+                  <input
+                    type="checkbox"
+                    checked={allFilteredSelected}
+                    onChange={toggleAllFiltered}
+                    aria-label="Select all visible vouchers"
+                  />
+                </th>
                 <th className="px-4 py-3">Code</th>
                 <th className="px-4 py-3">Package</th>
                 <th className="px-4 py-3">Username</th>
@@ -125,9 +175,17 @@ export default function Vouchers() {
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filtered.length === 0 ? (
-                <tr><td className="table-cell text-slate-500" colSpan="7">No vouchers found.</td></tr>
+                <tr><td className="table-cell text-slate-500" colSpan="8">No vouchers found.</td></tr>
               ) : filtered.map((voucher) => (
                 <tr key={voucher.id}>
+                  <td className="table-cell">
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.includes(voucher.id)}
+                      onChange={() => toggleVoucherSelection(voucher.id)}
+                      aria-label={`Select voucher ${voucher.code}`}
+                    />
+                  </td>
                   <td className="table-cell font-medium text-slate-950">{voucher.code}</td>
                   <td className="table-cell">{voucher.package}</td>
                   <td className="table-cell">{voucher.username}</td>

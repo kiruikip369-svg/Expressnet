@@ -10,6 +10,7 @@ const PERMISSION_PAGES = [
   { key: 'packages', label: 'Packages' },
   { key: 'payments', label: 'Payments' },
   { key: 'vouchers', label: 'Vouchers' },
+  { key: 'requisitions', label: 'Requisitions' },
   { key: 'expenses', label: 'Expenses' },
   { key: 'reports', label: 'Reports' },
   { key: 'messages', label: 'Messages' },
