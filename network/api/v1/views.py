@@ -238,7 +238,7 @@ def package_duration_delta(package):
         return timedelta(days=1)
 
 
-def normalized_package_payload(data, default_service_type="hotspot"):
+def normalized_package_payload(data, default_service_type="hotspot", include_service_type=True):
     service_type = package_service_type(data or {})
     if service_type not in {"hotspot", "pppoe"}:
         service_type = default_service_type if default_service_type in {"hotspot", "pppoe"} else "hotspot"
@@ -250,13 +250,15 @@ def normalized_package_payload(data, default_service_type="hotspot"):
         duration_value = 1
     duration_days = 1 if duration_unit == "hours" else int(duration_value)
     duration_hours = duration_value if duration_unit == "hours" else duration_value * 24
-    return {
-        "service_type": service_type,
+    payload = {
         "duration_unit": duration_unit,
         "duration_value": duration_value,
         "duration_days": duration_days,
         "duration_hours": duration_hours,
     }
+    if include_service_type:
+        payload["service_type"] = service_type
+    return payload
 
 
 def sync_package_profile(tenant, package):
@@ -827,6 +829,12 @@ def captive_portal_page(request, tenant_id):
           </div>
           <button type="submit">Sign in</button>
         </form>
+        <p class="muted">Disconnected after paying? Enter your M-Pesa confirmation code.</p>
+        <form method="post" action="/api/public/{html.escape(str(tenant_id))}/redeem">
+          {hidden}
+          <input name="receipt_code" required placeholder="M-Pesa code e.g. RAB12C3D4E" autocomplete="one-time-code">
+          <button type="submit">Sign in with M-Pesa code</button>
+        </form>
       </div>
     """
     else:
@@ -847,6 +855,12 @@ def captive_portal_page(request, tenant_id):
           <input name="password" required type="password" placeholder="Password">
           </div>
           <button type="submit">Sign in</button>
+        </form>
+        <p class="muted">Disconnected after paying? Enter your M-Pesa confirmation code.</p>
+        <form method="post" action="/api/public/{html.escape(str(tenant_id))}/redeem">
+          {hidden}
+          <input name="receipt_code" required placeholder="M-Pesa code e.g. RAB12C3D4E">
+          <button type="submit">Sign in with M-Pesa code</button>
         </form>
       </div>
     """
@@ -1043,7 +1057,7 @@ def _public_pay_impl(request, tenant_id):
             payment_ref.key,
         )
         payment_ref.update({"status": "failed", "failed_at": iso_now(), "callback_result_desc": str(exc)})
-        return ok({"success": False, "message": "Payment gateway is temporarily unavailable. Please try again later.", "paymentId": payment_ref.key}, 503)
+        return ok({"success": False, "message": "M-Pesa payment could not be started. Please confirm the phone number and try again. If it continues, contact support.", "paymentId": payment_ref.key}, 503)
 
 
 @csrf_exempt
@@ -1055,18 +1069,19 @@ def public_pay(request, tenant_id):
     except PaymentProviderError as exc:
         return ok({"success": False, "message": exc.public_message}, exc.status_code)
     except Exception:
-        return ok({"success": False, "message": "Payment gateway is temporarily unavailable. Please try again later."}, 503)
+        return ok({"success": False, "message": "M-Pesa payment could not be started. Please confirm the phone number and try again. If it continues, contact support."}, 503)
 
 
 @csrf_exempt
 @api_view(["POST"])
 def public_redeem(request, tenant_id):
-    receipt_code = body(request).get("receipt_code") or body(request).get("payment_code")
+    data = body(request)
+    receipt_code = data.get("receipt_code") or data.get("payment_code")
     if not receipt_code:
         return ok({"message": "Payment reference is required"}, 400)
     payment = None
     for item in list_children(f"tenants/{tenant_id}/payments"):
-        candidates = [item.get("payment_code"), item.get("paystack_reference")]
+        candidates = [item.get("payment_code"), item.get("daraja_receipt_number"), item.get("mpesa_receipt_number"), item.get("paystack_reference")]
         if any(str(candidate or "").upper() == str(receipt_code).strip().upper() for candidate in candidates):
             payment = item
             break
@@ -1077,8 +1092,7 @@ def public_redeem(request, tenant_id):
     tenant = {"id": tenant_id, **(ref(f"tenants/{tenant_id}").get() or {})}
     if payment.get("access_username"):
         set_customer_enabled(tenant, payment["access_username"], payment.get("service_type", "hotspot"), True)
-    return ok(
-        {
+    payload = {
             "success": True,
             "package_name": payment.get("package_name"),
             "service_type": payment.get("service_type"),
@@ -1086,13 +1100,30 @@ def public_redeem(request, tenant_id):
             "username": payment.get("access_username"),
             "password": payment.get("access_password"),
             "mac_address": payment.get("access_mac_address") or payment.get("mac_address"),
-            "router_ip": payment.get("router_ip"),
+            "router_ip": data.get("router_ip") or data.get("ip") or payment.get("router_ip"),
             "router_mac": payment.get("router_mac"),
-            "link_login": payment.get("link_login"),
-            "dst": payment.get("dst"),
+            "link_login": data.get("link_login") or data.get("link-login") or payment.get("link_login"),
+            "dst": data.get("dst") or data.get("link-orig") or payment.get("dst"),
             "expires_at": payment.get("access_expires_at"),
         }
-    )
+    accept_header = str(request.headers.get("Accept") or "")
+    if "text/html" in accept_header and not request.headers.get("X-Requested-With"):
+        link_login = payload.get("link_login") or (f"http://{payload.get('router_ip')}/login" if payload.get("router_ip") else "")
+        if link_login and payload.get("username") and payload.get("password"):
+            return _html_page(
+                "Access restored",
+                (
+                    "<main><div class='card'><strong>Payment found. Connecting...</strong>"
+                    f"<p class='muted'>Package: {html.escape(str(payload.get('package_name') or ''))}</p></div>"
+                    f"<form id='paid-login' method='post' action='{html.escape(str(link_login), quote=True)}'>"
+                    f"<input type='hidden' name='username' value='{html.escape(str(payload.get('username')), quote=True)}'>"
+                    f"<input type='hidden' name='password' value='{html.escape(str(payload.get('password')), quote=True)}'>"
+                    f"<input type='hidden' name='dst' value='{html.escape(str(payload.get('dst') or 'http://connectivitycheck.gstatic.com/generate_204'), quote=True)}'>"
+                    "</form><script>setTimeout(function(){document.getElementById('paid-login').submit();}, 800);</script></main>"
+                ),
+            )
+        return _html_page("Access restored", "<main><div class='card'><strong>Payment found. Your access is active.</strong></div></main>")
+    return ok(payload)
 
 
 @csrf_exempt
@@ -1167,7 +1198,15 @@ def public_voucher_login(request, tenant_id):
             credential_kind = "customer"
     if not access_payload:
         logger.info("Captive login rejected tenant=%s kind=%s code=%s username=%s reason=invalid_inactive_or_expired", tenant_id, credential_kind, code, username)
-        return ok({"message": "Invalid, inactive, or expired hotspot credentials"}, 401)
+        wants_html = "text/html" in str(request.headers.get("Accept") or "") and not request.headers.get("X-Requested-With")
+        back = f"/api/captive/{html.escape(str(tenant_id))}"
+        if code:
+            if wants_html:
+                return _html_page("Wrong voucher code", f"<main><div class='alert'>Voucher code is wrong, inactive, or expired.</div><p><a href='{back}'>Back to portal</a></p></main>", 401)
+            return ok({"message": "Voucher code is wrong, inactive, or expired"}, 401)
+        if wants_html:
+            return _html_page("Wrong credentials", f"<main><div class='alert'>Username or password is wrong, inactive, or expired.</div><p><a href='{back}'>Back to portal</a></p></main>", 401)
+        return ok({"message": "Username or password is wrong, inactive, or expired"}, 401)
 
     access_payload["duration_seconds"] = int(package_duration_delta(package).total_seconds()) if package else None
     router_status = "radius_ready" if tenant.get("radius_enabled") else "pending"
@@ -1369,7 +1408,11 @@ def packages(request, package_id=None):
         if "is_active" in updates:
             updates["is_active"] = bool(updates["is_active"])
         if any(key in data for key in ["service_type", "duration_unit", "duration_value", "duration_days", "duration_hours"]):
-            updates.update(normalized_package_payload({**existing, **data, **updates}, package_service_type(existing)))
+            updates.update(normalized_package_payload(
+                {**existing, **data, **updates},
+                package_service_type(existing),
+                include_service_type="service_type" in data,
+            ))
         router_updates = {"updated_at": iso_now()}
         if has_mikrotik_credentials(request.tenant):
             package_for_router = {"id": package_id, **existing, **updates}

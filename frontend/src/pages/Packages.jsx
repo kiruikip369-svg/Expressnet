@@ -130,7 +130,8 @@ export default function Packages() {
     setSaving(true);
     try {
       const payload = {
-        ...form,
+        name: form.name,
+        speed: form.speed,
         duration_value: Number(form.duration_value),
         duration_unit: form.service_type === 'pppoe' ? 'days' : form.duration_unit,
         duration_days: form.service_type !== 'pppoe' && form.duration_unit === 'hours' ? 1 : Number(form.duration_value),

@@ -286,7 +286,7 @@ def package_duration_delta(package):
         return timedelta(days=1)
 
 
-def normalized_package_payload(data, default_service_type="hotspot"):
+def normalized_package_payload(data, default_service_type="hotspot", include_service_type=True):
     service_type = package_service_type(data or {})
     if service_type not in {"hotspot", "pppoe"}:
         service_type = default_service_type if default_service_type in {"hotspot", "pppoe"} else "hotspot"
@@ -298,13 +298,15 @@ def normalized_package_payload(data, default_service_type="hotspot"):
         duration_value = 1
     duration_days = 1 if duration_unit == "hours" else int(duration_value)
     duration_hours = duration_value if duration_unit == "hours" else duration_value * 24
-    return {
-        "service_type": service_type,
+    payload = {
         "duration_unit": duration_unit,
         "duration_value": duration_value,
         "duration_days": duration_days,
         "duration_hours": duration_hours,
     }
+    if include_service_type:
+        payload["service_type"] = service_type
+    return payload
 
 
 def sync_package_profile(tenant, package):
@@ -681,7 +683,7 @@ def _public_pay_impl(request, tenant_id):
             payment_ref.key,
         )
         payment_ref.update({"status": "failed", "failed_at": iso_now(), "callback_result_desc": str(exc)})
-        return ok({"success": False, "message": "Payment gateway is temporarily unavailable. Please try again later.", "paymentId": payment_ref.key}, 503)
+        return ok({"success": False, "message": "M-Pesa payment could not be started. Please confirm the phone number and try again. If it continues, contact support.", "paymentId": payment_ref.key}, 503)
 
 
 
@@ -695,7 +697,7 @@ def public_pay(request, tenant_id):
     except PaymentProviderError as exc:
         return ok({"success": False, "message": exc.public_message}, exc.status_code)
     except Exception:
-        return ok({"success": False, "message": "Payment gateway is temporarily unavailable. Please try again later."}, 503)
+        return ok({"success": False, "message": "M-Pesa payment could not be started. Please confirm the phone number and try again. If it continues, contact support."}, 503)
 
 
 

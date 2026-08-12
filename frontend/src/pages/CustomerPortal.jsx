@@ -246,8 +246,12 @@ export default function CustomerPortal() {
     try {
       const { data } = await publicApi.post(`/public/${tenantId}/redeem`, {
         receipt_code: receiptCode,
+        router_ip: routerContext.ip,
+        link_login: routerContext.linkLogin,
+        dst: routerContext.dst,
       });
       setRecoveredAccess(data);
+      if (data.success && submitRouterLogin(data.router_ip || routerContext.ip, data.username, data.password, data.link_login || routerContext.linkLogin, data.dst || routerContext.dst)) return;
       toast.success('Access restored');
     } catch (err) {
       toast.error(err.response?.data?.message || 'Could not recover access');
@@ -263,7 +267,7 @@ export default function CustomerPortal() {
       const { data } = await publicApi.post(`/public/${tenantId}/voucher-login`, { code: voucherCode, router_ip: routerContext.ip, link_login: routerContext.linkLogin, dst: routerContext.dst });
       setVoucherAccess(data);
       if (!submitRouterLogin(data.router_ip, data.username, data.password, data.link_login || routerContext.linkLogin, data.dst || routerContext.dst)) toast.success('Voucher accepted. Connect through the Hotspot login page.');
-    } catch (err) { toast.error(err.response?.data?.message || 'Voucher login failed'); }
+    } catch (err) { toast.error(err.response?.data?.message || 'Voucher code is wrong or expired'); }
     finally { setRecovering(false); }
   };
 
@@ -274,7 +278,7 @@ export default function CustomerPortal() {
       const { data } = await publicApi.post(`/public/${tenantId}/voucher-login`, { username: accessUsername, password: accessPassword, router_ip: routerContext.ip, link_login: routerContext.linkLogin, dst: routerContext.dst });
       setVoucherAccess(data);
       if (!submitRouterLogin(data.router_ip, data.username, data.password, data.link_login || routerContext.linkLogin, data.dst || routerContext.dst)) toast.success('Credentials accepted. Connect through the Hotspot login page.');
-    } catch (err) { toast.error(err.response?.data?.message || 'Sign-in failed'); }
+    } catch (err) { toast.error(err.response?.data?.message || 'Username or password is wrong'); }
     finally { setRecovering(false); }
   };
 
@@ -366,22 +370,23 @@ export default function CustomerPortal() {
           </section>
 
           <form className="rounded-lg bg-white p-4 shadow-soft ring-1 ring-slate-200" onSubmit={recover}>
-            <label className="form-label" htmlFor="receiptCode">Already paid? Enter payment reference</label>
+            <label className="form-label" htmlFor="receiptCode">Already paid? Enter M-Pesa code</label>
             <div className="mt-1 flex flex-col gap-3 sm:flex-row">
               <div className="relative flex-1">
                 <KeyRound className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
                 <input
                   id="receiptCode"
                   className="form-input mt-0 pl-10 uppercase"
-                  placeholder="e.g. ps_tenant_reference"
+                  placeholder="e.g. RAB12C3D4E"
                   value={receiptCode}
                   onChange={(event) => setReceiptCode(event.target.value.toUpperCase())}
                 />
               </div>
               <button type="submit" className="btn-secondary" disabled={recovering}>
-                {recovering ? 'Checking...' : 'Recover Access'}
+                {recovering ? 'Checking...' : 'Sign in'}
               </button>
             </div>
+            <p className="mt-2 text-xs text-slate-500">Use the M-Pesa confirmation code from your SMS if you were disconnected after paying.</p>
             {recoveredAccess && (
               <div className="mt-4 rounded-md bg-green-50 p-3 text-sm text-green-800">
                 <p className="font-bold">Access is active</p>
