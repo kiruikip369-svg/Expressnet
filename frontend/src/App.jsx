@@ -58,7 +58,7 @@ function DashboardLayout() {
   return (
     <div className="tenant-app theme-page min-h-screen w-full">
       <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
-      <div className="min-h-screen w-full min-w-0 lg:ml-[240px] lg:w-[calc(100%-240px)]">
+      <div className="min-h-screen w-full min-w-0 lg:ml-[232px] lg:w-[calc(100%-232px)]">
         <Navbar onMenuClick={() => setSidebarOpen(true)} />
         <main className="mx-auto w-full max-w-[1200px] px-4 py-4 sm:px-8 sm:py-5">
           <Routes>
