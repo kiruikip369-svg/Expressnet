@@ -73,14 +73,14 @@ function isTenantAdmin(tenant, token) {
 }
 
 function Card({ children, className = '' }) {
-  return <section className={`rounded-lg border border-slate-200 bg-white shadow-sm ${className}`}>{children}</section>;
+  return <section className={`theme-card rounded-lg border shadow-sm ${className}`}>{children}</section>;
 }
 
 function Sparkline() {
   return (
     <svg viewBox="0 0 240 52" className="mt-3 h-12 w-full" aria-hidden="true">
-      <path d="M0 41 L18 35 L36 37 L54 28 L72 31 L90 26 L108 34 L126 36 L144 25 L162 40 L180 27 L198 39 L216 25 L240 39" fill="none" stroke="#00a45f" strokeWidth="3" />
-      <path d="M0 41 L18 35 L36 37 L54 28 L72 31 L90 26 L108 34 L126 36 L144 25 L162 40 L180 27 L198 39 L216 25 L240 39 L240 52 L0 52 Z" fill="#dcfce7" opacity="0.8" />
+      <path d="M0 41 L18 35 L36 37 L54 28 L72 31 L90 26 L108 34 L126 36 L144 25 L162 40 L180 27 L198 39 L216 25 L240 39" fill="none" stroke="var(--app-accent)" strokeWidth="2" />
+      <path d="M0 41 L18 35 L36 37 L54 28 L72 31 L90 26 L108 34 L126 36 L144 25 L162 40 L180 27 L198 39 L216 25 L240 39 L240 52 L0 52 Z" fill="var(--app-accent-muted)" opacity="0.72" />
     </svg>
   );
 }
@@ -89,11 +89,11 @@ function KpiCard({ icon: Icon, title, value, helper, pills = [], action, to, chi
   return (
     <Card className="p-4">
       <div className="flex items-start justify-between">
-        <div className="flex items-start gap-4">
-          <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-600"><Icon size={24} /></span>
+        <div className="flex items-start gap-3">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full" style={{ background: 'var(--app-accent-muted)', color: 'var(--app-accent)' }}><Icon size={20} /></span>
           <div>
-            <p className="text-sm font-semibold text-slate-700">{title}</p>
-            <p className="mt-1 text-3xl font-bold leading-none text-slate-950">{value}</p>
+            <p className="theme-muted text-xs font-medium">{title}</p>
+            <p className="theme-text mt-1 text-2xl font-medium leading-none">{value}</p>
             {helper && <p className="mt-2 text-xs text-slate-500">{helper}</p>}
           </div>
         </div>
@@ -101,12 +101,12 @@ function KpiCard({ icon: Icon, title, value, helper, pills = [], action, to, chi
       </div>
       {children}
       {pills.length > 0 && (
-        <div className="mt-5 flex flex-wrap gap-2">
-          {pills.map((pill) => <span key={pill} className="rounded-md bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-slate-700">{pill}</span>)}
+        <div className="mt-4 flex flex-wrap gap-2">
+          {pills.map((pill) => <span key={pill} className="rounded-md px-2.5 py-1 text-[11px] font-medium" style={{ background: 'var(--app-accent-muted)', color: 'var(--app-text)' }}>{pill}</span>)}
         </div>
       )}
       {action && (
-        <Link to={to} className="mt-5 inline-flex items-center gap-3 border-t border-slate-100 pt-3 text-xs font-semibold text-emerald-600">
+        <Link to={to} className="mt-4 inline-flex items-center gap-3 border-t border-slate-100 pt-3 text-xs font-medium" style={{ color: 'var(--app-accent)' }}>
           {action}
           <span aria-hidden="true">{'->'}</span>
         </Link>
@@ -118,18 +118,18 @@ function KpiCard({ icon: Icon, title, value, helper, pills = [], action, to, chi
 function MetricTile({ icon: Icon, title, value, helper, percent }) {
   const width = Math.max(0, Math.min(Number(percent || 0), 100));
   return (
-    <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
+    <div className="theme-card-muted rounded-md border p-3">
       <div className="flex items-start gap-3">
-        <span className="flex h-9 w-9 items-center justify-center rounded-md bg-emerald-100 text-emerald-600"><Icon size={18} /></span>
+        <span className="flex h-8 w-8 items-center justify-center rounded-md" style={{ background: 'var(--app-accent-muted)', color: 'var(--app-accent)' }}><Icon size={16} /></span>
         <div className="min-w-0">
-          <p className="text-xs font-semibold text-slate-700">{title}</p>
-          <p className="mt-1 text-2xl font-bold leading-none text-slate-950">{value}</p>
+          <p className="theme-muted text-[11px] font-medium">{title}</p>
+          <p className="theme-text mt-1 text-xl font-medium leading-none">{value}</p>
           <p className="mt-2 truncate text-xs text-slate-500">{helper || '-'}</p>
         </div>
       </div>
       {percent !== undefined && (
-        <div className="mt-4 h-2 overflow-hidden rounded-full bg-slate-200">
-          <div className="h-full rounded-full bg-emerald-600" style={{ width: `${width}%` }} />
+        <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-200">
+          <div className="h-full rounded-full" style={{ width: `${width}%`, background: 'var(--app-accent)' }} />
         </div>
       )}
     </div>
@@ -141,19 +141,19 @@ function TrafficChart({ rx, tx }) {
   const upload = [0.1, 0.15, 0.12, 0.18, 0.16, 0.2, 0.17].map((v, i) => `${i * 40},${104 - (v * tx / max * 70)}`);
   const download = [0.2, 0.18, 0.22, 0.19, 0.24, 0.21, 0.25].map((v, i) => `${i * 40},${104 - (v * rx / max * 70)}`);
   return (
-    <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
+    <div className="theme-card-muted rounded-md border p-3">
       <div className="flex items-center justify-between gap-3">
-        <h3 className="text-sm font-semibold text-slate-900">Traffic (Last 24h)</h3>
-        <div className="flex gap-4 text-[10px] font-semibold text-slate-500">
-          <span className="inline-flex items-center gap-1"><span className="h-1.5 w-4 rounded-full bg-emerald-500" />Upload</span>
+        <h3 className="theme-text text-xs font-medium">Traffic (Last 24h)</h3>
+        <div className="flex gap-4 text-[10px] font-medium text-slate-500">
+          <span className="inline-flex items-center gap-1"><span className="h-1.5 w-4 rounded-full" style={{ background: 'var(--app-accent)' }} />Upload</span>
           <span className="inline-flex items-center gap-1"><span className="h-1.5 w-4 rounded-full bg-blue-500" />Download</span>
         </div>
       </div>
       <svg viewBox="0 0 280 130" className="mt-4 h-36 w-full" aria-label="Router traffic chart">
         {[0, 1, 2, 3, 4].map((i) => <line key={`h-${i}`} x1="0" x2="280" y1={20 + i * 22} y2={20 + i * 22} stroke="#e2e8f0" />)}
         {[0, 1, 2, 3, 4].map((i) => <line key={`v-${i}`} y1="16" y2="108" x1={i * 70} x2={i * 70} stroke="#eef2f7" />)}
-        <polyline points={upload.join(' ')} fill="none" stroke="#00a45f" strokeWidth="3" />
-        <polyline points={download.join(' ')} fill="none" stroke="#3b82f6" strokeWidth="3" />
+        <polyline points={upload.join(' ')} fill="none" stroke="var(--app-accent)" strokeWidth="2" />
+        <polyline points={download.join(' ')} fill="none" stroke="#3b82f6" strokeWidth="2" />
         <text x="0" y="122" fontSize="10" fill="#64748b">00:00</text>
         <text x="74" y="122" fontSize="10" fill="#64748b">06:00</text>
         <text x="142" y="122" fontSize="10" fill="#64748b">12:00</text>
@@ -167,7 +167,7 @@ function TrafficChart({ rx, tx }) {
 function Donut({ rows }) {
   const total = rows.reduce((sum, row) => sum + row.value, 0) || 1;
   let offset = 25;
-  const colors = ['#00a45f', '#3b82f6', '#f59e0b', '#94a3b8'];
+  const colors = ['var(--app-accent)', '#3b82f6', '#f59e0b', '#94a3b8'];
   return (
     <div className="flex items-center gap-6">
       <svg viewBox="0 0 42 42" className="h-28 w-28 shrink-0">
@@ -183,7 +183,7 @@ function Donut({ rows }) {
         {rows.map((row, index) => (
           <div key={row.label} className="flex items-center justify-between gap-3">
             <span className="inline-flex items-center gap-2 text-slate-600"><span className="h-2.5 w-2.5 rounded-sm" style={{ background: colors[index] }} />{row.label}</span>
-            <strong className="font-semibold text-slate-800">{row.value} ({Math.round((row.value / total) * 100)}%)</strong>
+            <strong className="font-medium text-slate-800">{row.value} ({Math.round((row.value / total) * 100)}%)</strong>
           </div>
         ))}
       </div>
@@ -277,22 +277,22 @@ export default function Dashboard() {
     { label: 'Expired', value: Math.max(0, totalUsers - activeUsers) },
   ];
 
-  if (loading) return <div className="rounded-lg bg-white p-4 text-xs text-slate-600">Loading dashboard...</div>;
+  if (loading) return <div className="theme-card rounded-lg border p-4 text-xs">Loading dashboard...</div>;
 
   return (
-    <div className={`min-h-[calc(100vh-96px)] space-y-5 bg-slate-50 p-4 ${darkMode ? 'text-white' : 'text-slate-950'}`}>
+    <div className={`theme-page min-h-[calc(100vh-96px)] space-y-4 rounded-lg p-3 sm:p-4 ${darkMode ? 'text-white' : 'text-slate-950'}`}>
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
-          <p className="text-xs text-slate-500">Business / <span className="font-semibold text-slate-700">{tenant?.business_name || tenant?.name || 'Expressnet'}</span></p>
-          <h1 className="text-2xl font-bold text-slate-950">Dashboard</h1>
+          <p className="theme-muted text-[11px]">Business / <span className="font-medium text-slate-700">{tenant?.business_name || tenant?.name || 'Expressnet'}</span></p>
+          <h1 className="theme-text mt-0.5 text-xl font-medium">Dashboard</h1>
         </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <span className="inline-flex h-8 items-center gap-2 rounded-md px-2 text-xs font-semibold text-slate-600">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="inline-flex h-8 items-center gap-2 rounded-md px-2 text-[11px] font-medium text-slate-600">
             <RefreshCw size={15} className={refreshing ? 'animate-spin' : ''} />
             Updated: {sampledAt && !Number.isNaN(sampledAt.valueOf()) ? sampledAt.toLocaleTimeString() : '--'}
           </span>
-          <button type="button" className="inline-flex h-9 items-center gap-2 rounded-md bg-red-50 px-4 text-xs font-semibold text-red-600"><AlertTriangle size={15} />Expires in 2 days. Click to renew</button>
-          <button type="button" className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-white px-4 text-xs font-semibold text-slate-600"><Filter size={15} />Filters</button>
+          <button type="button" className="inline-flex h-8 items-center gap-2 rounded-md border border-red-100 bg-red-50 px-3 text-[11px] font-medium text-red-500"><AlertTriangle size={14} />Expires in 2 days. Click to renew</button>
+          <button type="button" className="theme-card inline-flex h-8 items-center gap-2 rounded-md border px-3 text-[11px] font-medium text-slate-600"><Filter size={14} />Filters</button>
         </div>
       </div>
 
@@ -309,10 +309,10 @@ export default function Dashboard() {
         <Card className="p-4">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <h2 className="text-lg font-bold text-slate-950">Router Overview</h2>
+              <h2 className="theme-text text-base font-medium">Router Overview</h2>
               <p className="text-xs text-slate-500">{router.message || sourceLabel}</p>
             </div>
-            <span className={`inline-flex items-center gap-1 rounded-md px-3 py-1 text-xs font-semibold ${router.status === 'online' ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-500'}`}>
+            <span className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-[11px] font-medium ${router.status === 'online' ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-500'}`}>
               <span className="h-2 w-2 rounded-full bg-current" />{router.status || 'offline'}
             </span>
           </div>
@@ -329,18 +329,18 @@ export default function Dashboard() {
 
         <Card className="overflow-hidden">
           <div className="flex items-center justify-between border-b border-slate-100 px-4 py-4">
-            <h2 className="text-lg font-bold text-slate-950">Top Active Sessions</h2>
+            <h2 className="theme-text text-base font-medium">Top Active Sessions</h2>
             <span className="text-xs text-slate-500">{activeSessionCount.toLocaleString('en-KE')} live sessions</span>
           </div>
           <div className="overflow-x-auto">
             <table className="min-w-full text-xs">
-              <thead className="bg-slate-50 text-left text-[10px] font-semibold uppercase text-slate-500">
+              <thead className="bg-slate-50 text-left text-[10px] font-medium uppercase text-slate-500">
                 <tr><th className="px-4 py-3">User</th><th className="px-4 py-3">Service</th><th className="px-4 py-3">Data Used</th><th className="px-4 py-3">Uptime</th><th className="px-4 py-3">Address</th></tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {sessions.length ? sessions.map((session) => (
                   <tr key={`${session.service_type}-${session.username}-${session.address}`}>
-                    <td className="px-4 py-3 font-semibold text-slate-900">{session.username || '-'}</td>
+                    <td className="px-4 py-3 font-medium text-slate-900">{session.username || '-'}</td>
                     <td className="px-4 py-3 text-slate-600">{session.service_type || '-'}</td>
                     <td className="px-4 py-3 text-slate-600">{formatData(session.data_used)}</td>
                     <td className="px-4 py-3 text-slate-600">{session.uptime || '-'}</td>
@@ -363,40 +363,40 @@ export default function Dashboard() {
       <section className="grid gap-4 xl:grid-cols-[0.95fr_0.95fr_1.5fr]">
         <Card className="p-4">
           <div className="flex items-center justify-between">
-            <h2 className="text-lg font-bold text-slate-950">Revenue This Month</h2>
-            <button type="button" className="rounded-md border border-slate-200 px-3 py-1 text-xs text-slate-600">This Month</button>
+            <h2 className="theme-text text-base font-medium">Revenue This Month</h2>
+            <button type="button" className="rounded-md border border-slate-200 px-3 py-1 text-[11px] text-slate-600">This Month</button>
           </div>
-          <p className="mt-2 text-3xl font-bold text-slate-950">{formatKES(summary.revenue_this_month)}</p>
+          <p className="theme-text mt-2 text-2xl font-medium">{formatKES(summary.revenue_this_month)}</p>
           <p className="text-xs text-slate-500">vs last month</p>
           <svg viewBox="0 0 300 72" className="mt-4 h-20 w-full">
             <line x1="0" y1="50" x2="300" y2="50" stroke="#dbeafe" />
-            <polyline points="0,50 50,50 100,50 150,50 200,50 250,50 300,50" fill="none" stroke="#00a45f" strokeWidth="3" />
+            <polyline points="0,50 50,50 100,50 150,50 200,50 250,50 300,50" fill="none" stroke="var(--app-accent)" strokeWidth="2" />
             {[1, 5, 10, 15, 20, 25, 30].map((day, index) => <text key={day} x={index * 49} y="70" fontSize="10" fill="#64748b">{day}</text>)}
           </svg>
         </Card>
 
         <Card className="p-4">
-          <h2 className="text-lg font-bold text-slate-950">Package Distribution</h2>
+          <h2 className="theme-text text-base font-medium">Package Distribution</h2>
           <div className="mt-4">
             <Donut rows={packageRows} />
           </div>
         </Card>
 
         <Card className="p-4">
-          <h2 className="text-lg font-bold text-slate-950">Quick Actions</h2>
+          <h2 className="theme-text text-base font-medium">Quick Actions</h2>
           <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4">
             {[
-              ['/customers', UserPlus, 'Add Customer', 'text-emerald-600'],
-              ['/packages', Box, 'Create Package', 'text-blue-600'],
-              ['/vouchers', Zap, 'Generate Voucher', 'text-purple-600'],
-              ['/expenses', Receipt, 'Add Expense', 'text-red-600'],
-              ['/messages', MessageSquare, 'Send Message', 'text-blue-600'],
-              ['/payments', Wallet, 'View Payments', 'text-emerald-600'],
-              ['/mikrotik', Router, 'Router Status', 'text-cyan-600'],
-              ['/reports', FileText, 'Reports', 'text-orange-600'],
+              ['/customers', UserPlus, 'Add Customer'],
+              ['/packages', Box, 'Create Package'],
+              ['/vouchers', Zap, 'Generate Voucher'],
+              ['/expenses', Receipt, 'Add Expense'],
+              ['/messages', MessageSquare, 'Send Message'],
+              ['/payments', Wallet, 'View Payments'],
+              ['/mikrotik', Router, 'Router Status'],
+              ['/reports/finance', FileText, 'Reports'],
             ].map(([to, Icon, label, tone]) => (
-              <Link key={label} to={to} className="flex h-16 flex-col items-center justify-center gap-2 rounded-md bg-slate-50 text-center text-[11px] font-semibold text-slate-700 transition hover:bg-slate-100">
-                <Icon size={18} className={tone} />
+              <Link key={label} to={to} className="theme-card-muted flex h-14 flex-col items-center justify-center gap-1.5 rounded-md border text-center text-[11px] font-medium text-slate-700 transition hover:bg-slate-100">
+                <Icon size={17} style={{ color: 'var(--app-accent)' }} />
                 {label}
               </Link>
             ))}
@@ -406,18 +406,18 @@ export default function Dashboard() {
 
       <Card className="overflow-hidden">
         <div className="flex items-center justify-between border-b border-slate-100 px-4 py-4">
-          <h2 className="text-lg font-bold text-slate-950">Recent Payments</h2>
-          <Link to="/payments" className="text-xs font-semibold text-emerald-600">View all</Link>
+          <h2 className="theme-text text-base font-medium">Recent Payments</h2>
+          <Link to="/payments" className="text-xs font-medium" style={{ color: 'var(--app-accent)' }}>View all</Link>
         </div>
         <div className="overflow-x-auto">
           <table className="min-w-full text-xs">
-            <thead className="bg-slate-50 text-left text-[10px] font-semibold uppercase text-slate-500">
+            <thead className="bg-slate-50 text-left text-[10px] font-medium uppercase text-slate-500">
               <tr><th className="px-5 py-3">Reference</th><th className="px-5 py-3">Customer</th><th className="px-5 py-3">Amount</th><th className="px-5 py-3">Method</th><th className="px-5 py-3">Status</th><th className="px-5 py-3">Date</th></tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {payments.length ? payments.map((payment) => (
                 <tr key={payment.id || payment.reference}>
-                  <td className="px-5 py-4 font-semibold text-slate-900">{payment.reference || payment.payment_code || '-'}</td>
+                  <td className="px-5 py-4 font-medium text-slate-900">{payment.reference || payment.payment_code || '-'}</td>
                   <td className="px-5 py-4 text-slate-600">{payment.customer_name || '-'}</td>
                   <td className="px-5 py-4 text-slate-600">{formatKES(payment.amount)}</td>
                   <td className="px-5 py-4 text-slate-600">{payment.provider || payment.method || '-'}</td>
