@@ -1580,6 +1580,11 @@ def vouchers(request, voucher_id=None):
         router_error = None
         router_queued = False
         script = _voucher_delete_script(voucher)
+        try:
+            ref(f"{voucher_path}/{voucher_id}").delete()
+        except Exception as exc:
+            logger.exception("Voucher database delete failed tenant=%s voucher=%s", tenant_id, voucher_id)
+            return ok({"message": f"Voucher could not be deleted: {exc}"}, 500)
         if _router_is_agent_linked(request.tenant) and script:
             try:
                 _queue_router_command(request, {"type": "delete_voucher", "script": script, "voucher_id": voucher_id})
@@ -1591,7 +1596,6 @@ def vouchers(request, voucher_id=None):
                 _delete_voucher_from_router(request, voucher)
             except Exception as exc:
                 router_error = str(exc)
-        ref(f"{voucher_path}/{voucher_id}").delete()
         response = {"success": True, "message": "Voucher deleted"}
         if router_queued:
             response["router_status"] = "queued"

@@ -91,21 +91,30 @@ def firebase_backup_ref(path):
 
 
 def backup_set(path, data):
-    backup = firebase_backup_ref(path)
-    if backup is not None:
-        backup.set(data)
+    try:
+        backup = firebase_backup_ref(path)
+        if backup is not None:
+            backup.set(data)
+    except Exception:
+        logger.warning("Firebase backup set failed for %s", path, exc_info=True)
 
 
 def backup_update(path, data):
-    backup = firebase_backup_ref(path)
-    if backup is not None:
-        backup.update(data)
+    try:
+        backup = firebase_backup_ref(path)
+        if backup is not None:
+            backup.update(data)
+    except Exception:
+        logger.warning("Firebase backup update failed for %s", path, exc_info=True)
 
 
 def backup_delete(path):
-    backup = firebase_backup_ref(path)
-    if backup is not None:
-        backup.delete()
+    try:
+        backup = firebase_backup_ref(path)
+        if backup is not None:
+            backup.delete()
+    except Exception:
+        logger.warning("Firebase backup delete failed for %s", path, exc_info=True)
 
 
 def model_dict(instance, include_id=True, exclude=None):
@@ -257,7 +266,7 @@ class OrmRef:
         parts = list(self.parts)
         if parts == ["tenants"]:
             return f"tenants/{instance.pk}"
-        if len(parts) == 3 and parts[0] == "tenants" and parts[2] in {"packages", "customers", "payments", "tickets"}:
+        if len(parts) == 3 and parts[0] == "tenants" and parts[2] in {"packages", "customers", "payments", "tickets", "vouchers"}:
             return f"{'/'.join(parts)}/{instance.pk}"
         if parts == ["admins"]:
             return f"admins/{instance.pk}"
