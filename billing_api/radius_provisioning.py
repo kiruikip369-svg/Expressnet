@@ -45,6 +45,10 @@ def upsert_pg_package(tenant_obj, package_data):
     name = package_data.get("name")
     if not name:
         return None
+    extra = dict(package_data.get("extra") or {})
+    for key in ("service_type", "package_type", "type", "duration_unit", "duration_value", "duration_hours"):
+        if key in package_data and package_data.get(key) not in (None, ""):
+            extra[key] = package_data.get(key)
     package, _ = InternetPackage.objects.update_or_create(
         tenant=tenant_obj, name=name,
         defaults={
@@ -52,7 +56,7 @@ def upsert_pg_package(tenant_obj, package_data):
             "duration_days": int(package_data.get("duration_days") or 1),
             "price": float(package_data.get("price") or 0),
             "is_active": package_data.get("is_active") is not False,
-            "extra": package_data.get("extra") or {},
+            "extra": extra,
         },
     )
     return package

@@ -1274,7 +1274,7 @@ def set_customer_enabled(tenant, username, service_type="hotspot", enabled=True)
     if tenant_radius_enabled and not enabled:
         try:
             from billing_api.models import Tenant as TenantModel, Customer as CustomerModel
-            from .radius_coa import radius_disconnect_customer
+            from billing_api.radius_coa import radius_disconnect_customer
 
             tenant_obj = TenantModel.objects.get(pk=tenant_id) if isinstance(tenant, dict) else tenant
             result = radius_disconnect_customer(tenant_obj, username)

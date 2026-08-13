@@ -257,6 +257,14 @@ def _validate_customer(customer):
         customer.save(update_fields=["status", "updated_at"])
         return False, "paid access expired", {}
     package = InternetPackage.objects.filter(tenant=customer.tenant, name=customer.package, is_active=True).first()
+    if package:
+        from .services import package_service_type
+
+        customer_service_type = str(customer.service_type or "").strip().lower()
+        package_data = package.as_dict()
+        package_type = package_service_type(package_data)
+        if customer_service_type in {"hotspot", "pppoe"} and package_type != customer_service_type:
+            return False, f"{customer_service_type.upper()} user is assigned a {package_type.upper()} package", {}
     policy = _package_policy(package)
     used_bytes = _customer_usage_bytes(customer)
     if policy.get("data_quota") and used_bytes >= policy["data_quota"]:

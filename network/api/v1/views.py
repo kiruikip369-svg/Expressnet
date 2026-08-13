@@ -1453,6 +1453,13 @@ def packages(request, package_id=None):
         else:
             router_updates.update({"ppp_profile_status": "pending"})
         ref(f"tenants/{tenant_id}/packages/{package_id}").update({**updates, **router_updates})
+        if request.tenant.get("radius_enabled"):
+            try:
+                from billing_api.radius_provisioning import upsert_pg_package
+
+                upsert_pg_package(Tenant.objects.get(pk=tenant_id), {"id": package_id, **existing, **updates, **router_updates})
+            except Exception:
+                logger.warning("RADIUS package mirror failed tenant=%s package=%s", tenant_id, package_id, exc_info=True)
         return ok({"success": True, "message": "Package and MikroTik profile updated"})
     if method(request, "DELETE") and package_id:
         existing = ref(f"tenants/{tenant_id}/packages/{package_id}").get()
@@ -1525,6 +1532,13 @@ def package_add(request):
     )
     if router_queued:
         _queue_router_command(request, {"type": "sync_packages", "script": _package_sync_script_for_request(request, {"id": new_ref.key, **data, **package_payload}), "package_ids": [new_ref.key]})
+    if request.tenant.get("radius_enabled"):
+        try:
+            from billing_api.radius_provisioning import upsert_pg_package
+
+            upsert_pg_package(Tenant.objects.get(pk=request.tenant["id"]), {"id": new_ref.key, **data, **package_payload})
+        except Exception:
+            logger.warning("RADIUS package mirror failed tenant=%s package=%s", request.tenant["id"], new_ref.key, exc_info=True)
     message = "Package and MikroTik profile created" if router_synced else "Package created and queued for MikroTik sync" if router_queued else "Package created. Sync router after MikroTik is connected."
     return ok({"success": True, "message": message, "packageId": new_ref.key}, 201)
 
