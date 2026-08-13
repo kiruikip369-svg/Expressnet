@@ -1361,11 +1361,13 @@ def customer_provision(request, customer_id):
         except (TimeoutError, OSError):
             _queue_router_command(request, {
                 "type": "sync_secrets",
+                "customer_ids": [customer_id],
                 "script": _customer_secret_script({**customer, "package_name": customer.get("package"), "speed": (pkg or {}).get("speed"), "service_type": service_type}),
             })
     else:
         _queue_router_command(request, {
             "type": "sync_secrets",
+            "customer_ids": [customer_id],
             "script": _customer_secret_script({**customer, "package_name": customer.get("package"), "speed": (pkg or {}).get("speed"), "service_type": service_type}),
         })
     ref(f"tenants/{request.tenant['id']}/customers/{customer_id}").update(
@@ -2040,7 +2042,11 @@ def _queue_all_customer_secrets(request):
     ]
     script = "".join(_customer_secret_script(c) for c in customers)
     if script:
-        _queue_router_command(request, {"type": "sync_secrets", "script": script})
+        _queue_router_command(request, {
+            "type": "sync_secrets",
+            "script": script,
+            "customer_ids": [customer.get("id") for customer in customers if customer.get("id")],
+        })
 
 
 def _queue_router_command(request, command_data):
@@ -2940,6 +2946,13 @@ def router_agent_ack(request, token, command_id):
                     "ppp_profile_status": "synced",
                     "ppp_profile_synced_at": iso_now(),
                     "ppp_profile_error": None,
+                })
+        if (applied_command or {}).get("type") == "sync_secrets":
+            for customer_id_value in ((applied_command or {}).get("customer_ids") or []):
+                ref(f"tenants/{tenant_id}/customers/{customer_id_value}").update({
+                    "provisioning_status": "provisioned",
+                    "provisioning_message": "Customer access synced on MikroTik",
+                    "provisioned_at": iso_now(),
                 })
         if (applied_command or {}).get("type") == "suspend_router":
             ref(f"tenants/{tenant_id}").update({"mikrotik_router_suspended": True})
