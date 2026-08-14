@@ -657,6 +657,17 @@ def _is_captive_form_request(request, data=None):
 
 def _limited_router_status_payload(snapshot, assignments=None, source="provisioning_snapshot", message="Showing the latest configuration reported by the router agent.", tenant=None, live=False):
     payload = {**_empty_router_snapshot(), **(snapshot or {})}
+    bridge_ports = payload.get("bridge_ports") or []
+    addresses = payload.get("addresses") or []
+    bridge_by_interface = {
+        str(item.get("interface") or item.get("name") or ""): str(item.get("bridge") or "")
+        for item in bridge_ports
+    }
+    address_by_interface = defaultdict(list)
+    for item in addresses:
+        if item.get("interface") and item.get("address"):
+            address_by_interface[str(item.get("interface"))].append(str(item.get("address")))
+
     def port_rank(item):
         name = str(item.get("name") or "").lower()
         if name.startswith("ether"):
@@ -677,6 +688,14 @@ def _limited_router_status_payload(snapshot, assignments=None, source="provision
         ],
         key=port_rank,
     )
+    wan_interface = str((tenant or {}).get("mikrotik_wan_interface") or "ether1")
+    for item in interfaces:
+        name = str(item.get("name") or "")
+        item["bridge"] = bridge_by_interface.get(name, item.get("bridge") or "")
+        item["addresses"] = address_by_interface.get(name, [])
+        item["customer_assignable"] = name != wan_interface and name.lower() != "ether1"
+        if not item["customer_assignable"]:
+            item["assignment_warning"] = "WAN/uplink port"
     payload["interfaces"] = interfaces[:6]
     payload["assignments"] = assignments or {}
     payload["source"] = source
@@ -742,6 +761,23 @@ def _update_linked_router(tenant_id, tenant_data, **updates):
     existing[key] = {**existing.get(key, {}), **router, "id": key}
     ref(f"tenants/{tenant_id}").update({"linked_routers": existing})
     return existing[key]
+
+
+def find_payment_by_paystack_reference(reference, tenant_id=None, payment_id=None):
+    if not reference and not payment_id:
+        return None, None, None
+    tenant_ids = [tenant_id] if tenant_id else [tenant["id"] for tenant in list_children("tenants")]
+    for current_tenant_id in tenant_ids:
+        if not current_tenant_id:
+            continue
+        if payment_id:
+            payment = ref(f"tenants/{current_tenant_id}/payments/{payment_id}").get()
+            if payment:
+                return current_tenant_id, payment_id, payment
+        for item in list_children(f"tenants/{current_tenant_id}/payments"):
+            if item.get("paystack_reference") == reference:
+                return current_tenant_id, item["id"], item
+    return None, None, None
 
 
 @csrf_exempt
@@ -1702,6 +1738,9 @@ def router_ports(request):
         return ok({"message": "Router interface is required"}, 400)
     if service_type not in {"pppoe", "hotspot", "both"}:
         return ok({"message": "Port service must be PPPoE, Hotspot, or both"}, 400)
+    wan_interface = str(request.tenant.get("mikrotik_wan_interface") or "ether1").strip()
+    if interface_name == wan_interface or interface_name.lower() == "ether1":
+        return ok({"message": f"{interface_name} looks like the WAN/uplink port. Choose a customer LAN port instead."}, 400)
     if service_type == "both" or (_router_is_agent_linked(request.tenant) and not has_mikrotik_credentials(request.tenant)):
         return _queue_router_port_command(request, interface_name, service_type, profile_name)
     try:
@@ -2764,23 +2803,15 @@ def router_provision_script(request, token):
         :do {{ /ip dns set servers=8.8.8.8,8.8.4.4 allow-remote-requests=yes }} on-error={{}}
         :delay 3s;
         :log info "Billing SaaS: preserving existing PPP secrets and Hotspot users";
-        :log info "Billing SaaS Step 3: creating Hotspot and captive portal";
+        :log info "Billing SaaS Step 3: preparing Hotspot profile and captive portal files without assigning customer ports";
         :do {{ /ip hotspot profile add name={hotspot_profile_name} hotspot-address={_rsc_escape(lan_gateway)} dns-name="{_rsc_escape(hotspot_dns_name)}" login-by=cookie,http-pap,trial,mac-cookie use-radius={hotspot_radius_flags} radius-interim-update=10m html-directory=Expressnet-hotspot }} on-error={{ /ip hotspot profile set [find name={hotspot_profile_name}] hotspot-address={_rsc_escape(lan_gateway)} dns-name="{_rsc_escape(hotspot_dns_name)}" login-by=cookie,http-pap,trial,mac-cookie use-radius={hotspot_radius_flags} radius-interim-update=10m html-directory=Expressnet-hotspot }}
-        :do {{ /interface wireless security-profiles add name="billing-saas-open" mode=none authentication-types="" wpa-pre-shared-key="" wpa2-pre-shared-key="" supplicant-identity="billing-saas" }} on-error={{ /interface wireless security-profiles set [find name="billing-saas-open"] mode=none authentication-types="" wpa-pre-shared-key="" wpa2-pre-shared-key="" supplicant-identity="billing-saas" }}
-        :do {{ /interface wireless set [find name="wlan1"] security-profile="billing-saas-open" disabled=no }} on-error={{ :log warning "Billing SaaS: wlan1 open hotspot profile failed" }}
-        :do {{ /interface bridge port remove [find interface="wlan1"] }} on-error={{}}
-        :do {{ /interface bridge port add bridge=$billingBridge interface="wlan1" comment="Expressnet hotspot wlan1" }} on-error={{ :do {{ /interface bridge port set [find interface="wlan1"] bridge=$billingBridge disabled=no comment="Expressnet hotspot wlan1" }} on-error={{ :log warning "Billing SaaS: wlan1 bridge assignment failed" }} }}
         :do {{ /ip hotspot user profile set [find default=yes] idle-timeout=2h shared-users=2 }} on-error={{}}
-        :do {{ /ip hotspot add name={hotspot_server_name} interface=$billingBridge address-pool={hotspot_pool_name} profile={hotspot_profile_name} disabled=no }} on-error={{ /ip hotspot set [find name={hotspot_server_name}] interface=$billingBridge address-pool={hotspot_pool_name} profile={hotspot_profile_name} disabled=no }}
-        :do {{ /ip hotspot set [find name={hotspot_server_name}] disabled=no }} on-error={{}}
-        :if ([:len [/ip hotspot find name={hotspot_server_name} profile={hotspot_profile_name} disabled=no]] = 0) do={{ :log error "Expressnet: managed Hotspot server missing after provisioning"; :error "Managed Hotspot server missing after provisioning" }}
         :do {{ /ip hotspot walled-garden remove [find comment="billing-saas captive portal access"] }} on-error={{}}
         :do {{ /ip hotspot walled-garden ip remove [find comment="billing-saas captive portal access"] }} on-error={{}}
         :do {{ /ip firewall address-list remove [find list=Expressnet-portal-ips] }} on-error={{}}
         {captive_hosts_script}
         {walled_garden_fqdn_script}
         {hotspot_file_script}
-        :if ([:len [/ip hotspot find name={hotspot_server_name} disabled=no]] = 0) do={{ :log error "Expressnet: Hotspot is not running after Step 3"; :error "Hotspot is not running after Step 3" }}
         :log info "Billing SaaS Step 4: configuring WireGuard and router tunnel keys";
         {vpn_script}
         {watchdog_script}
@@ -2790,7 +2821,7 @@ def router_provision_script(request, token):
         :log info "Billing SaaS Step 7: enabling and verifying Hotspot RADIUS authentication";
         :foreach hp in=[/ip hotspot profile find name={hotspot_profile_name}] do={{ :do {{ /ip hotspot profile set $hp use-radius={hotspot_radius_flags} radius-accounting={hotspot_radius_flags} }} on-error={{ :log warning "Expressnet: hotspot radius flag update failed" }} }}
         {radius_verify_script}
-        {pppoe_script}
+        :log info "Billing SaaS: PPPoE and Hotspot servers will be bound after router config is pulled and customer ports are assigned.";
         :log info "Billing SaaS Step 7b: locking down management plane";
         {mgmt_lockdown_script}
         :log info "Billing SaaS Step 8: syncing package profiles by service type";

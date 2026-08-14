@@ -147,6 +147,11 @@ export default function MikrotikSettings() {
   };
 
   const togglePort = (portName) => {
+    const port = (routerStatus?.interfaces || []).find((item) => item.name === portName);
+    if (port && port.customer_assignable === false) {
+      toast.error(`${portLabel(portName)} is the WAN/uplink port. Choose a customer LAN port.`);
+      return;
+    }
     setSelectedPorts((current) => (
       current.includes(portName)
         ? current.filter((name) => name !== portName)
@@ -261,7 +266,7 @@ export default function MikrotikSettings() {
         <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 className="text-base font-bold text-slate-950">Router configurations</h2>
-            <p className="mt-1 text-sm text-slate-600">Live router configurations are loaded from the router before this step opens. Select PPPoE, Hotspot, or both, choose the physical ports, then assign.</p>
+            <p className="mt-1 text-sm text-slate-600">Select one service for the customer ports. Choosing PPPoE + Hotspot applies both services to every selected port.</p>
           </div>
         </div>
 
@@ -324,16 +329,23 @@ export default function MikrotikSettings() {
                 {(routerStatus.interfaces || []).map((item) => {
                   const selected = selectedPorts.includes(item.name);
                   const assigned = routerStatus.assignments?.[item.name];
+                  const blocked = item.customer_assignable === false;
                   return (
                     <button
                       key={item.id || item.name}
                       type="button"
-                      className={`h-13 rounded-[20px] border border-slate-400 bg-white px-4 py-4 text-sm font-semibold text-slate-700 transition hover:border-[var(--app-accent)] ${assigned ? 'ring-2 ring-[var(--app-focus-ring)]' : ''}`}
-                      style={selected ? { borderColor: 'var(--app-accent)', background: 'var(--app-accent)', color: 'var(--app-accent-contrast)' } : undefined}
+                      className={`min-h-16 rounded-[20px] border border-slate-400 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:border-[var(--app-accent)] disabled:cursor-not-allowed disabled:opacity-50 ${assigned ? 'ring-2 ring-[var(--app-focus-ring)]' : ''}`}
+                      style={selected ? { borderColor: 'var(--app-accent)', background: 'var(--app-accent)', color: 'var(--app-accent-contrast)' } : assigned ? { borderColor: 'var(--app-accent)', background: 'var(--app-accent-muted)' } : undefined}
                       onClick={() => togglePort(item.name)}
-                      title={assigned ? `${portLabel(item.name)} assigned to ${serviceLabel(assigned.service_type)}` : portLabel(item.name)}
+                      disabled={blocked}
+                      title={blocked ? `${portLabel(item.name)} is ${item.assignment_warning || 'not assignable'}` : assigned ? `${portLabel(item.name)} assigned to ${serviceLabel(assigned.service_type)}` : portLabel(item.name)}
                     >
-                      {portLabel(item.name)}
+                      <span className="block">{portLabel(item.name)}{blocked ? ' - WAN' : ''}</span>
+                      {assigned && (
+                        <span className="mt-1 block text-[11px] font-bold uppercase text-[var(--app-accent)]">
+                          {serviceLabel(assigned.service_type)} assigned
+                        </span>
+                      )}
                     </button>
                   );
                 })}
@@ -347,7 +359,7 @@ export default function MikrotikSettings() {
 
               <div className="mt-6 flex justify-end">
                 <button type="button" className="h-11 min-w-56 rounded-full border border-slate-400 bg-white px-6 text-sm font-semibold text-slate-800 transition hover:border-[var(--app-accent)] hover:text-[var(--app-accent)] disabled:cursor-not-allowed disabled:opacity-50" onClick={assignPorts} disabled={assigning || selectedPorts.length === 0}>
-                  {assigning ? 'Assigning...' : `Assign ${serviceLabel(selectedService)}`}
+                  {assigning ? 'Assigning...' : `Assign ${serviceLabel(selectedService)} to selected ports`}
                 </button>
               </div>
             </div>
