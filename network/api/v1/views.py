@@ -1019,19 +1019,16 @@ def _public_pay_impl(request, tenant_id):
     mac_address = ""
     if service_type == "pppoe":
         username = str(data.get("username") or "").strip()
-        if not username:
-            return ok({"message": "PPPoE username is required"}, 400)
-        customer = next(
-            (
-                item
-                for item in list_children(f"tenants/{tenant_id}/customers")
-                if str(item.get("username") or "").lower() == username.lower()
-            ),
-            None,
-        )
-        if not customer:
-            return ok({"message": "PPPoE account not found. Please contact your ISP."}, 404)
-        phone = normalize_phone(data.get("phone") or customer.get("phone"))
+        if username:
+            customer = next(
+                (
+                    item
+                    for item in list_children(f"tenants/{tenant_id}/customers")
+                    if str(item.get("username") or "").lower() == username.lower()
+                ),
+                None,
+            )
+        phone = normalize_phone(data.get("phone") or (customer or {}).get("phone"))
     elif service_type == "tv":
         mac_address = normalize_mac(data.get("mac_address"))
         if not mac_address:
@@ -1050,7 +1047,7 @@ def _public_pay_impl(request, tenant_id):
             "paid_at": None,
             "initiated_at": iso_now(),
             "service_type": service_type,
-            "username": customer.get("username") if customer else None,
+            "username": (customer or {}).get("username") or (username if service_type == "pppoe" else None),
             "mac_address": mac_address,
             "router_ip": router_ip,
             "router_mac": router_mac,
@@ -1075,7 +1072,7 @@ def _public_pay_impl(request, tenant_id):
                 "package_id": data["package_id"],
                 "package_name": pkg.get("name"),
                 "service_type": service_type,
-                "username": customer.get("username") if customer else None,
+                "username": (customer or {}).get("username") or (username if service_type == "pppoe" else None),
                 "mac_address": mac_address,
                 "router_ip": router_ip,
                 "router_mac": router_mac,
@@ -1415,7 +1412,16 @@ def customer_provision(request, customer_id):
             from billing_api.radius_provisioning import upsert_pg_customer, sync_radius_customer
             from billing_api.models import Tenant as TenantModel
             tenant_obj = TenantModel.objects.get(pk=request.tenant["id"])
-            pg_customer = upsert_pg_customer(tenant_obj, customer)
+            pg_customer = upsert_pg_customer(
+                tenant_obj,
+                {
+                    **customer,
+                    "service_type": service_type,
+                    "status": customer.get("status") or "active",
+                    "provisioning_status": provisioning_status,
+                    "provisioning_message": provisioning_message,
+                },
+            )
             if pg_customer:
                 sync_radius_customer(tenant_obj, pg_customer)
         except Exception:

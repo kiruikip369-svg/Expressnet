@@ -179,7 +179,7 @@ export default function CustomerPortal() {
     },
     pppoe: {
       title: 'PPPoE access',
-      description: 'Enter your PPPoE username. Your account will be reactivated after payment.',
+      description: 'Enter your PPPoE username to renew, or leave it blank to get a new account after payment.',
       icon: PlugZap,
     },
     tv: {
@@ -198,10 +198,6 @@ export default function CustomerPortal() {
   const pay = async () => {
     if (!phone.trim()) {
       toast.error('Enter your phone number');
-      return;
-    }
-    if (serviceType === 'pppoe' && !pppoeUsername.trim()) {
-      toast.error('Enter your PPPoE username');
       return;
     }
     if (serviceType === 'tv' && !macAddress.trim()) {
@@ -474,13 +470,13 @@ export default function CustomerPortal() {
               <p className="mb-4 text-sm text-slate-600">{serviceCopy[serviceType].description}</p>
               {serviceType === 'pppoe' && (
                 <div className="mb-4">
-                  <label className="form-label" htmlFor="pppoeUsername">PPPoE username</label>
+                  <label className="form-label" htmlFor="pppoeUsername">PPPoE username optional</label>
                   <div className="relative mt-1">
                     <PlugZap className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
                     <input
                       id="pppoeUsername"
                       className="form-input mt-0 pl-10"
-                      placeholder="Your PPPoE username"
+                      placeholder="Leave blank for a new account"
                       value={pppoeUsername}
                       onChange={(event) => setPppoeUsername(event.target.value)}
                     />
