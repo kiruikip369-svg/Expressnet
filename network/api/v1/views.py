@@ -18,7 +18,7 @@ from django.core.mail import send_mail
 from django.core.paginator import Paginator
 from django.db import close_old_connections, connection
 from django.db.utils import OperationalError
-from django.db.models import Count, Sum
+from django.db.models import Count, Q, Sum
 from django.http import FileResponse, Http404, HttpResponse
 from django.shortcuts import redirect
 from django.utils import timezone
@@ -29,7 +29,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
 
 from billing_api.auth import admin_required, tenant_required
-from billing_api.models import AdminUser, Customer, InternetPackage, Payment, SubscriptionPayment, Tenant, TenantSubscription, Ticket, User
+from billing_api.models import AdminUser, Customer, InternetPackage, Payment, SubscriptionPayment, Tenant, TenantSubscription, Ticket, User, Voucher
 from billing_api.services import (
     admin_token,
     check_password,
@@ -1185,18 +1185,27 @@ def public_voucher_login(request, tenant_id):
     password = str(data.get("password") or "").strip()
     if not code and (not username or not password):
         return ok({"message": "Voucher code is required"}, 400)
-    tenant = ref(f"tenants/{tenant_id}").get() or {}
-    vouchers = list_children(f"tenants/{tenant_id}/vouchers")
+    tenant_obj = Tenant.objects.filter(pk=tenant_id).first()
+    if not tenant_obj:
+        return ok({"message": "Tenant not found"}, 404)
+    tenant = {"id": str(tenant_obj.pk), **tenant_obj.as_dict()}
     if code:
-        voucher = next((item for item in vouchers if str(item.get("code") or "").lower() == code.lower()), None)
+        voucher_obj = Voucher.objects.filter(tenant=tenant_obj, code__iexact=code).first()
     else:
-        voucher = next((item for item in vouchers if str(item.get("username") or "").lower() == username.lower() and str(item.get("password") or "") == password), None)
+        voucher_obj = Voucher.objects.filter(tenant=tenant_obj, username__iexact=username, password=password).first()
+    voucher = voucher_obj.as_dict() if voucher_obj else None
     access_payload = None
     package = None
     credential_kind = "voucher"
     credential_label = code or username
-    if voucher and voucher.get("status") == "active":
-        package = ref(f"tenants/{tenant_id}/packages/{voucher.get('package_id')}").get() if voucher.get("package_id") else None
+    reject_reason = "not_found"
+    if voucher and str(voucher.get("status") or "").strip().lower() == "active":
+        package_obj = None
+        if voucher_obj and voucher_obj.package_id and str(voucher_obj.package_id).isdigit():
+            package_obj = InternetPackage.objects.filter(tenant=tenant_obj, pk=voucher_obj.package_id).first()
+        if not package_obj and voucher.get("package"):
+            package_obj = InternetPackage.objects.filter(tenant=tenant_obj, name=voucher.get("package")).first()
+        package = package_obj.as_dict() if package_obj else None
         expires_at = utcnow() + package_duration_delta(package)
         access_payload = {
             "name": voucher.get("username"),
@@ -1213,25 +1222,31 @@ def public_voucher_login(request, tenant_id):
             "provisioning_message": "Voucher validated by captive portal",
         }
     elif not code:
-        customer = next(
-            (
-                item
-                for item in list_children(f"tenants/{tenant_id}/customers")
-                if str(item.get("username") or "").lower() == username.lower()
-                and str(item.get("password") or "") == password
-                and str(item.get("service_type") or "hotspot").lower() == "hotspot"
-            ),
-            None,
-        )
-        if customer and customer.get("status") == "active":
-            expiry = parse_date(customer.get("expiry_date"))
-            now = utcnow()
-            if expiry and expiry.tzinfo is None:
-                now = now.replace(tzinfo=None)
-            if expiry and expiry < now:
+        customer_obj = Customer.objects.filter(tenant=tenant_obj, username__iexact=username).first()
+        customer = None
+        if customer_obj and str(customer_obj.password or "").strip() == password:
+            customer = customer_obj.as_dict()
+            customer_service_type = str(customer_obj.service_type or "hotspot").strip().lower()
+            customer_status = str(customer_obj.status or "").strip().lower()
+            if customer_service_type != "hotspot":
+                reject_reason = f"service_type_is_{customer_service_type or 'missing'}"
                 customer = None
+            elif customer_status != "active":
+                reject_reason = f"status_is_{customer_status or 'missing'}"
+                customer = None
+            else:
+                expiry = parse_date(customer.get("expiry_date"))
+                now = utcnow()
+                if expiry and expiry.tzinfo is None:
+                    now = now.replace(tzinfo=None)
+                if expiry and expiry < now:
+                    reject_reason = "expired"
+                    customer = None
+        else:
+            reject_reason = "password_mismatch" if customer_obj else "customer_not_found"
         if customer:
-            package = find_child_by_field(f"tenants/{tenant_id}/packages", "name", customer.get("package"))
+            package_obj = InternetPackage.objects.filter(tenant=tenant_obj, name=customer.get("package")).first()
+            package = package_obj.as_dict() if package_obj else None
             access_payload = {
                 "name": customer.get("name"),
                 "phone": customer.get("phone") or "",
@@ -1245,8 +1260,49 @@ def public_voucher_login(request, tenant_id):
                 "speed": (package or {}).get("speed"),
             }
             credential_kind = "customer"
+        else:
+            payment_obj = (
+                Payment.objects.filter(
+                    tenant=tenant_obj,
+                    access_password=password,
+                    status__iexact="success",
+                    service_type__iexact="hotspot",
+                )
+                .filter(Q(access_username__iexact=username) | Q(extra__username__iexact=username))
+                .order_by("-id")
+                .first()
+            )
+            payment = payment_obj.as_dict() if payment_obj else None
+            if payment:
+                expiry = parse_date(payment.get("access_expires_at"))
+                now = utcnow()
+                if expiry and expiry.tzinfo is None:
+                    now = now.replace(tzinfo=None)
+                if expiry and expiry < now:
+                    reject_reason = "paid_access_expired"
+                    payment = None
+            if payment:
+                package_obj = InternetPackage.objects.filter(tenant=tenant_obj, name=payment.get("package_name")).first()
+                package = package_obj.as_dict() if package_obj else None
+                access_payload = {
+                    "name": payment.get("customer_name") or payment.get("phone") or username,
+                    "phone": payment.get("phone") or "",
+                    "username": payment.get("access_username") or payment.get("username"),
+                    "password": payment.get("access_password"),
+                    "package": payment.get("package_name"),
+                    "package_name": payment.get("package_name"),
+                    "service_type": "hotspot",
+                    "status": "active",
+                    "expiry_date": payment.get("access_expires_at"),
+                    "speed": (package or {}).get("speed"),
+                    "last_payment_id": payment.get("id"),
+                    "last_payment_code": payment.get("payment_code") or payment.get("daraja_receipt_number") or payment.get("mpesa_receipt_number"),
+                    "provisioning_status": "radius_ready" if tenant.get("radius_enabled") else "active",
+                    "provisioning_message": "Paid access recovered from payment record",
+                }
+                credential_kind = "paid_access"
     if not access_payload:
-        logger.info("Captive login rejected tenant=%s kind=%s code=%s username=%s reason=invalid_inactive_or_expired", tenant_id, credential_kind, code, username)
+        logger.info("Captive login rejected tenant=%s kind=%s code=%s username=%s reason=%s", tenant_id, credential_kind, code, username, reject_reason)
         wants_html = _is_captive_form_request(request, data) or ("text/html" in str(request.headers.get("Accept") or "") and not request.headers.get("X-Requested-With"))
         back = f"/api/captive/{html.escape(str(tenant_id))}"
         if code:
@@ -1263,7 +1319,6 @@ def public_voucher_login(request, tenant_id):
         try:
             from billing_api.radius_provisioning import sync_radius_customer, upsert_pg_customer, upsert_pg_package
 
-            tenant_obj = Tenant.objects.get(pk=tenant_id)
             if package:
                 upsert_pg_package(tenant_obj, package)
             pg_customer = upsert_pg_customer(tenant_obj, access_payload)
@@ -1304,8 +1359,10 @@ def public_voucher_login(request, tenant_id):
             try:
                 _queue_router_command_for_tenant(tenant_id, {"type": "sync_hotspot_login", "script": script}, tenant)
                 router_status = "queued"
-                if voucher and voucher.get("id"):
-                    ref(f"tenants/{tenant_id}/vouchers/{voucher['id']}").update({"router_status": "queued", "router_error": ""})
+                if voucher_obj:
+                    voucher_obj.router_status = "queued"
+                    voucher_obj.router_error = ""
+                    voucher_obj.save(update_fields=["router_status", "router_error"])
             except Exception as exc:
                 logger.warning("Captive router queue failed tenant=%s kind=%s credential=%s error=%s", tenant_id, credential_kind, credential_label, exc)
     result = {
