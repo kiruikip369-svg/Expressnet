@@ -2212,13 +2212,11 @@ def _wireguard_server_config(tenant):
         tenant,
         ("WG_SERVER_PUBLIC_KEY", "WIREGUARD_SERVER_PUBLIC_KEY", "VPN_SERVER_PUBLIC_KEY"),
         ("wg_server_public_key", "wireguard_server_public_key", "vpn_server_public_key"),
-        "KOt1dcW3fSwwBy8qPuc2Z4/aiu7jN1dSdG48W0wGAQ0=",
     )
     endpoint = _config_value(
         tenant,
         ("WG_SERVER_ENDPOINT", "WG_SERVER_PUBLIC_IP", "WIREGUARD_SERVER_ENDPOINT", "WIREGUARD_ENDPOINT", "VPN_SERVER_ENDPOINT"),
         ("wg_server_endpoint", "wg_server_public_ip", "wireguard_server_endpoint", "vpn_server_endpoint"),
-        "vpn.Expressnetbilling.com",
     )
     port = _config_value(
         tenant,
@@ -2230,13 +2228,14 @@ def _wireguard_server_config(tenant):
         tenant,
         ("WG_SERVER_TUNNEL_IP", "WIREGUARD_SERVER_TUNNEL_IP", "VPN_SERVER_TUNNEL_IP"),
         ("wg_server_tunnel_ip", "wireguard_server_tunnel_ip", "vpn_server_tunnel_ip"),
-        "10.9.0.1",
     ).split("/")[0]
     missing = []
     if not public_key:
         missing.append("WG_SERVER_PUBLIC_KEY")
     if not endpoint:
         missing.append("WG_SERVER_ENDPOINT")
+    if not tunnel_ip:
+        missing.append("WG_SERVER_TUNNEL_IP")
     return {
         "public_key": public_key,
         "endpoint": endpoint,
