@@ -1110,6 +1110,8 @@ def configure_router_port(tenant, interface_name, service_type, profile_name="de
         
         servers = list(api.path("ip", "hotspot").select())
         existing = next((item for item in servers if item.get("interface") == bind_interface), None)
+        if not existing:
+            existing = next((item for item in servers if item.get("name") == "Expressnet-hotspot"), None)
         fields = {
             "name": "Expressnet-hotspot",
             "interface": bind_interface,
@@ -1120,6 +1122,12 @@ def configure_router_port(tenant, interface_name, service_type, profile_name="de
         }
         if existing and existing.get(".id"):
             api.path("ip", "hotspot").update(**{".id": existing[".id"], **fields})
+            for server in servers:
+                if server.get(".id") and server.get(".id") != existing[".id"] and server.get("name") == "Expressnet-hotspot":
+                    try:
+                        api.path("ip", "hotspot").update(**{".id": server[".id"], "disabled": "yes"})
+                    except Exception:
+                        pass
             return {"updated": True, "service_type": service_type, "interface": interface_name, "bound_interface": bind_interface, "profile": hotspot_profile, "portal_url": captive.get("portal_url"), "wireless_security_profile": wireless_security_profile, "note": bridge_note}
         api.path("ip", "hotspot").add(**fields)
         return {"created": True, "service_type": service_type, "interface": interface_name, "bound_interface": bind_interface, "profile": hotspot_profile, "portal_url": captive.get("portal_url"), "wireless_security_profile": wireless_security_profile, "note": bridge_note}
@@ -1182,7 +1190,10 @@ def _build_port_command_script(interface_name, service_type, profile_name, porta
         f'  :do {{ /interface wireless security-profiles add name="billing-saas-open" mode=none authentication-types="" wpa-pre-shared-key="" wpa2-pre-shared-key="" supplicant-identity="billing-saas" }} on-error={{ /interface wireless security-profiles set [find name="billing-saas-open"] mode=none authentication-types="" wpa-pre-shared-key="" wpa2-pre-shared-key="" supplicant-identity="billing-saas" }}; '
         f'  :do {{ /interface wireless set [find name="{interface_name}"] security-profile="billing-saas-open" disabled=no }} on-error={{}}; '
         f'  :local billingHs [/ip hotspot find interface="{bridge_name}"]; '
-        f'  :if ([:len $billingHs] > 0) do={{ /ip hotspot set $billingHs name="Expressnet-hotspot" address-pool=Expressnet-pool profile="Expressnet-profile" disabled=no }} else={{ /ip hotspot add name="Expressnet-hotspot" interface="{bridge_name}" address-pool=Expressnet-pool profile="Expressnet-profile" disabled=no }}; '
+        f'  :if ([:len $billingHs] = 0) do={{ :set billingHs [/ip hotspot find name="Expressnet-hotspot"] }}; '
+        f'  :if ([:len $billingHs] > 0) do={{ /ip hotspot set $billingHs name="Expressnet-hotspot" interface="{bridge_name}" address-pool=Expressnet-pool profile="Expressnet-profile" disabled=no }} else={{ /ip hotspot add name="Expressnet-hotspot" interface="{bridge_name}" address-pool=Expressnet-pool profile="Expressnet-profile" disabled=no }}; '
+        f'  :foreach hs in=[/ip hotspot find name="Expressnet-hotspot"] do={{ :if ([/ip hotspot get $hs interface] != "{bridge_name}") do={{ /ip hotspot disable $hs }} }}; '
+        f'  :if ([:len [/ip hotspot find interface="{bridge_name}" disabled=no]] = 0) do={{ :log error "Billing SaaS: Hotspot server is not active on billing bridge"; :error "Hotspot server missing on billing bridge" }}; '
     )
 
     cleanup_block = ':log info "Billing SaaS: preserving existing PPP secrets and Hotspot users"; '
