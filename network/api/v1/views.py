@@ -1673,14 +1673,21 @@ def vouchers(request, voucher_id=None):
         ref(f"{voucher_path}/{voucher_id}").update(updates)
         return ok({"success": True, "message": "Voucher expired", "voucher": {"id": voucher_id, **voucher, **updates}})
     if method(request, "DELETE") and voucher_id:
-        voucher = ref(f"{voucher_path}/{voucher_id}").get()
-        if not voucher:
+        voucher_obj = Voucher.objects.filter(tenant_id=tenant_id, pk=voucher_id).first()
+        if not voucher_obj:
             return ok({"message": "Voucher not found"}, 404)
+        voucher = voucher_obj.as_dict()
         router_error = None
         router_queued = False
         script = _voucher_delete_script(voucher)
         try:
-            ref(f"{voucher_path}/{voucher_id}").delete()
+            voucher_obj.delete()
+            try:
+                from core.services.shared import backup_delete
+
+                backup_delete(f"{voucher_path}/{voucher_id}")
+            except Exception:
+                logger.warning("Voucher backup delete failed tenant=%s voucher=%s", tenant_id, voucher_id, exc_info=True)
         except Exception as exc:
             logger.exception("Voucher database delete failed tenant=%s voucher=%s", tenant_id, voucher_id)
             return ok({"message": f"Voucher could not be deleted: {exc}"}, 500)
@@ -1700,6 +1707,7 @@ def vouchers(request, voucher_id=None):
             response["router_status"] = "queued"
         if router_error:
             response["router_error"] = router_error
+            response["message"] = "Voucher deleted, but router cleanup could not be completed automatically."
         return ok(response)
     data = body(request)
     package_id = str(data.get("package_id") or "")

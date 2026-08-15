@@ -9,6 +9,10 @@ function packageType(pkg) {
   return String(pkg?.service_type || pkg?.package_type || pkg?.type || 'hotspot').trim().toLowerCase();
 }
 
+function errorMessage(error, fallback) {
+  return error.response?.data?.message || error.response?.data?.error || error.response?.data?.detail || error.message || fallback;
+}
+
 export default function Vouchers() {
   const [vouchers, setVouchers] = useState([]);
   const [packages, setPackages] = useState([]);
@@ -27,7 +31,7 @@ export default function Vouchers() {
       setVouchers(Array.isArray(voucherData) ? voucherData : voucherData?.results || []);
       setPackages((Array.isArray(packageData) ? packageData : packageData?.results || []).filter((item) => packageType(item) === 'hotspot'));
     } catch (error) {
-      toast.error(error.response?.data?.message || 'Failed to load vouchers');
+      toast.error(errorMessage(error, 'Failed to load vouchers'));
     }
   };
 
@@ -53,7 +57,7 @@ export default function Vouchers() {
       setModalOpen(false);
       toast.success(`Voucher ${data.voucher.code} created`);
     } catch (error) {
-      toast.error(error.response?.data?.message || 'Failed to create voucher');
+      toast.error(errorMessage(error, 'Failed to create voucher'));
     } finally {
       setCreating(false);
     }
@@ -68,7 +72,7 @@ export default function Vouchers() {
       setVouchers((current) => current.map((item) => (item.id === voucher.id ? { ...item, ...data.voucher } : item)));
       toast.success('Voucher expired');
     } catch (error) {
-      toast.error(error.response?.data?.message || 'Failed to expire voucher');
+      toast.error(errorMessage(error, 'Failed to expire voucher'));
     } finally {
       setBusyId('');
     }
@@ -88,7 +92,7 @@ export default function Vouchers() {
         toast.success('Voucher deleted');
       }
     } catch (error) {
-      toast.error(error.response?.data?.message || 'Failed to delete voucher');
+      toast.error(errorMessage(error, 'Failed to delete voucher'));
     } finally {
       setBusyId('');
     }
@@ -128,7 +132,7 @@ export default function Vouchers() {
         toast.success(`${deletedIds.length} voucher${deletedIds.length === 1 ? '' : 's'} deleted`);
       }
     } catch (error) {
-      toast.error(error.response?.data?.message || 'Failed to delete selected vouchers');
+      toast.error(errorMessage(error, 'Failed to delete selected vouchers'));
       await load();
     } finally {
       setBusyId('');
