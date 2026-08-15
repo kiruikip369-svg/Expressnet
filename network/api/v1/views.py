@@ -2698,6 +2698,18 @@ def router_provision_script(request, token):
         if radius_enabled_for_router
         else ':log info "Billing SaaS: local Hotspot profile does not use RADIUS because local agent mode is active";'
     )
+    hotspot_server_script = f"""
+        :log info "Billing SaaS: binding Hotspot server to billing bridge";
+        :local billingHotspotServer [/ip hotspot find interface=$billingBridge];
+        :if ([:len $billingHotspotServer] = 0) do={{ :set billingHotspotServer [/ip hotspot find name="{hotspot_server_name}"] }}
+        :if ([:len $billingHotspotServer] > 0) do={{
+            /ip hotspot set $billingHotspotServer name="{hotspot_server_name}" interface=$billingBridge address-pool={hotspot_pool_name} profile={hotspot_profile_name} disabled=no
+        }} else={{
+            /ip hotspot add name="{hotspot_server_name}" interface=$billingBridge address-pool={hotspot_pool_name} profile={hotspot_profile_name} disabled=no
+        }}
+        :foreach hs in=[/ip hotspot find name="{hotspot_server_name}"] do={{ :if ([/ip hotspot get $hs interface] != $billingBridge) do={{ /ip hotspot disable $hs }} }}
+        :if ([:len [/ip hotspot find interface=$billingBridge disabled=no]] = 0) do={{ :log error "Billing SaaS: Hotspot server is not active on billing bridge"; :error "Hotspot server missing on billing bridge" }}
+        """
 
     try:
         ref(f"tenants/{tenant_id}").update({
@@ -2875,6 +2887,7 @@ def router_provision_script(request, token):
         {captive_hosts_script}
         {walled_garden_fqdn_script}
         {hotspot_file_script}
+        {hotspot_server_script}
         :log info "Billing SaaS Step 4: configuring WireGuard and router tunnel keys";
         {vpn_script}
         {watchdog_script}
@@ -2884,7 +2897,8 @@ def router_provision_script(request, token):
         :log info "Billing SaaS Step 7: enabling and verifying Hotspot RADIUS authentication";
         :foreach hp in=[/ip hotspot profile find name={hotspot_profile_name}] do={{ :do {{ /ip hotspot profile set $hp use-radius={hotspot_radius_flags} radius-accounting={hotspot_radius_flags} }} on-error={{ :log warning "Expressnet: hotspot radius flag update failed" }} }}
         {radius_verify_script}
-        :log info "Billing SaaS: PPPoE and Hotspot servers will be bound after router config is pulled and customer ports are assigned.";
+        :foreach hs in=[/ip hotspot find interface=$billingBridge] do={{ :do {{ /ip hotspot set $hs profile={hotspot_profile_name} disabled=no }} on-error={{ :log warning "Expressnet: hotspot server radius profile update failed" }} }}
+        :log info "Billing SaaS: Hotspot server is active on the billing bridge.";
         :log info "Billing SaaS Step 7b: locking down management plane";
         {mgmt_lockdown_script}
         :log info "Billing SaaS Step 8: syncing package profiles by service type";
