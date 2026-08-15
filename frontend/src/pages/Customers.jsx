@@ -194,8 +194,29 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
   const closeModal = () => {
     setModalOpen(false);
     setEditingId(null);
-    setForm(initialForm);
+    setForm({ ...initialForm, service_type: serviceLocked || initialForm.service_type });
     setErrors({});
+  };
+
+  const customerPayload = () => {
+    const serviceType = serviceLocked || form.service_type || 'pppoe';
+    const payload = {
+      name: form.name,
+      phone: form.phone,
+      username: form.username,
+      mikrotik_router_id: form.mikrotik_router_id,
+      package: form.package_name,
+      service_type: serviceType,
+      provision_mikrotik: form.provision_mikrotik,
+    };
+    if (!isHotspotOnlyPage) {
+      payload.location = form.location;
+      payload.technician = form.technician;
+      payload.router_serial_number = form.router_serial_number;
+      payload.support = form.support;
+    }
+    if (form.password.trim()) payload.password = form.password;
+    return payload;
   };
 
   const addCustomer = async (event) => {
@@ -205,23 +226,13 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
     setSaving(true);
     try {
       if (editingId) {
-        const payload = {
-          name: form.name,
-          phone: form.phone,
-          location: form.location,
-          username: form.username,
-          technician: form.technician,
-          router_serial_number: form.router_serial_number,
-          mikrotik_router_id: form.mikrotik_router_id,
-          support: form.support,
-          package: form.package_name,
-          service_type: form.service_type || 'pppoe',
-        };
-        if (form.password.trim()) payload.password = form.password;
-        await api.patch(`/customers/${editingId}`, payload);
+        await api.patch(`/customers/${editingId}`, customerPayload());
         toast.success('Customer updated');
       } else {
-        await api.post('/customers/add', { ...form, service_type: serviceLocked || form.service_type || 'pppoe' });
+        await api.post('/customers/add', {
+          ...customerPayload(),
+          package_name: form.package_name,
+        });
         toast.success('Customer added and credentials sent');
       }
       closeModal();
