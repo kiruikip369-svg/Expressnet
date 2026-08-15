@@ -58,6 +58,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
   const [form, setForm] = useState(initialForm);
   const [errors, setErrors] = useState({});
   const [editingId, setEditingId] = useState(null);
+  const isHotspotOnlyPage = serviceLocked === 'hotspot';
 
   const packageMap = useMemo(() => {
     return packages.reduce((map, item) => {
@@ -113,10 +114,17 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
       if (statusFilter === 'static' && serviceType !== 'static') return false;
       if (statusFilter === 'paused' && !['paused', 'suspended', 'inactive'].includes(String(customer.status || '').toLowerCase())) return false;
       if (statusFilter === 'offline' && !['offline', 'expired'].includes(String(customer.status || '').toLowerCase())) return false;
-      const haystack = `${customer.name || ''} ${customer.phone || ''} ${customer.location || ''} ${customer.username || ''} ${customer.package || ''} ${customer.technician || ''}`.toLowerCase();
+      const haystack = [
+        customer.name,
+        customer.phone,
+        isHotspotOnlyPage ? '' : customer.location,
+        customer.username,
+        customer.package,
+        isHotspotOnlyPage ? '' : customer.technician,
+      ].join(' ').toLowerCase();
       return haystack.includes(search.toLowerCase());
     });
-  }, [scopedCustomers, search, statusFilter]);
+  }, [isHotspotOnlyPage, scopedCustomers, search, statusFilter]);
 
   const userFilterTabs = useMemo(() => ([
     ['all', 'All', userStats.total, Users],
@@ -262,7 +270,9 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
   };
 
   const exportCsv = () => {
-    const headers = ['name', 'phone', 'location', 'username', 'package', 'service_type', 'technician', 'router_serial_number', 'mikrotik_router_id', 'support', 'status', 'expiry_date'];
+    const headers = isHotspotOnlyPage
+      ? ['name', 'phone', 'username', 'package', 'service_type', 'mikrotik_router_id', 'status', 'expiry_date']
+      : ['name', 'phone', 'location', 'username', 'package', 'service_type', 'technician', 'router_serial_number', 'mikrotik_router_id', 'support', 'status', 'expiry_date'];
     const csv = [headers.join(','), ...filteredCustomers.map((item) => headers.map((key) => JSON.stringify(item[key] ?? '')).join(','))].join('\n');
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
     const link = document.createElement('a');
@@ -385,7 +395,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
               className="form-input mt-0 pl-9"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search name, phone, location, username, package"
+              placeholder={isHotspotOnlyPage ? 'Search name, phone, username, package' : 'Search name, phone, location, username, package'}
             />
           </label>
           <div className="flex gap-4 text-xs text-slate-500">
@@ -396,15 +406,15 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
       </section>
 
       <div className="table-shell overflow-x-auto">
-        <table className="min-w-[1120px] divide-y divide-slate-200">
+        <table className={`${isHotspotOnlyPage ? 'min-w-[920px]' : 'min-w-[1120px]'} divide-y divide-slate-200`}>
           <thead className="table-head">
             <tr>
               <th className="px-3 py-2">Name</th>
               <th className="px-3 py-2">Phone</th>
-              <th className="px-3 py-2">Location</th>
+              {!isHotspotOnlyPage && <th className="px-3 py-2">Location</th>}
               <th className="px-3 py-2">Username</th>
               <th className="px-3 py-2">Package</th>
-              <th className="px-3 py-2">Technician</th>
+              {!isHotspotOnlyPage && <th className="px-3 py-2">Technician</th>}
               <th className="px-3 py-2">MikroTik</th>
               <th className="px-3 py-2">Expiry</th>
               <th className="px-3 py-2">Status</th>
@@ -413,17 +423,17 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
           </thead>
           <tbody className="divide-y divide-slate-100">
             {loading ? (
-              <tr><td className="table-cell text-slate-500" colSpan="10">Loading customers...</td></tr>
+              <tr><td className="table-cell text-slate-500" colSpan={isHotspotOnlyPage ? 8 : 10}>Loading customers...</td></tr>
             ) : filteredCustomers.length === 0 ? (
-              <tr><td className="table-cell text-slate-500" colSpan="10">No customers found.</td></tr>
+              <tr><td className="table-cell text-slate-500" colSpan={isHotspotOnlyPage ? 8 : 10}>No customers found.</td></tr>
             ) : filteredCustomers.map((customer) => (
               <tr key={customer.id}>
                 <td className="table-cell px-3 font-medium text-slate-900">{customer.name}</td>
                 <td className="table-cell px-3">{customer.phone}</td>
-                <td className="table-cell px-3">{customer.location || '-'}</td>
+                {!isHotspotOnlyPage && <td className="table-cell px-3">{customer.location || '-'}</td>}
                 <td className="table-cell px-3">{customer.username}</td>
                 <td className="table-cell px-3">{customer.package || '-'}</td>
-                <td className="table-cell px-3">{customer.technician || '-'}</td>
+                {!isHotspotOnlyPage && <td className="table-cell px-3">{customer.technician || '-'}</td>}
                 <td className="table-cell px-3">
                   <div className="space-y-1">
                     <p className="font-medium text-slate-900">{mikrotikRouterMap[customer.mikrotik_router_id]?.label || customer.mikrotik_router_id || '-'}</p>
@@ -476,10 +486,12 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
                 <input id="phone" name="phone" className="form-input" value={form.phone} onChange={update} />
                 {errors.phone && <p className="form-error">{errors.phone}</p>}
               </div>
-              <div>
-                <label className="form-label" htmlFor="location">Location</label>
-                <input id="location" name="location" className="form-input" value={form.location} onChange={update} />
-              </div>
+              {!isHotspotOnlyPage && (
+                <div>
+                  <label className="form-label" htmlFor="location">Location</label>
+                  <input id="location" name="location" className="form-input" value={form.location} onChange={update} />
+                </div>
+              )}
               {editingId && (
                 <>
                   <div>
@@ -502,14 +514,18 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
                   </div>
                 </>
               )}
-              <div>
-                <label className="form-label" htmlFor="technician">Technician who attended</label>
-                <input id="technician" name="technician" className="form-input" value={form.technician} onChange={update} />
-              </div>
-              <div>
-                <label className="form-label" htmlFor="router_serial_number">Router serial number</label>
-                <input id="router_serial_number" name="router_serial_number" className="form-input" value={form.router_serial_number} onChange={update} />
-              </div>
+              {!isHotspotOnlyPage && (
+                <>
+                  <div>
+                    <label className="form-label" htmlFor="technician">Technician who attended</label>
+                    <input id="technician" name="technician" className="form-input" value={form.technician} onChange={update} />
+                  </div>
+                  <div>
+                    <label className="form-label" htmlFor="router_serial_number">Router serial number</label>
+                    <input id="router_serial_number" name="router_serial_number" className="form-input" value={form.router_serial_number} onChange={update} />
+                  </div>
+                </>
+              )}
               <div>
                 <label className="form-label" htmlFor="mikrotik_router_id">Create in MikroTik</label>
                 <select id="mikrotik_router_id" name="mikrotik_router_id" className="form-input" value={form.mikrotik_router_id} onChange={update}>
@@ -522,10 +538,12 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
                 </select>
                 {errors.mikrotik_router_id && <p className="form-error">{errors.mikrotik_router_id}</p>}
               </div>
-              <div>
-                <label className="form-label" htmlFor="support">Support</label>
-                <input id="support" name="support" className="form-input" value={form.support} onChange={update} />
-              </div>
+              {!isHotspotOnlyPage && (
+                <div>
+                  <label className="form-label" htmlFor="support">Support</label>
+                  <input id="support" name="support" className="form-input" value={form.support} onChange={update} />
+                </div>
+              )}
               {!serviceLocked && (
                 <div className="sm:col-span-2">
                   <label className="form-label" htmlFor="service_type">Service type</label>
