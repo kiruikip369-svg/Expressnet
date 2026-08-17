@@ -1610,7 +1610,7 @@ def customer_provision(request, customer_id):
     ref(f"tenants/{request.tenant['id']}/customers/{customer_id}").update(
         {"provisioning_status": provisioning_status, "service_type": service_type, "auto_reconnect": True, "provisioning_message": provisioning_message, "provisioned_at": iso_now()}
     )
-    # Sync to Postgres + RADIUS if tenant has RADIUS enabled
+    # Sync to Postgres + RADIUS if tenant has RADIUS enabled --
     if request.tenant.get("radius_enabled"):
         try:
             from billing_api.radius_provisioning import upsert_pg_customer, sync_radius_customer
