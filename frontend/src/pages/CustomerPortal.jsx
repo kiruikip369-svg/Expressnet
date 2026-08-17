@@ -1,4 +1,4 @@
-import { CreditCard, KeyRound, Monitor, Package, Phone, PlugZap, Wifi, X } from 'lucide-react';
+import { ChevronRight, CreditCard, KeyRound, Monitor, Package, Phone, PlugZap, Wifi, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import { useParams } from 'react-router-dom';
@@ -298,24 +298,30 @@ export default function CustomerPortal() {
   }
 
   return (
-    <main className="min-h-screen bg-slate-100">
-      <section className="bg-[#1e3a5f] px-4 py-10 text-white">
-        <div className="mx-auto max-w-6xl">
-          <div className="flex items-center gap-3">
-            <div className="flex h-12 w-12 items-center justify-center rounded-md bg-blue-600">
-              {tenant?.logo_url ? <img src={tenant.logo_url} alt="" className="h-full w-full rounded-md object-cover" /> : <Wifi size={26} />}
-            </div>
-            <div>
-              <p className="text-xs font-bold uppercase tracking-widest text-blue-200">Internet Packages</p>
-            <h1 className="text-2xl font-bold sm:text-3xl">{window.location.pathname.startsWith('/pppoe-renew/') ? 'PPPoE Renewal Portal' : (tenant?.business_name || 'Hotspot Portal')}</h1>
-            </div>
+    <main className="min-h-screen bg-black text-white">
+      <section className="px-3 pt-3 sm:px-5">
+        <div className="mx-auto max-w-3xl rounded-b-2xl rounded-t-lg bg-[#2600d8] px-5 py-4 text-center shadow-[0_18px_38px_rgba(38,0,216,0.28)] sm:py-5">
+          <div className="mx-auto flex h-14 w-20 items-center justify-center overflow-hidden rounded-lg bg-white/15">
+            {tenant?.logo_url ? <img src={tenant.logo_url} alt="" className="h-full w-full object-cover" /> : <Wifi size={24} />}
           </div>
+          <h1 className="mt-3 text-lg font-bold leading-tight sm:text-xl">{window.location.pathname.startsWith('/pppoe-renew/') ? 'PPPoE Renewal' : (tenant?.business_name || 'Hotspot Portal')}</h1>
+          <div className="mt-3 flex items-center justify-center gap-2 text-sm font-bold">
+            <span>Select</span>
+            <ChevronRight size={16} className="text-white/75" />
+            <span>Pay</span>
+            <ChevronRight size={16} className="text-white/75" />
+            <span>Connect</span>
+          </div>
+          <a href={`tel:${tenant?.phone || tenant?.support_phone || ''}`} className="mx-auto mt-4 inline-flex h-11 items-center justify-center gap-2 rounded-md bg-black/28 px-5 text-base font-bold tracking-wide text-white">
+            <Phone size={18} />
+            {tenant?.phone || tenant?.support_phone || '0797443584'}
+          </a>
         </div>
       </section>
 
-      <section className="mx-auto max-w-6xl px-4 py-8">
+      <section className="mx-auto max-w-3xl px-5 py-6">
         {(verifying || verification) && (
-          <div className={`mb-6 rounded-lg p-4 shadow-soft ring-1 ${verification?.success ? 'bg-green-50 text-green-800 ring-green-100' : 'bg-white text-slate-700 ring-slate-200'}`}>
+          <div className={`mb-5 rounded-lg p-4 shadow-soft ring-1 ${verification?.success ? 'bg-green-950 text-green-100 ring-green-700' : 'bg-[#252525] text-slate-200 ring-white/10'}`}>
             {verifying ? (
               <p className="text-sm font-semibold">Verifying payment...</p>
             ) : verification?.success ? (
@@ -340,51 +346,44 @@ export default function CustomerPortal() {
             )}
           </div>
         )}
-          <div className="mb-6 grid gap-4 lg:grid-cols-[1fr_1.2fr]">
-          <div className="rounded-lg bg-white p-4 shadow-soft ring-1 ring-slate-200">
+        <div className="mb-6 grid gap-3">
+          <section className="rounded-lg border border-white/10 bg-[#242424] p-4 shadow-[0_10px_26px_rgba(0,0,0,0.35)]">
             <div className="flex items-center gap-2">
-              <CreditCard size={18} className="text-blue-600" />
-              <h2 className="font-bold text-slate-900">Buy a package</h2>
+              <CreditCard size={17} className="text-white" />
+              <h2 className="text-base font-bold text-white">Quick access</h2>
             </div>
-            <p className="mt-2 text-sm text-slate-500">Choose a package below, then pay securely with {paymentMethod ? 'M-Pesa STK push' : 'the available checkout'}.</p>
-          </div>
+            <p className="mt-1 text-xs text-slate-300">Use a voucher, M-Pesa code, or your username and password.</p>
 
-          <section className="mb-6 rounded-lg bg-white p-4 shadow-soft ring-1 ring-slate-200">
-            <h2 className="font-bold text-slate-900">Use a voucher</h2>
-            <p className="mt-1 text-sm text-slate-500">Enter the voucher code provided by your provider.</p>
-            <form className="mt-3 flex gap-3" onSubmit={loginVoucher}>
-              <input className="form-input" placeholder="Voucher code" value={voucherCode} onChange={(event) => setVoucherCode(event.target.value)} />
-              <button type="submit" className="btn-primary" disabled={recovering}>Login</button>
+            <form className="mt-4 grid gap-2 sm:grid-cols-[1fr_auto]" onSubmit={loginVoucher}>
+              <input className="h-10 rounded-md border border-white/10 bg-black px-3 text-sm text-white outline-none placeholder:text-slate-500 focus:border-[#2600d8]" placeholder="Voucher code" value={voucherCode} onChange={(event) => setVoucherCode(event.target.value)} />
+              <button type="submit" className="inline-flex h-10 items-center justify-center rounded-md bg-[#2600d8] px-5 text-sm font-bold text-white shadow-lg shadow-black/30" disabled={recovering}>Login</button>
             </form>
-            <p className="mt-4 text-sm text-slate-500">Already bought a package? Use the username and password sent to you.</p>
-            <form className="mt-2 grid gap-3 sm:grid-cols-[1fr_1fr_auto]" onSubmit={loginAccess}>
-              <input className="form-input" placeholder="Username" value={accessUsername} onChange={(event) => setAccessUsername(event.target.value)} />
-              <input className="form-input" type="password" placeholder="Password" value={accessPassword} onChange={(event) => setAccessPassword(event.target.value)} />
-              <button type="submit" className="btn-secondary" disabled={recovering}>Sign in</button>
-            </form>
-            {voucherAccess && <p className="mt-3 text-sm font-semibold text-emerald-700">Voucher accepted for {voucherAccess.package_name}.</p>}
-          </section>
 
-          <form className="rounded-lg bg-white p-4 shadow-soft ring-1 ring-slate-200" onSubmit={recover}>
-            <label className="form-label" htmlFor="receiptCode">Already paid? Enter M-Pesa code</label>
-            <div className="mt-1 flex flex-col gap-3 sm:flex-row">
-              <div className="relative flex-1">
-                <KeyRound className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+            <form className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto]" onSubmit={recover}>
+              <div className="relative">
+                <KeyRound className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={17} />
                 <input
                   id="receiptCode"
-                  className="form-input mt-0 pl-10 uppercase"
-                  placeholder="e.g. RAB12C3D4E"
+                  className="h-10 w-full rounded-md border border-white/10 bg-black px-3 pl-10 text-sm uppercase text-white outline-none placeholder:text-slate-500 focus:border-[#2600d8]"
+                  placeholder="M-Pesa code"
                   value={receiptCode}
                   onChange={(event) => setReceiptCode(event.target.value.toUpperCase())}
                 />
               </div>
-              <button type="submit" className="btn-secondary" disabled={recovering}>
-                {recovering ? 'Checking...' : 'Sign in'}
+              <button type="submit" className="inline-flex h-10 items-center justify-center rounded-md border border-[#2600d8] px-5 text-sm font-bold text-white" disabled={recovering}>
+                {recovering ? 'Checking...' : 'Connect'}
               </button>
-            </div>
-            <p className="mt-2 text-xs text-slate-500">Use the M-Pesa confirmation code from your SMS if you were disconnected after paying.</p>
+            </form>
+
+            <form className="mt-3 grid gap-2 sm:grid-cols-[1fr_1fr_auto]" onSubmit={loginAccess}>
+              <input className="h-10 rounded-md border border-white/10 bg-black px-3 text-sm text-white outline-none placeholder:text-slate-500 focus:border-[#2600d8]" placeholder="Username" value={accessUsername} onChange={(event) => setAccessUsername(event.target.value)} />
+              <input className="h-10 rounded-md border border-white/10 bg-black px-3 text-sm text-white outline-none placeholder:text-slate-500 focus:border-[#2600d8]" type="password" placeholder="Password" value={accessPassword} onChange={(event) => setAccessPassword(event.target.value)} />
+              <button type="submit" className="inline-flex h-10 items-center justify-center rounded-md border border-[#2600d8] px-5 text-sm font-bold text-white" disabled={recovering}>Sign in</button>
+            </form>
+
+            {voucherAccess && <p className="mt-3 text-sm font-semibold text-emerald-400">Voucher accepted for {voucherAccess.package_name}.</p>}
             {recoveredAccess && (
-              <div className="mt-4 rounded-md bg-green-50 p-3 text-sm text-green-800">
+              <div className="mt-4 rounded-md bg-green-950 p-3 text-sm text-green-100">
                 <p className="font-bold">Access is active</p>
                 {recoveredAccess.service_type === 'tv' ? (
                   <p>TV MAC: {recoveredAccess.mac_address || recoveredAccess.username}</p>
@@ -397,57 +396,44 @@ export default function CustomerPortal() {
                 <p>Expires: {new Date(recoveredAccess.expires_at).toLocaleString()}</p>
               </div>
             )}
-          </form>
+          </section>
         </div>
 
         <div className="mb-4 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <h2 className="text-xl font-bold text-slate-900">All available packages</h2>
-            <p className="text-sm text-slate-500">Pick any package offered by {tenant?.business_name || 'this provider'}.</p>
+            <h2 className="text-xl font-bold text-white">Unlimited packages</h2>
+            <p className="text-sm text-slate-400">Pick any package offered by {tenant?.business_name || 'this provider'}.</p>
           </div>
           {packages.length > 0 && (
-            <p className="text-sm font-semibold text-slate-600">{packages.length} package{packages.length === 1 ? '' : 's'}</p>
+            <p className="text-sm font-semibold text-slate-400">{packages.length} package{packages.length === 1 ? '' : 's'}</p>
           )}
         </div>
 
         {packages.length === 0 ? (
-          <div className="rounded-lg bg-white p-6 text-center shadow-soft ring-1 ring-slate-200">
+          <div className="rounded-lg border border-white/10 bg-[#242424] p-6 text-center shadow-soft">
             <Package className="mx-auto text-slate-400" size={34} />
-            <h2 className="mt-3 text-lg font-bold text-slate-900">No packages available</h2>
-            <p className="mt-1 text-sm text-slate-500">Please check again later.</p>
+            <h2 className="mt-3 text-lg font-bold text-white">No packages available</h2>
+            <p className="mt-1 text-sm text-slate-400">Please check again later.</p>
           </div>
         ) : (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="grid gap-3">
             {packages.map((pkg) => (
-              <article key={pkg.id} className="rounded-lg bg-white p-5 shadow-soft ring-1 ring-slate-200">
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <h2 className="text-lg font-bold text-slate-900">{pkg.name}</h2>
-                    <p className="mt-1 text-sm text-slate-500">{pkg.speed}</p>
+              <article key={pkg.id} className="flex min-h-[92px] items-center justify-between gap-4 rounded-lg border border-white/10 bg-[#242424] p-5 shadow-[0_10px_24px_rgba(0,0,0,0.36)]">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <h2 className="break-words text-lg font-extrabold uppercase leading-snug text-white">{pkg.name}</h2>
+                    {packageType(pkg) === 'pppoe' ? <PlugZap className="hidden shrink-0 text-slate-400 sm:block" size={18} /> : <Wifi className="hidden shrink-0 text-slate-400 sm:block" size={18} />}
                   </div>
-                  <div className="rounded-md bg-blue-50 p-2 text-blue-600">
-                    {packageType(pkg) === 'pppoe' ? <PlugZap size={20} /> : <Wifi size={20} />}
-                  </div>
+                  <p className="mt-1 text-base text-slate-300"><span className="font-bold text-white">Ksh {pkg.price}</span> for {formatDuration(pkg)}</p>
+                  {pkg.speed && <p className="mt-1 text-xs text-slate-500">{pkg.speed}</p>}
                 </div>
-                <p className="mt-5 text-3xl font-bold text-slate-900">KES {pkg.price}</p>
-                <p className="mt-1 text-sm text-slate-500">{formatDuration(pkg)} access</p>
-                <div className="mt-5 grid gap-2">
-                  {[packageType(pkg), ...(packageType(pkg) === 'hotspot' ? ['tv'] : [])].map((key) => {
-                    const item = serviceCopy[key];
-                    const Icon = item.icon;
-                    return (
-                      <button
-                        key={key}
-                        type="button"
-                        className={key === packageType(pkg) ? 'btn-primary w-full' : 'btn-secondary w-full justify-center'}
-                        onClick={() => openPayment(pkg, key)}
-                      >
-                        <Icon size={18} />
-                        {key === 'hotspot' ? 'Pay Hotspot' : key === 'pppoe' ? 'Pay PPPoE' : 'Pay TV MAC'}
-                      </button>
-                    );
-                  })}
-                </div>
+                <button
+                  type="button"
+                  className="inline-flex h-11 shrink-0 items-center justify-center rounded-md bg-[#2600d8] px-6 text-base font-bold text-white shadow-[0_12px_22px_rgba(0,0,0,0.45)]"
+                  onClick={() => openPayment(pkg, packageType(pkg))}
+                >
+                  Buy
+                </button>
               </article>
             ))}
           </div>
