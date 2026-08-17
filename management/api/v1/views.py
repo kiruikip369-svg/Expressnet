@@ -740,6 +740,51 @@ def public_verify(request, tenant_id):
     )
 
 
+def _truthy(value):
+    return value is True or str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _pppoe_grace_payload(data, service_type):
+    if service_type != "pppoe" or not _truthy(data.get("grace_period_enabled")):
+        return {
+            "grace_period_enabled": False,
+            "grace_period_value": "",
+            "grace_period_unit": "",
+            "grace_started_at": "",
+            "grace_expires_at": "",
+            "grace_source": "",
+            "expiry_date": None,
+        }
+    try:
+        value = float(data.get("grace_period_value") or 0)
+    except (TypeError, ValueError):
+        return ok({"message": "Grace period value must be a number"}, 400)
+    if value <= 0:
+        return ok({"message": "Grace period must be greater than zero"}, 400)
+    unit = str(data.get("grace_period_unit") or "days").strip().lower()
+    if unit not in {"hours", "days", "weeks", "months"}:
+        return ok({"message": "Grace period unit must be hours, days, weeks, or months"}, 400)
+    multipliers = {
+        "hours": timedelta(hours=value),
+        "days": timedelta(days=value),
+        "weeks": timedelta(weeks=value),
+        "months": timedelta(days=value * 30),
+    }
+    started_at = utcnow()
+    expires_at = started_at + multipliers[unit]
+    return {
+        "grace_period_enabled": True,
+        "grace_period_value": value,
+        "grace_period_unit": unit,
+        "grace_started_at": started_at.isoformat(),
+        "grace_expires_at": expires_at.isoformat(),
+        "grace_source": "tenant_free_access",
+        "expiry_date": expires_at.isoformat(),
+        "status": "active",
+        "auto_reconnect": True,
+    }
+
+
 @csrf_exempt
 @api_view(["GET", "PATCH", "DELETE"])
 @tenant_required
@@ -772,8 +817,29 @@ def customers(request, customer_id=None):
             "router_serial_number",
             "mikrotik_router_id",
             "support",
+            "grace_period_enabled",
+            "grace_period_value",
+            "grace_period_unit",
+            "grace_started_at",
+            "grace_expires_at",
+            "grace_source",
         ]
         updates = {field: data[field] for field in allowed if field in data}
+        service_type_for_update = str(updates.get("service_type") or customer.get("service_type") or "hotspot").lower()
+        if service_type_for_update == "pppoe" and any(field in data for field in ["grace_period_enabled", "grace_period_value", "grace_period_unit"]):
+            grace_payload = _pppoe_grace_payload(data, service_type_for_update)
+            if isinstance(grace_payload, Response):
+                return grace_payload
+            updates.update(grace_payload)
+        elif service_type_for_update != "pppoe" and any(field in data for field in ["grace_period_enabled", "grace_period_value", "grace_period_unit"]):
+            updates.update({
+                "grace_period_enabled": False,
+                "grace_period_value": "",
+                "grace_period_unit": "",
+                "grace_started_at": "",
+                "grace_expires_at": "",
+                "grace_source": "",
+            })
         if not updates:
             return ok({"message": "No customer fields provided"}, 400)
         if "username" in updates:
@@ -786,6 +852,22 @@ def customers(request, customer_id=None):
                 return ok({"message": "A customer with this username already exists"}, 409)
         updates["updated_at"] = iso_now()
         ref(f"tenants/{tenant['id']}/customers/{customer_id}").update(updates)
+        if service_type_for_update == "pppoe" and updates.get("grace_period_enabled"):
+            synced_customer = {**customer, **updates}
+            pkg = find_child_by_field(f"tenants/{tenant['id']}/packages", "name", synced_customer.get("package"))
+            sync_payload = {**synced_customer, "package_name": synced_customer.get("package"), "speed": (pkg or {}).get("speed")}
+            try:
+                if has_mikrotik_credentials(tenant):
+                    upsert_customer_access(tenant, sync_payload, disabled=False)
+                    set_customer_enabled(tenant, sync_payload.get("username"), "pppoe", True)
+                elif _router_is_agent_linked(tenant):
+                    _queue_router_command(request, {
+                        "type": "sync_secrets",
+                        "customer_ids": [customer_id],
+                        "script": _customer_secret_script(sync_payload),
+                    })
+            except Exception:
+                logger.exception("Failed to sync PPPoE grace access")
         if "password" in updates or "username" in updates:
             try:
                 send_sms_message(
@@ -844,6 +926,12 @@ def customer_add(request):
     pkg = find_child_by_field(f"tenants/{request.tenant['id']}/packages", "name", data["package_name"])
     if not pkg:
         return ok({"message": f"Package \"{data['package_name']}\" was not found"}, 404)
+    grace_payload = _pppoe_grace_payload(data, service_type)
+    if isinstance(grace_payload, Response):
+        return grace_payload
+    if grace_payload.get("grace_period_enabled"):
+        customer_status = "active"
+        router_disabled = False
     provisioning_status = "not_requested"
     provisioning_message = None
     if provision:
@@ -889,7 +977,8 @@ def customer_add(request):
             "provisioning_status": provisioning_status,
             "provisioning_message": provisioning_message,
             "status": customer_status,
-            "expiry_date": None,
+            "expiry_date": grace_payload.get("expiry_date"),
+            **grace_payload,
             "auto_reconnect": True,
             "created_at": iso_now(),
         }

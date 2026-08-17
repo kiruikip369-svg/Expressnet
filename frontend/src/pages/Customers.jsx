@@ -18,6 +18,9 @@ const initialForm = {
   package_name: '',
   service_type: 'pppoe',
   provision_mikrotik: true,
+  grace_period_enabled: false,
+  grace_period_value: '',
+  grace_period_unit: 'days',
 };
 
 function toDate(value) {
@@ -60,6 +63,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
   const [editingId, setEditingId] = useState(null);
   const isHotspotOnlyPage = serviceLocked === 'hotspot';
   const hideManualAccessActions = serviceLocked === 'pppoe' || serviceLocked === 'hotspot';
+  const activeFormService = serviceLocked || form.service_type || 'pppoe';
 
   const packageMap = useMemo(() => {
     return packages.reduce((map, item) => {
@@ -187,6 +191,10 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
     const selectedPackage = packages.find((pkg) => pkg.name === form.package_name);
     const selectedService = serviceLocked || form.service_type || 'pppoe';
     if (selectedPackage && (selectedPackage.service_type || 'hotspot') !== selectedService) nextErrors.package_name = `Select a ${selectedService.toUpperCase()} package`;
+    if (selectedService === 'pppoe' && form.grace_period_enabled) {
+      const value = Number(form.grace_period_value);
+      if (!Number.isFinite(value) || value <= 0) nextErrors.grace_period_value = 'Enter a grace period greater than zero';
+    }
     if ((form.provision_mikrotik || form.mikrotik_router_id) && mikrotikRouters.length > 0 && !form.mikrotik_router_id) nextErrors.mikrotik_router_id = 'Select the MikroTik for this customer';
     setErrors(nextErrors);
     return Object.keys(nextErrors).length === 0;
@@ -210,6 +218,11 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
       service_type: serviceType,
       provision_mikrotik: serviceType !== 'static' && form.provision_mikrotik,
     };
+    if (serviceType === 'pppoe' && form.grace_period_enabled) {
+      payload.grace_period_enabled = form.grace_period_enabled;
+      payload.grace_period_value = form.grace_period_value;
+      payload.grace_period_unit = form.grace_period_unit;
+    }
     if (!isHotspotOnlyPage) {
       payload.location = form.location;
       payload.technician = form.technician;
@@ -260,6 +273,9 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
       package_name: customer.package || '',
       provision_mikrotik: serviceTypeOf(customer) !== 'static',
       service_type: serviceTypeOf(customer),
+      grace_period_enabled: Boolean(customer.grace_period_enabled),
+      grace_period_value: customer.grace_period_value || '',
+      grace_period_unit: customer.grace_period_unit || 'days',
     });
     setModalOpen(true);
   };
@@ -580,6 +596,51 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
                 </select>
                 {errors.package_name && <p className="form-error">{errors.package_name}</p>}
               </div>
+              {activeFormService === 'pppoe' && (
+                <div className="sm:col-span-2 rounded-md border border-slate-200 bg-slate-50 p-3">
+                  <label className="flex items-start gap-3 text-xs text-slate-600">
+                    <input
+                      type="checkbox"
+                      name="grace_period_enabled"
+                      className="mt-0.5 h-4 w-4 rounded border-slate-300 accent-[var(--app-accent)] focus:ring-[var(--app-focus-ring)]"
+                      checked={form.grace_period_enabled}
+                      onChange={update}
+                    />
+                    <span>
+                      <span className="block font-semibold text-slate-800">Give this PPPoE customer a free grace period</span>
+                      <span className="mt-1 block">The customer can use the selected package until the grace period ends, then payment is required.</span>
+                    </span>
+                  </label>
+                  {form.grace_period_enabled && (
+                    <div className="mt-3 grid gap-3 sm:grid-cols-[1fr_160px]">
+                      <div>
+                        <label className="form-label" htmlFor="grace_period_value">Grace period</label>
+                        <input
+                          id="grace_period_value"
+                          name="grace_period_value"
+                          type="number"
+                          min="1"
+                          step="1"
+                          className="form-input"
+                          value={form.grace_period_value}
+                          onChange={update}
+                          placeholder="e.g. 7"
+                        />
+                        {errors.grace_period_value && <p className="form-error">{errors.grace_period_value}</p>}
+                      </div>
+                      <div>
+                        <label className="form-label" htmlFor="grace_period_unit">Unit</label>
+                        <select id="grace_period_unit" name="grace_period_unit" className="form-input" value={form.grace_period_unit} onChange={update}>
+                          <option value="hours">Hours</option>
+                          <option value="days">Days</option>
+                          <option value="weeks">Weeks</option>
+                          <option value="months">Months</option>
+                        </select>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
               <label className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600 sm:col-span-2">
                 <input
                   type="checkbox"

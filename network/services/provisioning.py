@@ -1078,6 +1078,7 @@ def configure_router_port(tenant, interface_name, service_type, profile_name="de
             {"address": "172.31.0.0/16"},
             {"address": "172.31.0.0/16", "gateway": "172.31.0.1", "dns-server": "8.8.8.8,8.8.4.4"},
         )
+        _isolate_customer_bridge_from_router_management(api, managed_bridge)
 
         # Add the target interface to our managed bridge
         api.path("interface", "bridge", "port").add(bridge=managed_bridge, interface=interface_name)
@@ -1138,6 +1139,49 @@ def configure_router_port(tenant, interface_name, service_type, profile_name="de
         api.close()
 
 
+def _isolate_customer_bridge_from_router_management(api, bridge_name):
+    """Allow captive network services, then drop all other router input from customer ports."""
+    for item in list(api.path("interface", "list", "member").select()):
+        if item.get("interface") == bridge_name and item.get(".id"):
+            try:
+                api.path("interface", "list", "member").remove(item[".id"])
+            except Exception:
+                pass
+
+    comments = {
+        "billing-saas allow customer dns",
+        "billing-saas allow customer dhcp",
+        "billing-saas allow customer hotspot service",
+        "billing-saas block customer router access",
+    }
+    for item in list(api.path("ip", "firewall", "filter").select()):
+        if item.get("comment") in comments and item.get(".id"):
+            try:
+                api.path("ip", "firewall", "filter").remove(item[".id"])
+            except Exception:
+                pass
+
+    firewall = api.path("ip", "firewall", "filter")
+    before = next((item.get(".id") for item in firewall.select() if item.get("comment") == "defconf: drop all not coming from LAN" and item.get(".id")), None)
+
+    def add_customer_rule(**fields):
+        if before:
+            fields["place-before"] = before
+        return firewall.add(**fields)
+
+    add_customer_rule(chain="input", action="accept", **{"in-interface": bridge_name, "protocol": "udp", "dst-port": "53", "comment": "billing-saas allow customer dns"})
+    add_customer_rule(chain="input", action="accept", **{"in-interface": bridge_name, "protocol": "tcp", "dst-port": "53", "comment": "billing-saas allow customer dns"})
+    add_customer_rule(chain="input", action="accept", **{"in-interface": bridge_name, "protocol": "udp", "dst-port": "67,68", "comment": "billing-saas allow customer dhcp"})
+    add_customer_rule(chain="input", action="accept", **{"in-interface": bridge_name, "protocol": "tcp", "dst-port": "64872-64875", "comment": "billing-saas allow customer hotspot service"})
+    add_customer_rule(chain="input", action="drop", **{"in-interface": bridge_name, "comment": "billing-saas block customer router access"})
+
+    try:
+        api.path("tool", "mac-server").update(**{"allowed-interface-list": "LAN"})
+        api.path("tool", "mac-server", "mac-winbox").update(**{"allowed-interface-list": "LAN"})
+    except Exception:
+        pass
+
+
 def _rsc_escape(value):
     return str(value or "").replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$")
 
@@ -1151,6 +1195,30 @@ def _build_port_command_script(interface_name, service_type, profile_name, porta
     hotspot_file_writes = ""
     if portal_url:
         hotspot_file_writes = routeros_hotspot_fetch_script(portal_url)
+
+    customer_bridge_isolation = (
+        f':do {{ /interface list member remove [find interface="{_rsc_escape(bridge_name)}"] }} on-error={{}}; '
+        f':do {{ /ip firewall filter remove [find comment="billing-saas allow customer dns"] }} on-error={{}}; '
+        f':do {{ /ip firewall filter remove [find comment="billing-saas allow customer dhcp"] }} on-error={{}}; '
+        f':do {{ /ip firewall filter remove [find comment="billing-saas allow customer hotspot service"] }} on-error={{}}; '
+        f':do {{ /ip firewall filter remove [find comment="billing-saas block customer router access"] }} on-error={{}}; '
+        f':local billingInputDrop [/ip firewall filter find comment="defconf: drop all not coming from LAN"]; '
+        f':if ([:len $billingInputDrop] > 0) do={{ '
+        f'/ip firewall filter add chain=input action=accept in-interface="{_rsc_escape(bridge_name)}" protocol=udp dst-port=53 place-before=$billingInputDrop comment="billing-saas allow customer dns"; '
+        f'/ip firewall filter add chain=input action=accept in-interface="{_rsc_escape(bridge_name)}" protocol=tcp dst-port=53 place-before=$billingInputDrop comment="billing-saas allow customer dns"; '
+        f'/ip firewall filter add chain=input action=accept in-interface="{_rsc_escape(bridge_name)}" protocol=udp dst-port=67,68 place-before=$billingInputDrop comment="billing-saas allow customer dhcp"; '
+        f'/ip firewall filter add chain=input action=accept in-interface="{_rsc_escape(bridge_name)}" protocol=tcp dst-port=64872-64875 place-before=$billingInputDrop comment="billing-saas allow customer hotspot service"; '
+        f'/ip firewall filter add chain=input action=drop in-interface="{_rsc_escape(bridge_name)}" place-before=$billingInputDrop comment="billing-saas block customer router access"; '
+        f'}} else={{ '
+        f'/ip firewall filter add chain=input action=accept in-interface="{_rsc_escape(bridge_name)}" protocol=udp dst-port=53 comment="billing-saas allow customer dns"; '
+        f'/ip firewall filter add chain=input action=accept in-interface="{_rsc_escape(bridge_name)}" protocol=tcp dst-port=53 comment="billing-saas allow customer dns"; '
+        f'/ip firewall filter add chain=input action=accept in-interface="{_rsc_escape(bridge_name)}" protocol=udp dst-port=67,68 comment="billing-saas allow customer dhcp"; '
+        f'/ip firewall filter add chain=input action=accept in-interface="{_rsc_escape(bridge_name)}" protocol=tcp dst-port=64872-64875 comment="billing-saas allow customer hotspot service"; '
+        f'/ip firewall filter add chain=input action=drop in-interface="{_rsc_escape(bridge_name)}" comment="billing-saas block customer router access"; '
+        f'}}; '
+        f':do {{ /tool mac-server set allowed-interface-list=LAN }} on-error={{}}; '
+        f':do {{ /tool mac-server mac-winbox set allowed-interface-list=LAN }} on-error={{}}; '
+    )
 
     hotspot_setup = ""
     if portal_url:
@@ -1208,6 +1276,7 @@ def _build_port_command_script(interface_name, service_type, profile_name, porta
         f':do {{ /ip address add address=172.31.0.1/16 interface="{bridge_name}" comment="Added by Expressnet" }} on-error={{ /ip address set [find interface="{bridge_name}" comment="Added by Expressnet"] address=172.31.0.1/16 interface="{bridge_name}" }}; '
         f':do {{ /ip dhcp-server add name=Expressnet-dhcp interface="{bridge_name}" address-pool=Expressnet-pool lease-time=4h disabled=no }} on-error={{ /ip dhcp-server set [find name=Expressnet-dhcp] interface="{bridge_name}" address-pool=Expressnet-pool lease-time=4h disabled=no }}; '
         f':do {{ /ip dhcp-server network add address=172.31.0.0/16 gateway=172.31.0.1 dns-server=8.8.8.8,8.8.4.4 }} on-error={{ /ip dhcp-server network set [find address=172.31.0.0/16] gateway=172.31.0.1 dns-server=8.8.8.8,8.8.4.4 }}; '
+        f'{customer_bridge_isolation}'
         f'/interface bridge port add bridge="{bridge_name}" interface="{interface_name}"; '
         f':do {{ /interface set [find name="{interface_name}"] comment="billing-saas:{service_type}:portal={portal_comment}" }} on-error={{ :log warning "Billing SaaS: failed to set interface comment" }}; '
         f'{cleanup_block}'
@@ -1216,6 +1285,7 @@ def _build_port_command_script(interface_name, service_type, profile_name, porta
         f'}} else={{ '
         f'  {hotspot_server_block}'
         f'}}; '
+        f'{customer_bridge_isolation}'
     )
 
 
