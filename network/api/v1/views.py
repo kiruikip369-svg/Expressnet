@@ -1943,13 +1943,14 @@ def _customer_secret_script(customer):
     ppp_profile_script = (
         f':if ("{profile}" != "default") do={{ '
         f':if ([:len [/ppp profile find name="{profile}"]] = 0) do={{'
-        f' /ppp profile add name="{profile}"{rate_limit_field} }} '
-        f'else={{ /ppp profile set [find name="{profile}"]{rate_limit_field} }}; }};'
+        f' /ppp profile add name="{profile}" local-address=172.31.0.1 remote-address=Expressnet-pool{rate_limit_field} }} '
+        f'else={{ /ppp profile set [find name="{profile}"] local-address=172.31.0.1 remote-address=Expressnet-pool{rate_limit_field} }}; }};'
         if rate_limit
         else (
             f':if ("{profile}" != "default") do={{ '
             f':if ([:len [/ppp profile find name="{profile}"]] = 0) do={{'
-            f' /ppp profile add name="{profile}" }}; }};'
+            f' /ppp profile add name="{profile}" local-address=172.31.0.1 remote-address=Expressnet-pool }} '
+            f'else={{ /ppp profile set [find name="{profile}"] local-address=172.31.0.1 remote-address=Expressnet-pool }}; }};'
         )
     )
     hotspot_profile_script = (
@@ -2088,8 +2089,8 @@ def _package_profile_script(package):
         return (
             f':do {{ '
             f':if ([:len [/ppp profile find name="{name}"]] = 0) do={{'
-            f' /ppp profile add name="{name}"{rate_limit_field}{session_timeout_field} comment="billing-saas-package" }} '
-            f'else={{ /ppp profile set [find name="{name}"]{rate_limit_field}{session_timeout_field} comment="billing-saas-package" }}; '
+            f' /ppp profile add name="{name}" local-address=172.31.0.1 remote-address=Expressnet-pool{rate_limit_field}{session_timeout_field} comment="billing-saas-package" }} '
+            f'else={{ /ppp profile set [find name="{name}"] local-address=172.31.0.1 remote-address=Expressnet-pool{rate_limit_field}{session_timeout_field} comment="billing-saas-package" }}; '
             f'}} on-error={{ :log warning "Billing SaaS agent: PPPoE profile sync failed for {name}"; :error "PPPoE profile sync failed for {name}" }};'
             f':if ([:len [/ppp profile find name="{name}"]] = 0) do={{ :error "PPPoE profile missing after sync: {name}" }};'
         )
@@ -2813,7 +2814,7 @@ def router_provision_script(request, token):
     pppoe_script = f"""
         :log info "Billing SaaS Step 8: provisioning PPPoE service without mixing Hotspot profiles";
         :do {{ /ppp profile add name="{ppp_profile_name}" local-address={_rsc_escape(lan_gateway)} remote-address={hotspot_pool_name} dns-server=8.8.8.8 only-one=yes comment="Added by Expressnet" }} on-error={{ /ppp profile set [find name="{ppp_profile_name}"] local-address={_rsc_escape(lan_gateway)} remote-address={hotspot_pool_name} dns-server=8.8.8.8 only-one=yes comment="Added by Expressnet" }}
-        :do {{ /interface pppoe-server server add service-name="{pppoe_service_name}" authentication=pap interface=$billingBridge default-profile="{ppp_profile_name}" one-session-per-host=yes disabled=no }} on-error={{ /interface pppoe-server server set [find service-name="{pppoe_service_name}"] authentication=pap interface=$billingBridge default-profile="{ppp_profile_name}" one-session-per-host=yes disabled=no }}
+        :do {{ /interface pppoe-server server add service-name="{pppoe_service_name}" authentication=pap,chap,mschap1,mschap2 interface=$billingBridge default-profile="{ppp_profile_name}" one-session-per-host=yes disabled=no }} on-error={{ /interface pppoe-server server set [find service-name="{pppoe_service_name}"] authentication=pap,chap,mschap1,mschap2 interface=$billingBridge default-profile="{ppp_profile_name}" one-session-per-host=yes disabled=no }}
     """
 
     # --- Extracted from field export: /ip firewall address-list + /ip hotspot walled-garden ip

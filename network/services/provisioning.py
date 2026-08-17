@@ -299,6 +299,9 @@ def upsert_router_profile(tenant, path, name, speed, session_timeout=None):
         rate_limit = normalize_rate_limit(speed)
         if rate_limit:
             fields["rate-limit"] = rate_limit
+        if path == ("ppp", "profile"):
+            fields.setdefault("local-address", "172.31.0.1")
+            fields.setdefault("remote-address", "Expressnet-pool")
         timeout = routeros_duration(session_timeout)
         if timeout and path in {("ppp", "profile"), ("ip", "hotspot", "user", "profile")}:
             fields["session-timeout"] = timeout
@@ -1094,7 +1097,7 @@ def configure_router_port(tenant, interface_name, service_type, profile_name="de
                 "service-name": "Expressnet-pppoe",
                 "interface": bind_interface,
                 "default-profile": profile_name or "INTERNET",
-                "authentication": "pap",
+                "authentication": "pap,chap,mschap1,mschap2",
                 "one-session-per-host": "yes",
                 "disabled": "no",
             }
@@ -1181,7 +1184,7 @@ def _build_port_command_script(interface_name, service_type, profile_name, porta
     # --- Default PPPoE server creation (at provisioning time, not lazy per-port) ---
     pppoe_server_block = (
         f'  :local billingSvc [/interface pppoe-server server find interface="{bridge_name}"]; '
-        f'  :if ([:len $billingSvc] > 0) do={{ /interface pppoe-server server set $billingSvc service-name="billing-{interface_name}" default-profile="{profile_name}" one-session-per-host=yes disabled=no }} else={{ /interface pppoe-server server add service-name="billing-{interface_name}" interface="{bridge_name}" default-profile="{profile_name}" one-session-per-host=yes disabled=no }}; '
+        f'  :if ([:len $billingSvc] > 0) do={{ /interface pppoe-server server set $billingSvc service-name="billing-{interface_name}" authentication=pap,chap,mschap1,mschap2 default-profile="{profile_name}" one-session-per-host=yes disabled=no }} else={{ /interface pppoe-server server add service-name="billing-{interface_name}" authentication=pap,chap,mschap1,mschap2 interface="{bridge_name}" default-profile="{profile_name}" one-session-per-host=yes disabled=no }}; '
     )
 
     # --- Hotspot server creation ---
