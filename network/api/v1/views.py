@@ -565,21 +565,36 @@ def _html_page(title, body, status=200):
   <title>{html.escape(title)}</title>
   <style>
     *{{box-sizing:border-box}}
-    body{{margin:0;font-family:Arial,sans-serif;background:#f3f6fb;color:#0f172a;line-height:1.45;overflow-x:hidden}}
-    header{{background:#183b60;color:white;padding:clamp(18px,5vw,32px) clamp(16px,5vw,28px)}}
-    header h1{{margin:0 0 6px;font-size:clamp(22px,6vw,34px);overflow-wrap:anywhere}}
-    main{{width:100%;max-width:860px;margin:0 auto;padding:clamp(12px,4vw,24px)}}
-    .card{{background:white;border:1px solid #dbe4f0;border-radius:10px;padding:clamp(13px,4vw,20px);margin:12px 0;box-shadow:0 2px 10px rgba(15,23,42,.06);min-width:0}}
-    .pkg{{display:grid;gap:10px;grid-template-columns:1fr;align-items:end}}
+    body{{margin:0;font-family:Arial,sans-serif;background:#000;color:#fff;line-height:1.45;overflow-x:hidden}}
+    header{{width:min(100% - 24px,760px);margin:12px auto 0;background:#2600d8;color:white;padding:16px 18px 24px;border-radius:10px 10px 22px 22px;text-align:center;box-shadow:0 18px 38px rgba(38,0,216,.28)}}
+    header h1{{margin:8px 0 0;font-size:clamp(18px,5vw,22px);line-height:1.15;overflow-wrap:anywhere}}
+    header p{{margin:10px 0 0;color:rgba(255,255,255,.9);font-size:14px;font-weight:700}}
+    main{{width:100%;max-width:760px;margin:0 auto;padding:20px clamp(14px,4vw,22px) 28px}}
+    .hero-logo{{width:82px;height:58px;margin:0 auto;border-radius:10px;background:rgba(255,255,255,.14);display:flex;align-items:center;justify-content:center;overflow:hidden;font-size:24px;font-weight:800}}
+    .hero-logo img{{width:100%;height:100%;object-fit:cover;display:block}}
+    .steps{{display:flex;align-items:center;justify-content:center;gap:9px;margin-top:12px;font-size:16px;font-weight:800}}
+    .chev{{opacity:.75}}
+    .call{{display:inline-flex;align-items:center;gap:9px;margin-top:16px;min-height:44px;border-radius:7px;background:rgba(0,0,0,.28);padding:10px 22px;color:#fff;text-decoration:none;font-size:17px;font-weight:800;letter-spacing:.02em}}
+    .card{{background:#242424;border:1px solid rgba(255,255,255,.11);border-radius:10px;padding:16px;margin:12px 0;box-shadow:0 10px 26px rgba(0,0,0,.35);min-width:0}}
+    .card strong{{font-size:16px;color:#fff}}
+    .quick{{display:grid;gap:10px}}
+    .quick form{{display:grid;grid-template-columns:1fr;gap:8px}}
+    .pkg{{display:flex;gap:14px;align-items:center;justify-content:space-between;min-height:92px;padding:18px 20px}}
     .pkg > *{{min-width:0}}
+    .pkg-title{{font-size:18px;font-weight:900;text-transform:uppercase;line-height:1.2;overflow-wrap:anywhere}}
+    .pkg-meta{{margin-top:5px;font-size:16px;color:#cbd5e1}}
     form{{width:100%}}
-    input,button{{width:100%;min-height:44px;font:inherit;border-radius:7px;border:1px solid #cbd5e1;padding:10px 12px}}
-    button{{background:#f97316;color:white;border-color:#f97316;font-weight:700;cursor:pointer}}
-    .muted{{color:#64748b;font-size:14px}} .price{{font-weight:800;color:#0f172a}}
-    .alert{{background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;border-radius:8px;padding:12px;margin:12px 0}}
-    @media(min-width:560px){{.pkg{{grid-template-columns:1fr 1fr}} .pkg button{{grid-column:1/-1}}}}
-    @media(min-width:720px){{.pkg{{grid-template-columns:1.2fr .7fr .8fr auto}} .pkg button{{grid-column:auto;width:auto}}}}
-    @media(max-width:559px){{.card form{{display:grid;grid-template-columns:1fr;gap:10px}} .card form div{{display:grid!important;grid-template-columns:1fr!important;gap:10px!important}}}}
+    input,button{{width:100%;min-height:42px;font:inherit;border-radius:7px;border:1px solid rgba(255,255,255,.12);padding:10px 12px}}
+    input{{background:#000;color:#fff;outline:none}}
+    input::placeholder{{color:#8b93a1}}
+    input:focus{{border-color:#2600d8}}
+    button{{background:#2600d8;color:white;border-color:#2600d8;font-weight:800;cursor:pointer;box-shadow:0 12px 22px rgba(0,0,0,.45)}}
+    .secondary{{background:transparent;border-color:#2600d8;box-shadow:none}}
+    .muted{{color:#cbd5e1;font-size:13px}} .price{{font-weight:800;color:#fff}}
+    .section-title{{margin:22px 0 12px;font-size:22px;font-weight:900;color:#fff}}
+    .alert{{background:#2b1806;border:1px solid #9a5b16;color:#fed7aa;border-radius:8px;padding:12px;margin:12px 0}}
+    @media(min-width:600px){{.quick form.row{{grid-template-columns:1fr auto}} .quick form.credentials{{grid-template-columns:1fr 1fr auto}} .quick button{{width:auto;min-width:118px}}}}
+    @media(max-width:520px){{header{{width:100%;margin-top:0;border-radius:0 0 18px 18px}}main{{padding-left:14px;padding-right:14px}}.pkg{{padding:16px;gap:10px}}.pkg-title{{font-size:16px}}.pkg-meta{{font-size:14px}}.pkg button{{width:auto;min-width:74px;padding-left:16px;padding-right:16px}}}}
   </style>
 </head>
 <body>{body}</body>
@@ -828,6 +843,80 @@ def captive_portal_page(request, tenant_id):
         for key in ["ip", "mac", "router_ip", "link_login", "link-orig", "dst", "error"]
         if request.GET.get(key)
     )
+    selected_payment_method = selected_daraja_method(tenant)
+    if packages:
+        package_html_v2 = "".join(
+            f"""
+            <form class="card pkg" method="post" action="/api/captive/{html.escape(str(tenant_id))}/pay">
+              <input type="hidden" name="package_id" value="{html.escape(str(pkg.get('id')))}">
+              <input type="hidden" name="service_type" value="{html.escape(str(pkg.get('service_type') or 'hotspot'))}">
+              <input type="hidden" name="payment_method" value="{html.escape(selected_payment_method)}">
+              {hidden}
+              <div>
+                <div class="pkg-title">{html.escape(str(pkg.get('name') or 'Package'))}</div>
+                <div class="pkg-meta"><span class="price">Ksh {html.escape(str(pkg.get('price') or 0))}</span> for {html.escape(str(pkg.get('duration_label') or ''))}</div>
+                {f"<div class='muted'>{html.escape(str(pkg.get('speed') or ''))}</div>" if pkg.get('speed') else ""}
+              </div>
+              {('<input name="username" required placeholder="PPPoE username">' if pkg.get('service_type') == 'pppoe' else '')}
+              <input name="phone" inputmode="tel" required placeholder="M-Pesa/phone number">
+              <button type="submit">Buy</button>
+            </form>"""
+            for pkg in packages
+        )
+    else:
+        total_packages = len(list_children(f"tenants/{tenant_id}/packages"))
+        package_html_v2 = (
+            "<div class='alert'>Packages exist, but none are active. Please contact the provider.</div>"
+            if total_packages
+            else "<div class='alert'>No packages are configured yet. Please contact the provider.</div>"
+        )
+
+    link_login_v2 = str(request.GET.get("link_login") or request.GET.get("link-login") or "").strip()
+    voucher_autocomplete = ' autocomplete="one-time-code"' if link_login_v2 else ""
+    voucher_html_v2 = f"""
+      <div class="card quick">
+        <strong>Quick access</strong>
+        <p class="muted">Use a voucher, M-Pesa code, or your username and password.</p>
+        <form class="row" method="post" action="/api/public/{html.escape(str(tenant_id))}/voucher-login">
+          {hidden}
+          <input name="code" required placeholder="Voucher code"{voucher_autocomplete}>
+          <button type="submit">Login</button>
+        </form>
+        <form class="row" method="post" action="/api/public/{html.escape(str(tenant_id))}/redeem">
+          {hidden}
+          <input name="receipt_code" required placeholder="M-Pesa code"{voucher_autocomplete}>
+          <button class="secondary" type="submit">Connect</button>
+        </form>
+        <form class="credentials" method="post" action="/api/public/{html.escape(str(tenant_id))}/voucher-login">
+          {hidden}
+          <input name="username" required placeholder="Username">
+          <input name="password" required type="password" placeholder="Password">
+          <button class="secondary" type="submit">Sign in</button>
+        </form>
+      </div>
+    """
+    logo_url = html.escape(str(tenant.get("logo_url") or ""), quote=True)
+    phone_value = html.escape(str(tenant.get("phone") or tenant.get("support_phone") or "0797443584"), quote=True)
+    logo_html = f"<img src='{logo_url}' alt=''>" if logo_url else "WiFi"
+    body_html_v2 = f"""
+      <header>
+        <div class="hero-logo">{logo_html}</div>
+        <h1>{html.escape(str(tenant.get('business_name') or 'Internet packages'))}</h1>
+        <div class="steps"><span>Select</span><span class="chev">›</span><span>Pay</span><span class="chev">›</span><span>Connect</span></div>
+        <a class="call" href="tel:{phone_value}">☎ {phone_value}</a>
+      </header>
+      <main>
+        {payment_notice}
+        {voucher_html_v2}
+        <div class="section-title">Unlimited packages</div>
+        {package_html_v2}
+      </main>
+    """
+    response = _html_page(f"{tenant.get('business_name') or 'Hotspot'} packages", body_html_v2)
+    response["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response["Pragma"] = "no-cache"
+    return response
+
     if packages:
         selected_payment_method = selected_daraja_method(tenant)
         package_html = "".join(
