@@ -2,6 +2,7 @@ import json
 import html
 import logging
 import os
+import re
 import secrets
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
@@ -566,7 +567,7 @@ def _html_page(title, body, status=200):
   <style>
     *{{box-sizing:border-box}}
     body{{margin:0;font-family:Arial,sans-serif;background:#000;color:#fff;line-height:1.45;overflow-x:hidden}}
-    header{{width:min(100% - 24px,760px);margin:12px auto 0;background:#2600d8;color:white;padding:16px 18px 24px;border-radius:10px 10px 22px 22px;text-align:center;box-shadow:0 18px 38px rgba(38,0,216,.28)}}
+    header{{width:min(100% - 24px,760px);margin:12px auto 0;background:var(--portal-accent,#2600d8);color:white;padding:16px 18px 24px;border-radius:10px 10px 22px 22px;text-align:center;box-shadow:0 18px 38px var(--portal-accent-shadow,rgba(38,0,216,.28))}}
     header h1{{margin:8px 0 0;font-size:clamp(18px,5vw,22px);line-height:1.15;overflow-wrap:anywhere}}
     header p{{margin:10px 0 0;color:rgba(255,255,255,.9);font-size:14px;font-weight:700}}
     main{{width:100%;max-width:760px;margin:0 auto;padding:20px clamp(14px,4vw,22px) 28px}}
@@ -587,9 +588,9 @@ def _html_page(title, body, status=200):
     input,button{{width:100%;min-height:42px;font:inherit;border-radius:7px;border:1px solid rgba(255,255,255,.12);padding:10px 12px}}
     input{{background:#000;color:#fff;outline:none}}
     input::placeholder{{color:#8b93a1}}
-    input:focus{{border-color:#2600d8}}
-    button{{background:#2600d8;color:white;border-color:#2600d8;font-weight:700;cursor:pointer;box-shadow:0 12px 22px rgba(0,0,0,.45)}}
-    .secondary{{background:transparent;border-color:#2600d8;box-shadow:none}}
+    input:focus{{border-color:var(--portal-accent,#2600d8)}}
+    button{{background:var(--portal-accent,#2600d8);color:var(--portal-accent-contrast,#fff);border-color:var(--portal-accent,#2600d8);font-weight:700;cursor:pointer;box-shadow:0 12px 22px rgba(0,0,0,.45)}}
+    .secondary{{background:transparent;border-color:var(--portal-accent,#2600d8);color:#fff;box-shadow:none}}
     .muted{{color:#cbd5e1;font-size:13px}} .price{{font-weight:800;color:#fff}}
     .section-title{{margin:22px 0 12px;font-size:20px;font-weight:750;color:#fff}}
     .alert{{background:#2b1806;border:1px solid #9a5b16;color:#fed7aa;border-radius:8px;padding:12px;margin:12px 0}}
@@ -610,6 +611,22 @@ def _html_page(title, body, status=200):
 </html>""",
         status=status,
         content_type="text/html",
+    )
+
+
+def _portal_theme_vars(tenant):
+    color = str((tenant or {}).get("theme_color") or (tenant or {}).get("dashboard_color") or "#2600d8").strip()
+    if not re.fullmatch(r"#[0-9a-fA-F]{6}", color):
+        color = "#2600d8"
+    red = int(color[1:3], 16)
+    green = int(color[3:5], 16)
+    blue = int(color[5:7], 16)
+    luminance = (0.299 * red + 0.587 * green + 0.114 * blue) / 255
+    contrast = "#111827" if luminance > 0.62 else "#ffffff"
+    return (
+        f"--portal-accent:{color};"
+        f"--portal-accent-contrast:{contrast};"
+        f"--portal-accent-shadow:rgba({red},{green},{blue},.28);"
     )
 
 
@@ -902,7 +919,9 @@ def captive_portal_page(request, tenant_id):
     logo_url = html.escape(str(tenant.get("logo_url") or ""), quote=True)
     phone_value = html.escape(str(tenant.get("phone") or tenant.get("support_phone") or "0797443584"), quote=True)
     logo_html = f"<img src='{logo_url}' alt=''>" if logo_url else "WiFi"
+    theme_vars = html.escape(_portal_theme_vars(tenant), quote=True)
     body_html_v2 = f"""
+      <div style="{theme_vars}">
       <header>
         <div class="hero-logo">{logo_html}</div>
         <h1>{html.escape(str(tenant.get('business_name') or 'Internet packages'))}</h1>
@@ -969,6 +988,7 @@ def captive_portal_page(request, tenant_id):
           }})();
         </script>
       </main>
+      </div>
     """
     response = _html_page(f"{tenant.get('business_name') or 'Hotspot'} packages", body_html_v2)
     response["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
