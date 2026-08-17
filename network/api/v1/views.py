@@ -222,6 +222,11 @@ def payment_date(payment):
 
 def package_duration_delta(package):
     unit = str((package or {}).get("duration_unit") or "").strip().lower()
+    if unit in {"month", "months"}:
+        try:
+            return timedelta(days=31 * float((package or {}).get("duration_value") or (package or {}).get("duration_months") or 1))
+        except (TypeError, ValueError):
+            return timedelta(days=31)
     hours = (package or {}).get("duration_hours")
     if hours not in {None, ""}:
         try:
@@ -239,18 +244,50 @@ def package_duration_delta(package):
         return timedelta(days=1)
 
 
+def _add_calendar_months(start, months):
+    whole_months = max(1, int(months))
+    month_index = start.month - 1 + whole_months
+    year = start.year + month_index // 12
+    month = month_index % 12 + 1
+    next_month_index = month if month < 12 else 0
+    next_month_year = year if month < 12 else year + 1
+    last_day = (datetime(next_month_year, next_month_index + 1, 1) - timedelta(days=1)).day
+    return start.replace(year=year, month=month, day=min(start.day, last_day))
+
+
+def package_expiry_date(start, package):
+    unit = str((package or {}).get("duration_unit") or "").strip().lower()
+    if unit in {"month", "months"}:
+        try:
+            return _add_calendar_months(start, float((package or {}).get("duration_value") or (package or {}).get("duration_months") or 1))
+        except (TypeError, ValueError):
+            return _add_calendar_months(start, 1)
+    return start + package_duration_delta(package)
+
+
 def normalized_package_payload(data, default_service_type="hotspot", include_service_type=True):
     service_type = package_service_type(data or {})
     if service_type not in {"hotspot", "pppoe"}:
         service_type = default_service_type if default_service_type in {"hotspot", "pppoe"} else "hotspot"
-    duration_unit = "hours" if str((data or {}).get("duration_unit") or "").lower().startswith("hour") else "days"
-    if service_type == "pppoe":
+    raw_unit = str((data or {}).get("duration_unit") or "").lower()
+    if raw_unit.startswith("hour"):
+        duration_unit = "hours"
+    elif raw_unit.startswith("month"):
+        duration_unit = "months"
+    else:
         duration_unit = "days"
     duration_value = float((data or {}).get("duration_value") or (data or {}).get("duration_hours") or (data or {}).get("duration_days") or 1)
     if service_type == "pppoe" and duration_value < 1:
         duration_value = 1
-    duration_days = 1 if duration_unit == "hours" else int(duration_value)
-    duration_hours = duration_value if duration_unit == "hours" else duration_value * 24
+    if duration_unit == "hours":
+        duration_days = 1
+        duration_hours = duration_value
+    elif duration_unit == "months":
+        duration_days = int(duration_value * 31)
+        duration_hours = duration_days * 24
+    else:
+        duration_days = int(duration_value)
+        duration_hours = duration_value * 24
     payload = {
         "duration_unit": duration_unit,
         "duration_value": duration_value,
@@ -281,6 +318,10 @@ def _package_sync_script_for_request(request, package):
 
 #u
 def package_duration_label(package):
+    unit = str((package or {}).get("duration_unit") or "").strip().lower()
+    if unit in {"month", "months"}:
+        value = float(package.get("duration_value") or 1)
+        return f"{value:g} month{'s' if value != 1 else ''}"
     delta = package_duration_delta(package)
     total_seconds = int(delta.total_seconds())
     if total_seconds < 86400:
@@ -1420,7 +1461,7 @@ def public_voucher_login(request, tenant_id):
         if not package_obj and voucher.get("package"):
             package_obj = InternetPackage.objects.filter(tenant=tenant_obj, name=voucher.get("package")).first()
         package = package_obj.as_dict() if package_obj else None
-        expires_at = utcnow() + package_duration_delta(package)
+        expires_at = package_expiry_date(utcnow(), package)
         access_payload = {
             "name": voucher.get("username"),
             "phone": data.get("phone") or "",

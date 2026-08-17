@@ -19,6 +19,7 @@ function packageDuration(pkg) {
   const unit = pkg.duration_unit || 'days';
   const value = pkg.duration_value || pkg.duration_hours || pkg.duration_days || 1;
   if (unit === 'hours') return `${value} hour${Number(value) === 1 ? '' : 's'}`;
+  if (unit === 'months') return `${value} month${Number(value) === 1 ? '' : 's'}`;
   return `${pkg.duration_days || value} day${Number(pkg.duration_days || value) === 1 ? '' : 's'}`;
 }
 
@@ -63,7 +64,7 @@ export default function Packages() {
     setForm((current) => ({
       ...current,
       [name]: type === 'checkbox' ? checked : value,
-      ...(name === 'service_type' && value === 'pppoe' ? { duration_unit: 'days' } : {}),
+      ...(name === 'service_type' && value === 'pppoe' && current.duration_unit === 'hours' ? { duration_unit: 'months' } : {}),
     }));
     setErrors((current) => ({ ...current, [event.target.name]: '' }));
   };
@@ -73,7 +74,7 @@ export default function Packages() {
     if (!form.name.trim()) nextErrors.name = 'Package name is required';
     if (!form.speed.trim()) nextErrors.speed = 'Speed is required';
     if (!form.duration_value || Number(form.duration_value) <= 0) nextErrors.duration_value = 'Duration must be greater than 0';
-    if (form.service_type === 'pppoe' && form.duration_unit === 'hours') nextErrors.duration_value = 'PPPoE packages must use days';
+    if (form.service_type === 'pppoe' && form.duration_unit === 'hours') nextErrors.duration_value = 'PPPoE packages must use days or months';
     if (!form.price || Number(form.price) <= 0) nextErrors.price = 'Price must be greater than 0';
     setErrors(nextErrors);
     return Object.keys(nextErrors).length === 0;
@@ -115,7 +116,7 @@ export default function Packages() {
       name: pkg.name || '',
       speed: pkg.speed || '',
       duration_value: String(pkg.duration_value || (pkg.duration_unit === 'hours' ? pkg.duration_hours : pkg.duration_days) || ''),
-      duration_unit: packageType(pkg) === 'pppoe' ? 'days' : pkg.duration_unit || 'days',
+      duration_unit: packageType(pkg) === 'pppoe' && pkg.duration_unit === 'hours' ? 'months' : pkg.duration_unit || 'days',
       price: String(pkg.price || ''),
       is_active: pkg.is_active !== false,
     });
@@ -134,9 +135,9 @@ export default function Packages() {
         name: form.name,
         speed: form.speed,
         duration_value: Number(form.duration_value),
-        duration_unit: form.service_type === 'pppoe' ? 'days' : form.duration_unit,
-        duration_days: form.service_type !== 'pppoe' && form.duration_unit === 'hours' ? 1 : Number(form.duration_value),
-        duration_hours: form.service_type !== 'pppoe' && form.duration_unit === 'hours' ? Number(form.duration_value) : Number(form.duration_value) * 24,
+        duration_unit: form.duration_unit,
+        duration_days: form.duration_unit === 'hours' ? 1 : form.duration_unit === 'months' ? Number(form.duration_value) * 31 : Number(form.duration_value),
+        duration_hours: form.duration_unit === 'hours' ? Number(form.duration_value) : form.duration_unit === 'months' ? Number(form.duration_value) * 31 * 24 : Number(form.duration_value) * 24,
         price: Number(form.price),
         is_active: form.is_active,
       };
@@ -402,9 +403,10 @@ export default function Packages() {
                 <label className="form-label" htmlFor="duration_value">Duration</label>
                 <div className="grid grid-cols-[1fr_auto] gap-2">
                   <input id="duration_value" name="duration_value" type="number" min="1" step="1" className="form-input" value={form.duration_value} onChange={update} />
-                  <select name="duration_unit" className="form-input" value={form.service_type === 'pppoe' ? 'days' : form.duration_unit} onChange={update} disabled={form.service_type === 'pppoe'}>
+                  <select name="duration_unit" className="form-input" value={form.duration_unit} onChange={update}>
                     {form.service_type !== 'pppoe' && <option value="hours">Hours</option>}
                     <option value="days">Days</option>
+                    <option value="months">Months</option>
                   </select>
                 </div>
                 {errors.duration_value && <p className="form-error">{errors.duration_value}</p>}
