@@ -41,10 +41,11 @@ def expire_customer_access():
                 continue
             service_type = customer.get("service_type") or "hotspot"
             username = customer.get("mac_address") if service_type == "tv" else customer.get("username")
-            try:
-                set_customer_enabled({"id": tenant_id, **tenant}, username, service_type, False)
-            except Exception:
-                pass
+            if service_type != "pppoe":
+                try:
+                    set_customer_enabled({"id": tenant_id, **tenant}, username, service_type, False)
+                except Exception:
+                    pass
             ref(f"tenants/{tenant_id}/customers/{customer['id']}").update(
                 {
                     "status": "expired",

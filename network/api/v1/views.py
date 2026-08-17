@@ -2151,7 +2151,11 @@ def _customer_secret_script(customer):
     client_mac = _rsc_escape(normalize_mac(customer.get("router_client_mac") or customer.get("mac_address") or customer.get("mac") or ""))
     if not username:
         return ""
-    disabled = "no" if customer.get("status") == "active" else "yes"
+    status = str(customer.get("status") or "active").strip().lower()
+    if service_type == "pppoe":
+        disabled = "yes" if status in {"inactive", "paused", "suspended"} else "no"
+    else:
+        disabled = "no" if status == "active" else "yes"
     rate_limit = _rsc_escape(normalize_rate_limit(customer.get("speed")) or "")
     rate_limit_field = f' rate-limit="{rate_limit}"' if rate_limit else ""
     ppp_profile_script = (
@@ -2752,6 +2756,16 @@ def router_provision_script(request, token):
     tenant_packages = [pkg for pkg in list_children(f"tenants/{tenant_id}/packages") if pkg.get("name")]
     package_profile_script = "".join(_package_profile_script(pkg) for pkg in tenant_packages)
     package_profile_ids = [str(pkg.get("id")) for pkg in tenant_packages if pkg.get("id")]
+    package_by_name = {str(pkg.get("name") or ""): pkg for pkg in tenant_packages}
+    tenant_customers = [
+        {
+            **customer,
+            "speed": (package_by_name.get(str(customer.get("package") or "")) or {}).get("speed"),
+        }
+        for customer in list_children(f"tenants/{tenant_id}/customers")
+        if customer.get("username") and str(customer.get("service_type") or "hotspot").lower() in {"pppoe", "hotspot"}
+    ]
+    customer_secret_script = "".join(_customer_secret_script(customer) for customer in tenant_customers)
     snapshot_script = _router_snapshot_fetch_script(snapshot_url)
 
     wg_config = _wireguard_server_config(tenant)
@@ -3125,6 +3139,8 @@ def router_provision_script(request, token):
         {mgmt_lockdown_script}
         :log info "Billing SaaS Step 8: syncing package profiles by service type";
         {package_profile_script or ':log info "Billing SaaS: no package profiles to sync";'}
+        :log info "Billing SaaS Step 8b: syncing existing customer access";
+        {customer_secret_script or ':log info "Billing SaaS: no existing customer access to sync";'}
         :local billingHsFileCount [:len [/file find name~"hotspot"]];
         :do {{ /tool fetch keep-result=no url=("{snapshot_url}/hotspot-files-check?count=" . $billingHsFileCount) }} on-error={{ :log warning "Billing SaaS: hotspot file count report failed" }}
         :log info "Billing SaaS Step 9: running health checks and returning provisioning report";
@@ -3344,6 +3360,14 @@ def router_provision_complete(request, token):
                 "ppp_profile_status": "synced",
                 "ppp_profile_synced_at": iso_now(),
                 "ppp_profile_error": None,
+            })
+    for customer in list_children(f"tenants/{tenant_id}/customers"):
+        service_type = str(customer.get("service_type") or "hotspot").lower()
+        if customer.get("id") and service_type in {"pppoe", "hotspot"}:
+            ref(f"tenants/{tenant_id}/customers/{customer['id']}").update({
+                "provisioning_status": "provisioned",
+                "provisioning_message": "Customer access synced during MikroTik provisioning",
+                "provisioned_at": iso_now(),
             })
     tenant_data = ref(f"tenants/{tenant_id}").get() or {}
     _update_linked_router(tenant_id, {**tenant_data, **updates}, status="online")

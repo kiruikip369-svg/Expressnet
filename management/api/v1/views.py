@@ -828,7 +828,10 @@ def customer_add(request):
     if customer_status not in {"active", "inactive", "paused", "suspended"}:
         return ok({"message": "Customer status must be active, inactive, paused, or suspended"}, 400)
     router_disabled = customer_status != "active"
-    provision = data.get("provision_mikrotik", False)
+    provision = data.get("provision_mikrotik")
+    if provision is None:
+        provision = service_type in {"pppoe", "hotspot"}
+    provision = bool(provision)
     if provision and service_type == "static":
         return ok({"message": "Static customers can be saved here, but MikroTik auto-provisioning is only available for PPPoE and Hotspot customers"}, 400)
     linked_routers = request.tenant.get("linked_routers") or {}
@@ -1980,7 +1983,7 @@ def activate_paid_access(tenant, payment_id, payment, phone, payment_code):
     expiry = utcnow() + duration
     mac_address = normalize_mac(payment.get("mac_address") or (customer or {}).get("mac_address"))
     username = mac_address if service_type == "tv" else (payment.get("username") or (customer or {}).get("username") or to_access_username(phone))
-    password = str(payment_code)
+    password = str((customer or {}).get("password") or payment_code) if service_type == "pppoe" else str(payment_code)
     if customer:
         updates = {"username": username, "password": password, "package": package_for_access, "service_type": service_type, "status": "active", "expiry_date": expiry.isoformat(), "last_payment_id": payment_id, "last_payment_code": payment_code, "auto_reconnect": True, "updated_at": iso_now()}
         if mac_address:

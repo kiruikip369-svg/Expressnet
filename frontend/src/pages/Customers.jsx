@@ -17,7 +17,7 @@ const initialForm = {
   support: '',
   package_name: '',
   service_type: 'pppoe',
-  provision_mikrotik: false,
+  provision_mikrotik: true,
 };
 
 function toDate(value) {
@@ -59,6 +59,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
   const [errors, setErrors] = useState({});
   const [editingId, setEditingId] = useState(null);
   const isHotspotOnlyPage = serviceLocked === 'hotspot';
+  const hideManualAccessActions = serviceLocked === 'pppoe' || serviceLocked === 'hotspot';
 
   const packageMap = useMemo(() => {
     return packages.reduce((map, item) => {
@@ -207,7 +208,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
       mikrotik_router_id: form.mikrotik_router_id,
       package: form.package_name,
       service_type: serviceType,
-      provision_mikrotik: form.provision_mikrotik,
+      provision_mikrotik: serviceType !== 'static' && form.provision_mikrotik,
     };
     if (!isHotspotOnlyPage) {
       payload.location = form.location;
@@ -257,7 +258,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
       mikrotik_router_id: customer.mikrotik_router_id || '',
       support: customer.support || '',
       package_name: customer.package || '',
-      provision_mikrotik: false,
+      provision_mikrotik: serviceTypeOf(customer) !== 'static',
       service_type: serviceTypeOf(customer),
     });
     setModalOpen(true);
@@ -360,7 +361,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
           <h1 className="page-title">{title}</h1>
           <p className="page-subtitle">
             {serviceLocked
-              ? `Manage ${serviceLabel(serviceLocked)} customers only, including renewals, expiry, and MikroTik provisioning.`
+              ? `Manage ${serviceLabel(serviceLocked)} customers, expiry, payments, and MikroTik provisioning.`
               : 'Manage PPPoE, Hotspot, and Static users from one page, with active and inactive filters.'}
           </p>
         </div>
@@ -455,18 +456,22 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
                 <td className="table-cell px-3"><StatusBadge status={customer.status} /></td>
                 <td className="table-cell sticky right-0 border-l border-slate-200 bg-white px-3">
                   <div className="flex flex-nowrap gap-2">
-                    <button type="button" className="btn-secondary" onClick={() => provisionCustomer(customer)} disabled={provisioningId === customer.id}>
-                      <Router size={16} />
-                      {provisioningId === customer.id ? 'Provisioning...' : 'Provision'}
-                    </button>
+                    {!hideManualAccessActions && (
+                      <button type="button" className="btn-secondary" onClick={() => provisionCustomer(customer)} disabled={provisioningId === customer.id}>
+                        <Router size={16} />
+                        {provisioningId === customer.id ? 'Provisioning...' : 'Provision'}
+                      </button>
+                    )}
                     <button type="button" className="btn-secondary" onClick={() => startPayment(customer)} disabled={payingId === customer.id}>
                       <CreditCard size={16} />
                       {payingId === customer.id ? 'Sending...' : 'Pay'}
                     </button>
-                    <button type="button" className="btn-secondary" onClick={() => renewCustomer(customer)}>
-                      <RefreshCw size={16} />
-                      Renew
-                    </button>
+                    {!hideManualAccessActions && serviceTypeOf(customer) !== 'pppoe' && (
+                      <button type="button" className="btn-secondary" onClick={() => renewCustomer(customer)}>
+                        <RefreshCw size={16} />
+                        Renew
+                      </button>
+                    )}
                     <button type="button" className="btn-secondary" onClick={() => editCustomer(customer)}>
                       <Pencil size={16} />
                       Edit
