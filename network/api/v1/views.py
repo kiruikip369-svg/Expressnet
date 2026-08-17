@@ -576,25 +576,34 @@ def _html_page(title, body, status=200):
     .chev{{opacity:.75}}
     .call{{display:inline-flex;align-items:center;gap:9px;margin-top:16px;min-height:44px;border-radius:7px;background:rgba(0,0,0,.28);padding:10px 22px;color:#fff;text-decoration:none;font-size:17px;font-weight:800;letter-spacing:.02em}}
     .card{{background:#242424;border:1px solid rgba(255,255,255,.11);border-radius:10px;padding:16px;margin:12px 0;box-shadow:0 10px 26px rgba(0,0,0,.35);min-width:0}}
-    .card strong{{font-size:16px;color:#fff}}
+    .card strong{{font-size:15px;color:#fff;font-weight:700}}
     .quick{{display:grid;gap:10px}}
     .quick form{{display:grid;grid-template-columns:1fr;gap:8px}}
-    .pkg{{display:flex;gap:14px;align-items:center;justify-content:space-between;min-height:92px;padding:18px 20px}}
+    .pkg{{display:flex;gap:14px;align-items:center;justify-content:space-between;min-height:88px;padding:17px 20px}}
     .pkg > *{{min-width:0}}
-    .pkg-title{{font-size:18px;font-weight:900;text-transform:uppercase;line-height:1.2;overflow-wrap:anywhere}}
-    .pkg-meta{{margin-top:5px;font-size:16px;color:#cbd5e1}}
+    .pkg-title{{font-size:16px;font-weight:750;text-transform:uppercase;line-height:1.22;overflow-wrap:anywhere}}
+    .pkg-meta{{margin-top:5px;font-size:14px;color:#cbd5e1}}
     form{{width:100%}}
     input,button{{width:100%;min-height:42px;font:inherit;border-radius:7px;border:1px solid rgba(255,255,255,.12);padding:10px 12px}}
     input{{background:#000;color:#fff;outline:none}}
     input::placeholder{{color:#8b93a1}}
     input:focus{{border-color:#2600d8}}
-    button{{background:#2600d8;color:white;border-color:#2600d8;font-weight:800;cursor:pointer;box-shadow:0 12px 22px rgba(0,0,0,.45)}}
+    button{{background:#2600d8;color:white;border-color:#2600d8;font-weight:700;cursor:pointer;box-shadow:0 12px 22px rgba(0,0,0,.45)}}
     .secondary{{background:transparent;border-color:#2600d8;box-shadow:none}}
     .muted{{color:#cbd5e1;font-size:13px}} .price{{font-weight:800;color:#fff}}
-    .section-title{{margin:22px 0 12px;font-size:22px;font-weight:900;color:#fff}}
+    .section-title{{margin:22px 0 12px;font-size:20px;font-weight:750;color:#fff}}
     .alert{{background:#2b1806;border:1px solid #9a5b16;color:#fed7aa;border-radius:8px;padding:12px;margin:12px 0}}
+    .buy-btn{{width:auto;min-width:84px;padding-left:22px;padding-right:22px}}
+    .pay-modal{{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.72);padding:18px;z-index:20}}
+    .pay-modal.open{{display:flex}}
+    .pay-box{{width:min(100%,420px);background:#242424;border:1px solid rgba(255,255,255,.14);border-radius:10px;padding:18px;box-shadow:0 24px 60px rgba(0,0,0,.6)}}
+    .pay-head{{display:flex;align-items:start;justify-content:space-between;gap:12px;margin-bottom:14px}}
+    .pay-head h2{{margin:0;font-size:17px;font-weight:750}}
+    .pay-head p{{margin:4px 0 0;color:#cbd5e1;font-size:13px}}
+    .close-btn{{width:38px;min-width:38px;min-height:38px;padding:0;background:transparent;border-color:rgba(255,255,255,.16);box-shadow:none;font-size:22px;line-height:1}}
+    .modal-actions{{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}}
     @media(min-width:600px){{.quick form.row{{grid-template-columns:1fr auto}} .quick form.credentials{{grid-template-columns:1fr 1fr auto}} .quick button{{width:auto;min-width:118px}}}}
-    @media(max-width:520px){{header{{width:100%;margin-top:0;border-radius:0 0 18px 18px}}main{{padding-left:14px;padding-right:14px}}.pkg{{padding:16px;gap:10px}}.pkg-title{{font-size:16px}}.pkg-meta{{font-size:14px}}.pkg button{{width:auto;min-width:74px;padding-left:16px;padding-right:16px}}}}
+    @media(max-width:520px){{header{{width:100%;margin-top:0;border-radius:0 0 18px 18px}}main{{padding-left:14px;padding-right:14px}}.pkg{{padding:16px;gap:10px}}.pkg-title{{font-size:15px}}.pkg-meta{{font-size:13px}}.buy-btn{{min-width:72px;padding-left:16px;padding-right:16px}}.modal-actions{{grid-template-columns:1fr}}}}
   </style>
 </head>
 <body>{body}</body>
@@ -845,22 +854,17 @@ def captive_portal_page(request, tenant_id):
     )
     selected_payment_method = selected_daraja_method(tenant)
     if packages:
+        hidden_js = json.dumps(hidden)
         package_html_v2 = "".join(
             f"""
-            <form class="card pkg" method="post" action="/api/captive/{html.escape(str(tenant_id))}/pay">
-              <input type="hidden" name="package_id" value="{html.escape(str(pkg.get('id')))}">
-              <input type="hidden" name="service_type" value="{html.escape(str(pkg.get('service_type') or 'hotspot'))}">
-              <input type="hidden" name="payment_method" value="{html.escape(selected_payment_method)}">
-              {hidden}
+            <div class="card pkg">
               <div>
                 <div class="pkg-title">{html.escape(str(pkg.get('name') or 'Package'))}</div>
                 <div class="pkg-meta"><span class="price">Ksh {html.escape(str(pkg.get('price') or 0))}</span> for {html.escape(str(pkg.get('duration_label') or ''))}</div>
                 {f"<div class='muted'>{html.escape(str(pkg.get('speed') or ''))}</div>" if pkg.get('speed') else ""}
               </div>
-              {('<input name="username" required placeholder="PPPoE username">' if pkg.get('service_type') == 'pppoe' else '')}
-              <input name="phone" inputmode="tel" required placeholder="M-Pesa/phone number">
-              <button type="submit">Buy</button>
-            </form>"""
+              <button class="buy-btn" type="button" data-package-id="{html.escape(str(pkg.get('id')), quote=True)}" data-service-type="{html.escape(str(pkg.get('service_type') or 'hotspot'), quote=True)}" data-package-name="{html.escape(str(pkg.get('name') or 'Package'), quote=True)}">Buy</button>
+            </div>"""
             for pkg in packages
         )
     else:
@@ -910,6 +914,60 @@ def captive_portal_page(request, tenant_id):
         {voucher_html_v2}
         <div class="section-title">Unlimited packages</div>
         {package_html_v2}
+        <div id="pay-modal" class="pay-modal" aria-hidden="true">
+          <form id="pay-form" class="pay-box" method="post" action="/api/captive/{html.escape(str(tenant_id))}/pay">
+            <div class="pay-head">
+              <div>
+                <h2 id="pay-title">Buy package</h2>
+                <p>Enter your M-Pesa phone number.</p>
+              </div>
+              <button class="close-btn" type="button" id="pay-close" aria-label="Close">×</button>
+            </div>
+            <input type="hidden" name="package_id" id="pay-package-id">
+            <input type="hidden" name="service_type" id="pay-service-type" value="hotspot">
+            <input type="hidden" name="payment_method" value="{html.escape(selected_payment_method)}">
+            <span id="pay-hidden-fields"></span>
+            <input name="phone" inputmode="tel" required placeholder="M-Pesa/phone number" autocomplete="tel">
+            <div class="modal-actions">
+              <button class="secondary" type="button" id="pay-cancel">Cancel</button>
+              <button type="submit">Send prompt</button>
+            </div>
+          </form>
+        </div>
+        <script>
+          (function() {{
+            var modal = document.getElementById('pay-modal');
+            var form = document.getElementById('pay-form');
+            var title = document.getElementById('pay-title');
+            var packageId = document.getElementById('pay-package-id');
+            var serviceType = document.getElementById('pay-service-type');
+            var hiddenFields = document.getElementById('pay-hidden-fields');
+            var hiddenHtml = {hidden_js};
+            function close() {{
+              modal.className = 'pay-modal';
+              modal.setAttribute('aria-hidden', 'true');
+            }}
+            function open(button) {{
+              packageId.value = button.getAttribute('data-package-id') || '';
+              serviceType.value = button.getAttribute('data-service-type') || 'hotspot';
+              title.textContent = button.getAttribute('data-package-name') || 'Buy package';
+              hiddenFields.innerHTML = hiddenHtml;
+              modal.className = 'pay-modal open';
+              modal.setAttribute('aria-hidden', 'false');
+              setTimeout(function() {{
+                var phone = form.querySelector('input[name="phone"]');
+                if (phone) phone.focus();
+              }}, 40);
+            }}
+            var buttons = document.querySelectorAll('.buy-btn');
+            for (var i = 0; i < buttons.length; i++) {{
+              buttons[i].onclick = function() {{ open(this); }};
+            }}
+            document.getElementById('pay-close').onclick = close;
+            document.getElementById('pay-cancel').onclick = close;
+            modal.onclick = function(event) {{ if (event.target === modal) close(); }};
+          }})();
+        </script>
       </main>
     """
     response = _html_page(f"{tenant.get('business_name') or 'Hotspot'} packages", body_html_v2)
