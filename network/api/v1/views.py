@@ -940,7 +940,7 @@ def captive_portal_page(request, tenant_id):
           <button class="secondary" type="submit">Sign in</button>
         </form>
       </div>
-    """
+    """    
     logo_url = html.escape(str(tenant.get("logo_url") or ""), quote=True)
     phone_value = html.escape(str(tenant.get("phone") or tenant.get("support_phone") or "0797443584"), quote=True)
     logo_html = f"<img src='{logo_url}' alt=''>" if logo_url else "WiFi"
