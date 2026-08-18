@@ -338,8 +338,8 @@ export default function Dashboard() {
       </div>
 
       <section className={`grid gap-4 ${canViewEarnings ? 'xl:grid-cols-4' : 'xl:grid-cols-3'}`}>
-        <KpiCard icon={Users} title="Total Users" value={totalUsers.toLocaleString('en-KE')} pills={[`Enabled: ${enabledUsers}`, `PPPoE: ${pppoeUsers}`, `Hotspot: ${hotspotUsers}`, `Static: ${staticUsers}`]} action="View users" to="/customers" />
-        <KpiCard icon={Activity} title="Connected Users" value={activeUsers.toLocaleString('en-KE')} helper="Currently online from router/RADIUS sessions" action="Live sessions" to="/mikrotik">
+        <KpiCard icon={Users} title="Total Users" value={totalUsers.toLocaleString('en-KE')} pills={[`PPPoE: ${pppoeUsers}`, `Hotspot: ${hotspotUsers}`, `Static: ${staticUsers}`]} action="View users" to="/customers" />
+        <KpiCard icon={Activity} title="Connected Users" value={activeUsers.toLocaleString('en-KE')} helper="Currently online" action="Live sessions" to="/mikrotik">
           <Sparkline />
         </KpiCard>
         {canViewEarnings && <KpiCard icon={Wallet} title="Daily Earnings" value={formatKES(summary.daraja_revenue_today ?? summary.revenue_today)} helper="Successful Daraja payments today" action="View payments" to="/payments" />}
