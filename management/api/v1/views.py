@@ -22,6 +22,7 @@ from django.db.models import Count, Sum
 from django.http import FileResponse, Http404, HttpResponse
 from django.shortcuts import redirect
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework.decorators import api_view, permission_classes, renderer_classes
 from rest_framework.renderers import JSONRenderer
@@ -867,6 +868,33 @@ def customers(request, customer_id=None):
         ]
         updates = {field: data[field] for field in allowed if field in data}
         service_type_for_update = str(updates.get("service_type") or customer.get("service_type") or "hotspot").lower()
+        adjustment_applied = False
+        if service_type_for_update == "hotspot" and any(field in data for field in ["session_adjustment_value", "session_adjustment_unit", "session_adjustment_direction"]):
+            raw_value = data.get("session_adjustment_value")
+            if raw_value not in (None, ""):
+                try:
+                    adjustment_value = float(raw_value)
+                except (TypeError, ValueError):
+                    return ok({"message": "Session adjustment must be a valid number"}, 400)
+                if adjustment_value <= 0:
+                    return ok({"message": "Session adjustment must be greater than zero"}, 400)
+                unit = str(data.get("session_adjustment_unit") or "hours").strip().lower()
+                if unit not in {"minutes", "hours", "days"}:
+                    return ok({"message": "Session adjustment unit must be minutes, hours, or days"}, 400)
+                direction = str(data.get("session_adjustment_direction") or "add").strip().lower()
+                if direction not in {"add", "subtract"}:
+                    return ok({"message": "Session adjustment direction must be add or subtract"}, 400)
+                current_expiry = parse_datetime(str(customer.get("expiry_date") or "")) if customer.get("expiry_date") else None
+                if current_expiry and current_expiry.tzinfo is None:
+                    current_expiry = timezone.make_aware(current_expiry, timezone.get_current_timezone())
+                base_expiry = current_expiry or timezone.now()
+                delta_kwargs = {unit: adjustment_value}
+                delta = timedelta(**delta_kwargs)
+                next_expiry = base_expiry + delta if direction == "add" else base_expiry - delta
+                updates["expiry_date"] = next_expiry.isoformat()
+                updates["session_adjusted_at"] = iso_now()
+                updates["session_adjustment_note"] = f"{direction} {adjustment_value:g} {unit}"
+                adjustment_applied = True
         if service_type_for_update == "pppoe" and any(field in data for field in ["grace_period_enabled", "grace_period_value", "grace_period_unit"]):
             grace_payload = _pppoe_grace_payload(data, service_type_for_update)
             if isinstance(grace_payload, Response):
@@ -893,14 +921,20 @@ def customers(request, customer_id=None):
                 return ok({"message": "A customer with this username already exists"}, 409)
         updates["updated_at"] = iso_now()
         ref(f"tenants/{tenant['id']}/customers/{customer_id}").update(updates)
-        if service_type_for_update == "pppoe" and updates.get("grace_period_enabled"):
+        should_sync_router = any(field in updates for field in ["username", "password", "package", "service_type", "status", "expiry_date"]) or adjustment_applied
+        if should_sync_router and service_type_for_update in {"pppoe", "hotspot"}:
             synced_customer = {**customer, **updates}
             pkg = find_child_by_field(f"tenants/{tenant['id']}/packages", "name", synced_customer.get("package"))
-            sync_payload = {**synced_customer, "package_name": synced_customer.get("package"), "speed": (pkg or {}).get("speed")}
+            sync_payload = {
+                **synced_customer,
+                "package_name": synced_customer.get("package"),
+                "speed": (pkg or {}).get("speed"),
+                "duration_seconds": int(package_duration_delta(pkg).total_seconds()) if pkg and service_type_for_update == "hotspot" else None,
+            }
             try:
                 if has_mikrotik_credentials(tenant):
-                    upsert_customer_access(tenant, sync_payload, disabled=False)
-                    set_customer_enabled(tenant, sync_payload.get("username"), "pppoe", True)
+                    upsert_customer_access(tenant, sync_payload, disabled=sync_payload.get("status") != "active")
+                    set_customer_enabled(tenant, sync_payload.get("username"), service_type_for_update, sync_payload.get("status") == "active")
                 elif _router_is_agent_linked(tenant):
                     _queue_router_command(request, {
                         "type": "sync_secrets",
@@ -908,7 +942,7 @@ def customers(request, customer_id=None):
                         "script": _customer_secret_script(sync_payload),
                     })
             except Exception:
-                logger.exception("Failed to sync PPPoE grace access")
+                logger.exception("Failed to sync customer access update")
         if "password" in updates or "username" in updates:
             try:
                 send_sms_message(
@@ -1489,9 +1523,20 @@ def dashboard_stats(request):
     now = utcnow()
     today = now.date()
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    def is_daraja_payment(payment):
+        method = str(payment.get("payment_method") or payment.get("method") or "").strip().lower()
+        provider = str(payment.get("provider") or "").strip().lower()
+        return (
+            method in {"daraja_paybill", "daraja_buygoods"}
+            or bool(payment.get("daraja_receipt_number") or payment.get("mpesa_receipt_number"))
+            or bool(payment.get("daraja_checkout_request_id") or payment.get("daraja_merchant_request_id"))
+            or (provider == "mpesa" and str(payment.get("collection_account") or "").strip().lower() == "platform_daraja")
+        )
+
     paid_payments = [p for p in payments_data if p.get("status") == "success"]
+    daraja_paid_payments = [p for p in paid_payments if is_daraja_payment(p)]
     revenue_this_month = sum(float(p.get("amount") or 0) for p in paid_payments if (payment_date(p) or now) >= month_start)
-    revenue_today = sum(float(p.get("amount") or 0) for p in paid_payments if payment_date(p) and payment_date(p).date() == today)
+    revenue_today = sum(float(p.get("amount") or 0) for p in daraja_paid_payments if payment_date(p) and payment_date(p).date() == today)
 
     last_12 = []
     for offset in range(11, -1, -1):
@@ -1619,6 +1664,39 @@ def dashboard_stats(request):
     traffic_percent = round(min((traffic_bps / 1_000_000), 100), 1) if router_sample_source == "routeros_api" and traffic_bps else 0
     active_sessions = snapshot.get("active_sessions") if router_sample_source == "routeros_api" else {}
     active_session_items = active_sessions.get("items") if isinstance(active_sessions, dict) else []
+    active_session_usernames = {
+        str(item.get("username") or "").strip().lower()
+        for item in (active_session_items or [])
+        if isinstance(item, dict) and str(item.get("username") or "").strip()
+    }
+    radius_active_session_count = 0
+    radius_active_session_items = []
+    try:
+        from billing_api.models import RadiusSession as RadiusSessionModel
+
+        radius_active = RadiusSessionModel.objects.filter(tenant_id=tenant_id, stopped_at__isnull=True)
+        radius_active_session_count = radius_active.count()
+        active_session_usernames.update(
+            str(username or "").strip().lower()
+            for username in radius_active.values_list("customer__username", flat=True)
+            if str(username or "").strip()
+        )
+        radius_active_session_items = [
+            {
+                "username": session.customer.username,
+                "service_type": session.service_type or session.customer.service_type,
+                "address": session.framed_ip or session.nas_ip,
+                "mac_address": "",
+                "uptime": str(now - session.started_at).split(".", 1)[0] if session.started_at else "",
+                "data_used": float((session.input_octets or 0) + (session.output_octets or 0)),
+                "server": session.nas_ip,
+            }
+            for session in radius_active.select_related("customer").order_by("-started_at")[:5]
+        ]
+    except Exception:
+        pass
+    router_active_session_count = int((active_sessions or {}).get("total") or len(active_session_items or [])) if isinstance(active_sessions, dict) else 0
+    connected_users_count = len(active_session_usernames) or max(router_active_session_count, radius_active_session_count)
     top_active_sessions = [
         {
             "username": item.get("username") or "-",
@@ -1631,7 +1709,7 @@ def dashboard_stats(request):
         }
         for item in (active_session_items or [])[:5]
         if isinstance(item, dict)
-    ]
+    ] or radius_active_session_items
 
     return ok(
         {
@@ -1642,7 +1720,9 @@ def dashboard_stats(request):
                 "total_customers": len(customers_data),
                 "pppoe_customers": len(pppoe_customers),
                 "hotspot_customers": len(hotspot_customers),
-                "active_customers": len([c for c in customers_data if c.get("status") == "active"]),
+                "active_customers": connected_users_count,
+                "enabled_customers": len([c for c in customers_data if c.get("status") == "active"]),
+                "daraja_revenue_today": round(revenue_today, 2),
             },
             "router_health": {
                 "status": router_status,

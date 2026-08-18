@@ -47,6 +47,7 @@ export default function MikrotikSettings() {
     const linked = config?.linked_routers || {};
     return Object.entries(linked).map(([id, item]) => ({
       id,
+      routerName: item.name || item.mikrotik_name || config?.mikrotik_name || config?.router_name || '',
       boardName: routerStatus?.device?.board_name || item.board_name || item.identity || 'MikroTik Router',
       provisioning: item.provisioning_status || config?.mikrotik_provisioning_status || 'pending',
       cpu: routerStatus?.device?.cpu_load ?? item.cpu_load,
@@ -70,7 +71,7 @@ export default function MikrotikSettings() {
   }), [rows]);
 
   const filteredRows = rows.filter((item) => {
-    const text = `${item.boardName} ${item.tunnelIp} ${item.wanIp} ${item.lanIp} ${item.provisioning}`.toLowerCase();
+    const text = `${item.routerName} ${item.boardName} ${item.tunnelIp} ${item.wanIp} ${item.lanIp} ${item.provisioning}`.toLowerCase();
     if (!text.includes(search.toLowerCase())) return false;
     if (filter === 'online') return item.status === 'online';
     if (filter === 'offline') return item.status !== 'online';
@@ -215,7 +216,7 @@ export default function MikrotikSettings() {
             <table className="min-w-[980px] divide-y divide-slate-200">
               <thead className="table-head">
                 <tr>
-                  <th className="px-4 py-3">Board Name</th>
+                  <th className="px-4 py-3">MikroTik Name</th>
                   <th className="px-4 py-3">Provisioning</th>
                   <th className="px-4 py-3">CPU</th>
                   <th className="px-4 py-3">Memory</th>
@@ -234,7 +235,10 @@ export default function MikrotikSettings() {
                   </tr>
                 ) : filteredRows.map((router) => (
                   <tr key={router.id}>
-                    <td className="table-cell font-medium text-slate-950">{router.boardName}</td>
+                    <td className="table-cell font-medium text-slate-950">
+                      <div>{router.routerName || router.boardName}</div>
+                      {router.routerName && <div className="mt-1 text-[11px] font-normal text-slate-500">{router.boardName}</div>}
+                    </td>
                     <td className="table-cell"><span className="rounded px-2 py-1 text-[11px] font-medium" style={{ background: 'var(--app-accent-muted)', color: 'var(--app-accent)' }}>{router.provisioning}</span></td>
                     <td className="table-cell">{router.cpu === undefined ? '-' : <span className="rounded bg-green-50 px-2 py-1 text-[11px] font-medium text-green-700">{router.cpu}%</span>}</td>
                     <td className="table-cell">{router.memory ? <span className="rounded px-2 py-1 text-[11px] font-medium" style={{ background: 'var(--app-accent-muted)', color: 'var(--app-accent)' }}>{formatMemory(router.memory)}</span> : '-'}</td>

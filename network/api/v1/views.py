@@ -815,6 +815,7 @@ def _linked_router_from_tenant(tenant):
     )
     return {
         "id": "primary",
+        "name": (tenant or {}).get("mikrotik_name") or (tenant or {}).get("router_name") or "",
         "board_name": device.get("board_name") or (tenant or {}).get("mikrotik_detected_board") or "MikroTik Router",
         "identity": (tenant or {}).get("mikrotik_detected_identity") or "",
         "version": device.get("version") or (tenant or {}).get("mikrotik_detected_version") or "",
@@ -2199,6 +2200,8 @@ def _customer_secret_script(customer):
         disabled = "no" if status == "active" else "yes"
     rate_limit = _rsc_escape(normalize_rate_limit(customer.get("speed")) or "")
     rate_limit_field = f' rate-limit="{rate_limit}"' if rate_limit else ""
+    limit_uptime = _rsc_escape(routeros_duration(customer.get("duration_seconds") or customer.get("limit_seconds")) or "")
+    limit_uptime_field = f' limit-uptime="{limit_uptime}"' if limit_uptime and service_type == "hotspot" else ""
     ppp_profile_script = (
         f':if ("{profile}" != "default") do={{ '
         f':if ([:len [/ppp profile find name="{profile}"]] = 0) do={{'
@@ -2239,9 +2242,9 @@ def _customer_secret_script(customer):
         +
         f':if ([:len [/ip hotspot user find name="{username}"]] = 0) do={{'
         f' /ip hotspot user add name="{username}" password="{password}" '
-        f'profile="{profile}" disabled={disabled} comment="billing-saas-managed" }} '
+        f'profile="{profile}" disabled={disabled}{limit_uptime_field} comment="billing-saas-managed" }} '
         f'else={{ /ip hotspot user set [find name="{username}"] password="{password}" '
-        f'profile="{profile}" disabled={disabled} comment="billing-saas-managed" }};'
+        f'profile="{profile}" disabled={disabled}{limit_uptime_field} comment="billing-saas-managed" }};'
         f':if ("{disabled}" = "no" && "{client_ip}" != "") do={{ '
         f':do {{ /ip hotspot active login user="{username}" password="{password}" ip="{client_ip}" mac-address="{client_mac}" }} '
         f'on-error={{ :log warning "Billing SaaS agent: automatic Hotspot login failed for {username}" }}; '
@@ -3611,6 +3614,8 @@ def settings_mikrotik(request):
         if _router_is_agent_linked(request.tenant) and not linked_routers:
             linked_routers = {"primary": _linked_router_from_tenant(request.tenant)}
         return ok({
+            "mikrotik_name": request.tenant.get("mikrotik_name", "") or request.tenant.get("router_name", ""),
+            "router_name": request.tenant.get("mikrotik_name", "") or request.tenant.get("router_name", ""),
             "mikrotik_host": request.tenant.get("mikrotik_host", ""),
             "mikrotik_user": request.tenant.get("mikrotik_user", ""),
             "mikrotik_port": int(request.tenant.get("mikrotik_port") or 8728),
@@ -3627,7 +3632,7 @@ def settings_mikrotik(request):
         })
     data = body(request)
     updates = {}
-    for field in ["mikrotik_host", "mikrotik_user", "mikrotik_pass"]:
+    for field in ["mikrotik_host", "mikrotik_user", "mikrotik_pass", "mikrotik_name"]:
         if field in data and (field != "mikrotik_pass" or str(data[field]).strip()):
             updates[field] = str(data[field]).strip() if field != "mikrotik_pass" else str(data[field])
     if "mikrotik_port" in data:
@@ -3637,7 +3642,7 @@ def settings_mikrotik(request):
     updates["mikrotik_updated_at"] = iso_now()
     ref(f"tenants/{request.tenant['id']}").update(updates)
     merged = {**request.tenant, **updates}
-    return ok({"success": True, "message": "MikroTik configuration saved", "config": {"mikrotik_host": merged.get("mikrotik_host", ""), "mikrotik_user": merged.get("mikrotik_user", ""), "mikrotik_port": int(merged.get("mikrotik_port") or 8728), "has_mikrotik_password": bool(merged.get("mikrotik_pass"))}})
+    return ok({"success": True, "message": "MikroTik configuration saved", "config": {"mikrotik_name": merged.get("mikrotik_name", "") or merged.get("router_name", ""), "mikrotik_host": merged.get("mikrotik_host", ""), "mikrotik_user": merged.get("mikrotik_user", ""), "mikrotik_port": int(merged.get("mikrotik_port") or 8728), "has_mikrotik_password": bool(merged.get("mikrotik_pass"))}})
 
 
 @csrf_exempt

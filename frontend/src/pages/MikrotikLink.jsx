@@ -2,6 +2,7 @@ import {
   ArrowRight,
   CheckCircle2,
   Clipboard,
+  EthernetPort,
   PlugZap,
   RefreshCw,
   Router,
@@ -38,6 +39,8 @@ export default function MikrotikSettings() {
   const [activeStep, setActiveStep] = useState('link');
   const [selectedServices, setSelectedServices] = useState(['pppoe']);
   const [selectedPorts, setSelectedPorts] = useState([]);
+  const [routerName, setRouterName] = useState('');
+  const [savingName, setSavingName] = useState(false);
 
   const configured = useMemo(
     () => Boolean(
@@ -84,6 +87,7 @@ export default function MikrotikSettings() {
         // the previously linked router's snapshot or status in this screen.
         setProvisioningState({ status: '', provisionedAt: '', lastSeenAt: '', lastSeenIp: '', identity: '', version: '', board: '' });
         setRouterStatus(null);
+        setRouterName('');
         setActiveStep('link');
         return;
       }
@@ -96,6 +100,7 @@ export default function MikrotikSettings() {
         version: data.mikrotik_detected_version || '',
         board: data.mikrotik_detected_board || '',
       };
+      setRouterName(data.mikrotik_name || data.router_name || data.mikrotik_detected_identity || '');
       setProvisioningState({
         ...nextProvisioningState,
       });
@@ -144,6 +149,18 @@ export default function MikrotikSettings() {
   const goToConfiguration = async () => {
     const data = await pullRouterStatus();
     if (data) setActiveStep('configure');
+  };
+
+  const saveRouterName = async () => {
+    setSavingName(true);
+    try {
+      await api.patch('/settings/mikrotik', { mikrotik_name: routerName.trim() });
+      toast.success('MikroTik name saved');
+    } catch (error) {
+      toast.error(error.response?.data?.message || 'Failed to save MikroTik name');
+    } finally {
+      setSavingName(false);
+    }
   };
 
   const togglePort = (portName) => {
@@ -222,6 +239,31 @@ export default function MikrotikSettings() {
               New Command
             </button>
           </div>
+          <div className="mt-4 grid gap-3 rounded-lg border border-slate-200 bg-white p-4 sm:grid-cols-[1fr_auto] sm:items-end">
+            <label className="block">
+              <span className="form-label">MikroTik name</span>
+              <input
+                className="form-input"
+                value={routerName}
+                onChange={(event) => setRouterName(event.target.value)}
+                placeholder="Main office router"
+              />
+            </label>
+            <button type="button" className="btn-secondary h-11" onClick={saveRouterName} disabled={savingName}>
+              {savingName ? 'Saving...' : 'Save Name'}
+            </button>
+          </div>
+          <div className="mt-4 rounded-lg bg-slate-950 p-4 text-white">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-xs font-bold uppercase tracking-wide text-slate-300">Advanced mode command</span>
+              <button type="button" className="btn-secondary border-slate-700 bg-slate-800 text-white hover:bg-slate-700" onClick={() => copy('/system/device-mode/update mode=advanced', 'Advanced mode command')}>
+                <Clipboard size={15} />
+                Copy
+              </button>
+            </div>
+            <pre className="mt-3 overflow-auto whitespace-pre-wrap break-all rounded-md bg-slate-800 p-3 text-xs leading-6 text-slate-100">/system/device-mode/update mode=advanced</pre>
+            <p className="mt-3 text-xs font-semibold text-amber-200">After running it, restart the MikroTik when RouterOS asks for confirmation, then run the provisioning command below.</p>
+          </div>
           <div className="mt-4 rounded-lg bg-slate-950 p-4 text-white">
             <div className="flex items-center justify-between gap-3">
               <span className="text-xs font-bold uppercase tracking-wide text-slate-300">Router terminal</span>
@@ -281,6 +323,7 @@ export default function MikrotikSettings() {
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               {[
                 ['Board', routerStatus.device?.board_name || provisioningState?.board || '-'],
+                ['Name', routerName || routerStatus.device?.identity || provisioningState?.identity || '-'],
                 ['RouterOS', routerStatus.device?.version || provisioningState?.version || '-'],
                 ['CPU', `${routerStatus.device?.cpu_load ?? '-'}%`],
                 ['Uptime', routerStatus.device?.uptime || '-'],
@@ -339,8 +382,17 @@ export default function MikrotikSettings() {
                       onClick={() => togglePort(item.name)}
                       disabled={blocked}
                       title={blocked ? `${portLabel(item.name)} is ${item.assignment_warning || 'not assignable'}` : assigned ? `${portLabel(item.name)} assigned to ${serviceLabel(assigned.service_type)}` : portLabel(item.name)}
+                      aria-pressed={selected}
                     >
-                      <span className="block">{portLabel(item.name)}{blocked ? ' - WAN' : ''}</span>
+                      <span className="flex items-center justify-center gap-2">
+                        <EthernetPort size={18} />
+                        {portLabel(item.name)}{blocked ? ' - WAN' : ''}
+                      </span>
+                      {selected && (
+                        <span className="mt-1 block text-[11px] font-bold uppercase">
+                          Selected
+                        </span>
+                      )}
                       {assigned && (
                         <span className="mt-1 block text-[11px] font-bold uppercase text-[var(--app-accent)]">
                           {serviceLabel(assigned.service_type)} assigned

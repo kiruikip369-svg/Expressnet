@@ -168,7 +168,7 @@ function TrafficChart({ rx, tx }) {
   return (
     <div className="theme-card-muted rounded-md border p-3">
       <div className="flex items-center justify-between gap-3">
-        <h3 className={`theme-text ${TYPE.cardTitle}`}>Traffic (Last 24h)</h3>
+        <h3 className={`theme-text ${TYPE.cardTitle}`}>Realtime Traffic</h3>
         <div className={`theme-muted flex gap-4 ${TYPE.eyebrow}`}>
           <span className="inline-flex items-center gap-1"><span className="h-1.5 w-4 rounded-full" style={{ background: 'var(--app-accent)' }} />Upload</span>
           <span className="inline-flex items-center gap-1"><span className="h-1.5 w-4 rounded-full" style={{ background: 'var(--app-accent-soft)' }} />Download</span>
@@ -284,6 +284,7 @@ export default function Dashboard() {
   const pppoeUsers = Number(summary.pppoe_customers || 0);
   const hotspotUsers = Number(summary.hotspot_customers || 0);
   const activeUsers = Number(summary.active_customers || 0);
+  const enabledUsers = Number(summary.enabled_customers || 0);
   const packages = dashboard?.package_utilization || [];
   const activePackages = packages.reduce((sum, item) => sum + Number(item[1] || 0), 0);
   const staticUsers = Math.max(0, totalUsers - pppoeUsers - hotspotUsers);
@@ -299,7 +300,7 @@ export default function Dashboard() {
     { label: 'PPPoE', value: pppoeUsers },
     { label: 'Hotspot', value: hotspotUsers },
     { label: 'Static', value: staticUsers },
-    { label: 'Expired', value: Math.max(0, totalUsers - activeUsers) },
+    { label: 'Inactive', value: Math.max(0, totalUsers - enabledUsers) },
   ];
 
   const quickActions = [
@@ -337,11 +338,11 @@ export default function Dashboard() {
       </div>
 
       <section className={`grid gap-4 ${canViewEarnings ? 'xl:grid-cols-4' : 'xl:grid-cols-3'}`}>
-        <KpiCard icon={Users} title="Total Users" value={totalUsers.toLocaleString('en-KE')} pills={[`PPPoE: ${pppoeUsers}`, `Hotspot: ${hotspotUsers}`, `Static: ${staticUsers}`]} action="View users" to="/customers" />
-        <KpiCard icon={Activity} title="Active Users" value={activeUsers.toLocaleString('en-KE')} helper="Currently online" action="Live sessions" to="/mikrotik">
+        <KpiCard icon={Users} title="Total Users" value={totalUsers.toLocaleString('en-KE')} pills={[`Enabled: ${enabledUsers}`, `PPPoE: ${pppoeUsers}`, `Hotspot: ${hotspotUsers}`, `Static: ${staticUsers}`]} action="View users" to="/customers" />
+        <KpiCard icon={Activity} title="Connected Users" value={activeUsers.toLocaleString('en-KE')} helper="Currently online from router/RADIUS sessions" action="Live sessions" to="/mikrotik">
           <Sparkline />
         </KpiCard>
-        {canViewEarnings && <KpiCard icon={Wallet} title="Daily Earnings" value={formatKES(summary.revenue_today)} helper="Successful payments today" action="View payments" to="/payments" />}
+        {canViewEarnings && <KpiCard icon={Wallet} title="Daily Earnings" value={formatKES(summary.daraja_revenue_today ?? summary.revenue_today)} helper="Successful Daraja payments today" action="View payments" to="/payments" />}
         <KpiCard icon={Box} title="Active Packages" value={activePackages.toLocaleString('en-KE')} helper="Total active packages" action="Manage packages" to="/packages" />
       </section>
 

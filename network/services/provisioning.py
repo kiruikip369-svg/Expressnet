@@ -1317,15 +1317,16 @@ def upsert_customer_access(tenant, customer, disabled=False):
         existing = find_router_item(api, path, customer.get("username"))
         
         # Explicit password stripping or validation logic per specifications
+        password = str(customer.get("password") or "").strip()
         fields = {
             "name": customer.get("username"),
-            "password": customer.get("password"),
             "profile": customer.get("package_name") or customer.get("package"),
             "disabled": "yes" if disabled else "no",
             "comment": f"billing-saas access expires: {customer.get('expires_at') or customer.get('expiry_date') or ''}".strip(),
         }
+        if password:
+            fields["password"] = password
         if service_type == "pppoe":
-            fields["password"] = customer.get("password")  # Keep for PPPoE authentication
             fields["service"] = "pppoe"
         else:
             limit_uptime = routeros_duration(customer.get("duration_seconds") or customer.get("limit_seconds"))

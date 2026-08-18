@@ -21,6 +21,10 @@ const initialForm = {
   grace_period_enabled: false,
   grace_period_value: '',
   grace_period_unit: 'days',
+  session_adjustment_enabled: false,
+  session_adjustment_value: '',
+  session_adjustment_unit: 'hours',
+  session_adjustment_direction: 'add',
 };
 
 function toDate(value) {
@@ -195,6 +199,10 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
       const value = Number(form.grace_period_value);
       if (!Number.isFinite(value) || value <= 0) nextErrors.grace_period_value = 'Enter a grace period greater than zero';
     }
+    if (selectedService === 'hotspot' && form.session_adjustment_enabled) {
+      const value = Number(form.session_adjustment_value);
+      if (!Number.isFinite(value) || value <= 0) nextErrors.session_adjustment_value = 'Enter a session adjustment greater than zero';
+    }
     if ((form.provision_mikrotik || form.mikrotik_router_id) && mikrotikRouters.length > 0 && !form.mikrotik_router_id) nextErrors.mikrotik_router_id = 'Select the MikroTik for this customer';
     setErrors(nextErrors);
     return Object.keys(nextErrors).length === 0;
@@ -222,6 +230,11 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
       payload.grace_period_enabled = form.grace_period_enabled;
       payload.grace_period_value = form.grace_period_value;
       payload.grace_period_unit = form.grace_period_unit;
+    }
+    if (serviceType === 'hotspot' && form.session_adjustment_enabled) {
+      payload.session_adjustment_value = form.session_adjustment_value;
+      payload.session_adjustment_unit = form.session_adjustment_unit;
+      payload.session_adjustment_direction = form.session_adjustment_direction;
     }
     if (!isHotspotOnlyPage) {
       payload.location = form.location;
@@ -276,6 +289,10 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
       grace_period_enabled: Boolean(customer.grace_period_enabled),
       grace_period_value: customer.grace_period_value || '',
       grace_period_unit: customer.grace_period_unit || 'days',
+      session_adjustment_enabled: false,
+      session_adjustment_value: '',
+      session_adjustment_unit: 'hours',
+      session_adjustment_direction: 'add',
     });
     setModalOpen(true);
   };
@@ -635,6 +652,57 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
                           <option value="days">Days</option>
                           <option value="weeks">Weeks</option>
                           <option value="months">Months</option>
+                        </select>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+              {activeFormService === 'hotspot' && editingId && (
+                <div className="sm:col-span-2 rounded-md border border-slate-200 bg-slate-50 p-3">
+                  <label className="flex items-start gap-3 text-xs text-slate-600">
+                    <input
+                      type="checkbox"
+                      name="session_adjustment_enabled"
+                      className="mt-0.5 h-4 w-4 rounded border-slate-300 accent-[var(--app-accent)] focus:ring-[var(--app-focus-ring)]"
+                      checked={form.session_adjustment_enabled}
+                      onChange={update}
+                    />
+                    <span>
+                      <span className="block font-semibold text-slate-800">Adjust this Hotspot customer session</span>
+                      <span className="mt-1 block">Add back lost time or reduce time from the current expiry.</span>
+                    </span>
+                  </label>
+                  {form.session_adjustment_enabled && (
+                    <div className="mt-3 grid gap-3 sm:grid-cols-[140px_1fr_160px]">
+                      <div>
+                        <label className="form-label" htmlFor="session_adjustment_direction">Action</label>
+                        <select id="session_adjustment_direction" name="session_adjustment_direction" className="form-input" value={form.session_adjustment_direction} onChange={update}>
+                          <option value="add">Add</option>
+                          <option value="subtract">Subtract</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="form-label" htmlFor="session_adjustment_value">Time</label>
+                        <input
+                          id="session_adjustment_value"
+                          name="session_adjustment_value"
+                          type="number"
+                          min="1"
+                          step="1"
+                          className="form-input"
+                          value={form.session_adjustment_value}
+                          onChange={update}
+                          placeholder="e.g. 2"
+                        />
+                        {errors.session_adjustment_value && <p className="form-error">{errors.session_adjustment_value}</p>}
+                      </div>
+                      <div>
+                        <label className="form-label" htmlFor="session_adjustment_unit">Unit</label>
+                        <select id="session_adjustment_unit" name="session_adjustment_unit" className="form-input" value={form.session_adjustment_unit} onChange={update}>
+                          <option value="minutes">Minutes</option>
+                          <option value="hours">Hours</option>
+                          <option value="days">Days</option>
                         </select>
                       </div>
                     </div>
