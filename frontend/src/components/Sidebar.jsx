@@ -61,9 +61,9 @@ const sections = [
     staffOnly: true,
     icon: ClipboardCheck,
     links: [
-      { to: '/staff/tasks', label: 'My Tasks', icon: Ticket },
-      { to: '/staff/reports', label: 'Work Reports', icon: FileText },
-      { to: '/staff/requisitions', label: 'My Requisitions', icon: ClipboardList },
+      { to: '/staff/tasks', label: 'Profile', icon: Ticket },
+      { to: '/staff/reports', label: 'Reports', icon: FileText },
+      { to: '/staff/requisitions', label: 'Requisitions', icon: ClipboardList },
     ],
   },
   {
