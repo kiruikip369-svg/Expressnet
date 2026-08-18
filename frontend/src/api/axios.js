@@ -31,6 +31,13 @@ api.interceptors.response.use(
       }
     }
 
+    if (error.response?.status === 402 && error.response?.data?.code === 'SUBSCRIPTION_PAYMENT_REQUIRED') {
+      const target = error.response.data.redirect || '/billing/payment';
+      if (window.location.pathname !== target) {
+        window.location.assign(target);
+      }
+    }
+
     return Promise.reject(error);
   },
 );

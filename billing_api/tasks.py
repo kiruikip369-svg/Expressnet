@@ -15,6 +15,14 @@ def expire_tenant_subscriptions():
     for subscription in expired:
         subscription.tenant.status = "suspended"
         subscription.tenant.save(update_fields=["status", "updated_at"])
+        ref(f"tenants/{subscription.tenant_id}").update(
+            {
+                "status": "suspended",
+                "suspended_reason": "expired_subscription",
+                "subscription_expired_at": subscription.expires_at.isoformat() if subscription.expires_at else "",
+                "updated_at": iso_now(),
+            }
+        )
         write_audit_log(action="AUTO_SUSPEND_EXPIRED_SUBSCRIPTION", target_id=str(subscription.tenant_id), target_type="tenant", metadata={"subscription_id": subscription.pk})
         count += 1
     return count

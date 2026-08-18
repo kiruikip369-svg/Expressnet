@@ -23,15 +23,9 @@ function normalizeTask(task = {}) {
   };
 }
 
-const PRIORITY_STYLES = {
-  high: 'bg-rose-50 text-rose-600',
-  medium: 'bg-orange-50 text-orange-600',
-  low: 'bg-emerald-50 text-emerald-600',
-};
-
 const STATUS_STYLES = {
   pending: 'bg-amber-50 text-amber-600',
-  in_progress: 'bg-blue-50 text-blue-600',
+  in_progress: '',
   complete: 'bg-emerald-50 text-emerald-600',
   bounced: 'bg-rose-50 text-rose-600',
 };
@@ -71,9 +65,32 @@ function initials(name = '') {
     .join('');
 }
 
+function statusStyle(status) {
+  return status === 'in_progress' ? { background: 'var(--app-accent-muted)', color: 'var(--app-accent)' } : undefined;
+}
+
 function ReportModal({ task, onClose, onSubmitted }) {
   const [report, setReport] = useState('');
+  const [workImage, setWorkImage] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+
+  const updateWorkImage = (file) => {
+    if (!file) {
+      setWorkImage(null);
+      return;
+    }
+    if (!file.type.startsWith('image/')) {
+      toast.error('Select an image file');
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      toast.error('Image must be smaller than 2MB');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => setWorkImage({ data: reader.result, name: file.name });
+    reader.readAsDataURL(file);
+  };
 
   const handleSubmit = async () => {
     if (!report.trim()) {
@@ -86,9 +103,16 @@ function ReportModal({ task, onClose, onSubmitted }) {
         task_id: task.id,
         task_title: task.title || task.task_title || '',
         report: report.trim(),
+        work_image: workImage?.data || '',
+        work_image_name: workImage?.name || '',
       });
-      await api.patch(`/staff/tasks/${task.id}`, { work_report: report.trim(), status: 'complete' });
-      toast.success('Work report submitted');
+      await api.patch(`/staff/tasks/${task.id}`, {
+        work_report: report.trim(),
+        work_image: workImage?.data || '',
+        work_image_name: workImage?.name || '',
+        status: 'complete',
+      });
+      toast.success('Work report submitted and task marked complete');
       onSubmitted(data?.report || { task_id: task.id, report: report.trim() });
       onClose();
     } catch (error) {
@@ -115,8 +139,18 @@ function ReportModal({ task, onClose, onSubmitted }) {
           onChange={(e) => setReport(e.target.value)}
           rows={6}
           placeholder="Describe the work you completed for this task..."
-          className="mt-4 w-full rounded-lg border border-slate-200 p-3 text-sm focus:border-blue-400 focus:outline-none"
+          className="mt-4 w-full rounded-lg border border-slate-200 p-3 text-sm focus:border-[var(--app-accent)] focus:outline-none"
         />
+        <label className="mt-3 block text-xs font-semibold text-slate-500">
+          Testimonial image
+          <input
+            type="file"
+            accept="image/*"
+            className="form-input mt-1"
+            onChange={(event) => updateWorkImage(event.target.files?.[0])}
+          />
+        </label>
+        {workImage?.name && <p className="mt-1 text-xs text-slate-500">{workImage.name}</p>}
         <div className="mt-4 flex justify-end gap-2">
           <button
             onClick={onClose}
@@ -127,7 +161,7 @@ function ReportModal({ task, onClose, onSubmitted }) {
           <button
             onClick={handleSubmit}
             disabled={submitting}
-            className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"
+            className="btn-primary"
           >
             {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
             Submit Report
@@ -185,7 +219,14 @@ export default function StaffReports() {
 
   const handleReportSubmitted = (report) => {
     setTasks((prev) =>
-      prev.map((t) => (t.id === report.task_id ? normalizeTask({ ...t, work_report: report.report, reported_at: report.created_at, status: 'complete' }) : t))
+      prev.map((t) => (t.id === report.task_id ? normalizeTask({
+        ...t,
+        work_report: report.report,
+        work_image: report.work_image,
+        work_image_name: report.work_image_name,
+        reported_at: report.created_at,
+        status: 'complete',
+      }) : t))
     );
   };
 
@@ -193,21 +234,21 @@ export default function StaffReports() {
     <div className="space-y-4">
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div className="surface-card flex items-center gap-3 p-4">
-          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-orange-50">
-            <Search className="h-6 w-6 text-orange-500" />
+          <div className="flex h-12 w-12 items-center justify-center rounded-xl" style={{ background: 'var(--app-accent-muted)' }}>
+            <Search className="h-6 w-6" style={{ color: 'var(--app-accent)' }} />
           </div>
           <div>
-            <p className="text-2xl font-semibold text-orange-500">{inProgressCount}</p>
+            <p className="text-2xl font-semibold" style={{ color: 'var(--app-accent)' }}>{inProgressCount}</p>
             <p className="theme-text text-sm font-medium">In Progress</p>
             <p className="theme-muted text-xs">Tasks currently in progress</p>
           </div>
         </div>
         <div className="surface-card flex items-center gap-3 p-4">
-          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-blue-50">
-            <ClipboardList className="h-6 w-6 text-blue-600" />
+          <div className="flex h-12 w-12 items-center justify-center rounded-xl" style={{ background: 'var(--app-accent-muted)' }}>
+            <ClipboardList className="h-6 w-6" style={{ color: 'var(--app-accent)' }} />
           </div>
           <div>
-            <p className="text-2xl font-semibold text-blue-600">{pendingCount}</p>
+            <p className="text-2xl font-semibold" style={{ color: 'var(--app-accent)' }}>{pendingCount}</p>
             <p className="theme-text text-sm font-medium">Pending</p>
             <p className="theme-muted text-xs">Tasks awaiting action</p>
           </div>
@@ -219,19 +260,19 @@ export default function StaffReports() {
           <div className="flex gap-6 border-b border-transparent text-sm font-medium">
             <button
               onClick={() => setActiveTab('pending')}
-              className={`pb-2 ${activeTab === 'pending' ? 'border-b-2 border-blue-600 text-blue-600' : 'theme-muted'}`}
+              className={`pb-2 ${activeTab === 'pending' ? 'border-b-2 border-[var(--app-accent)] text-[var(--app-accent)]' : 'theme-muted'}`}
             >
               Pending Tasks
             </button>
             <button
               onClick={() => setActiveTab('in_progress')}
-              className={`pb-2 ${activeTab === 'in_progress' ? 'border-b-2 border-blue-600 text-blue-600' : 'theme-muted'}`}
+              className={`pb-2 ${activeTab === 'in_progress' ? 'border-b-2 border-[var(--app-accent)] text-[var(--app-accent)]' : 'theme-muted'}`}
             >
               In Progress Tasks ({inProgressCount})
             </button>
             <button
               onClick={() => setActiveTab('complete')}
-              className={`pb-2 ${activeTab === 'complete' ? 'border-b-2 border-blue-600 text-blue-600' : 'theme-muted'}`}
+              className={`pb-2 ${activeTab === 'complete' ? 'border-b-2 border-[var(--app-accent)] text-[var(--app-accent)]' : 'theme-muted'}`}
             >
               Submitted Reports ({completeCount})
             </button>
@@ -246,7 +287,7 @@ export default function StaffReports() {
             <button
               onClick={() => setSortByDue((v) => !v)}
               className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm ${
-                sortByDue ? 'border-blue-400 text-blue-600' : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                sortByDue ? 'border-[var(--app-accent)] text-[var(--app-accent)]' : 'border-slate-200 text-slate-600 hover:bg-slate-50'
               }`}
               title="Sort by due date"
             >
@@ -262,7 +303,7 @@ export default function StaffReports() {
                       setShowFilter(false);
                     }}
                     className={`block w-full rounded-md px-2 py-1.5 text-left text-sm capitalize hover:bg-slate-50 ${
-                      priorityFilter === p ? 'font-semibold text-blue-600' : 'text-slate-600'
+                      priorityFilter === p ? 'font-semibold text-[var(--app-accent)]' : 'text-slate-600'
                     }`}
                   >
                     {p === 'all' ? 'All priorities' : p}
@@ -316,8 +357,9 @@ export default function StaffReports() {
                       <td className="py-3 pr-4">
                         <span
                           className={`rounded-full px-2.5 py-1 text-xs font-medium capitalize ${
-                            PRIORITY_STYLES[(task.priority || '').toLowerCase()] || 'bg-slate-100 text-slate-600'
+                            task.priority === 'high' ? 'bg-rose-50 text-rose-600' : task.priority === 'low' ? 'bg-emerald-50 text-emerald-600' : ''
                           }`}
+                          style={task.priority && !['high', 'low'].includes(task.priority) ? { background: 'var(--app-accent-muted)', color: 'var(--app-accent)' } : undefined}
                         >
                           {task.priority || '-'}
                         </span>
@@ -328,7 +370,7 @@ export default function StaffReports() {
                       </td>
                       <td className="py-3 pr-4">
                         <div className="flex items-center gap-2">
-                          <span className="flex h-7 w-7 items-center justify-center rounded-full bg-purple-100 text-xs font-semibold text-purple-600">
+                          <span className="flex h-7 w-7 items-center justify-center rounded-full text-xs font-semibold" style={{ background: 'var(--app-accent-muted)', color: 'var(--app-accent)' }}>
                             {initials(assignedByName)}
                           </span>
                           <div>
@@ -342,19 +384,28 @@ export default function StaffReports() {
                           className={`rounded-full px-2.5 py-1 text-xs font-medium ${
                             STATUS_STYLES[task.status] || 'bg-slate-100 text-slate-600'
                           }`}
+                          style={statusStyle(task.status)}
                         >
                           {STATUS_LABELS[task.status] || task.status}
                         </span>
                       </td>
                       <td className="py-3">
                         {task.work_report ? (
-                          <span className="flex items-center gap-1.5 text-xs font-medium text-emerald-600">
-                            <CheckCircle2 className="h-4 w-4" /> Report Submitted
-                          </span>
+                          <div className="space-y-1">
+                            <span className="flex items-center gap-1.5 text-xs font-medium text-emerald-600">
+                              <CheckCircle2 className="h-4 w-4" /> Report Submitted
+                            </span>
+                            {task.work_image && (
+                              <a className="block text-xs font-medium hover:underline" style={{ color: 'var(--app-accent)' }} href={task.work_image} target="_blank" rel="noreferrer">
+                                View image
+                              </a>
+                            )}
+                          </div>
                         ) : (
                           <button
                             onClick={() => setActiveTask(task)}
-                            className="rounded-lg border border-blue-200 px-3 py-1.5 text-xs font-medium text-blue-600 hover:bg-blue-50"
+                            className="rounded-lg border px-3 py-1.5 text-xs font-medium hover:bg-[var(--app-accent-muted)]"
+                            style={{ borderColor: 'var(--app-accent-soft)', color: 'var(--app-accent)' }}
                           >
                             Submit Report
                           </button>
@@ -386,8 +437,9 @@ export default function StaffReports() {
                 key={p}
                 onClick={() => setPage(p)}
                 className={`rounded-md px-2.5 py-1 text-xs ${
-                  p === page ? 'bg-blue-600 text-white' : 'border border-slate-200 text-slate-600'
+                  p === page ? 'text-[var(--app-accent-contrast)]' : 'border border-slate-200 text-slate-600'
                 }`}
+                style={p === page ? { background: 'var(--app-accent)' } : undefined}
               >
                 {p}
               </button>

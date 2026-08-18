@@ -10,6 +10,7 @@ urlpatterns = [
     path("auth/login", views.auth_login),
     path("public/site", views.public_site),
     path("public/stats", views.public_stats),
+    path("subscription/status", views.tenant_subscription_status),
     path(f"{settings.ADMIN_API_PATH}/auth/login", views.admin_login),
     path(f"{settings.ADMIN_API_PATH}/tenants", views.admin_tenants),
     path(f"{settings.ADMIN_API_PATH}/tenants/stats/summary", views.admin_stats),

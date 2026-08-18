@@ -2,7 +2,6 @@ import {
   AlertCircle,
   Briefcase,
   Calendar,
-  CheckCircle2,
   ChevronDown,
   ChevronUp,
   Clock,
@@ -51,12 +50,16 @@ function statusClasses(status) {
     case 'completed':
       return 'bg-emerald-50 text-emerald-600';
     case 'in_progress':
-      return 'bg-blue-50 text-blue-600';
+      return '';
     case 'bounced':
       return 'bg-red-50 text-red-600';
     default:
       return 'bg-amber-50 text-amber-600';
   }
+}
+
+function taskStatusStyle(status) {
+  return status === 'in_progress' ? { background: 'var(--app-accent-muted)', color: 'var(--app-accent)' } : undefined;
 }
 
 const isDone = (status) => ['complete', 'completed'].includes((status || '').toLowerCase());
@@ -104,7 +107,6 @@ export default function StaffTasks() {
   const { tenant } = useAuth();
   const [tasks, setTasks] = useState([]);
   const [profile, setProfile] = useState(() => normalizeProfile({}, tenant));
-  const [reports, setReports] = useState({});
   const [bounceReasons, setBounceReasons] = useState({});
   const [busyId, setBusyId] = useState('');
   const [expandedId, setExpandedId] = useState('');
@@ -151,24 +153,6 @@ export default function StaffTasks() {
     }
   };
 
-  const submitReport = async (task) => {
-    const report = (reports[task.id] || '').trim();
-    if (!report) return toast.error('Write a work report first');
-    setBusyId(task.id);
-    try {
-      await api.post('/staff/reports', { task_id: task.id, task_title: task.title, report });
-      const { data } = await api.patch(`/staff/tasks/${task.id}`, { work_report: report, status: 'complete' });
-      setTasks((current) => current.map((item) => (item.id === task.id ? normalizeTask(data.task) : item)));
-      setReports((current) => ({ ...current, [task.id]: '' }));
-      toast.success('Work report submitted');
-      setExpandedId('');
-    } catch (error) {
-      toast.error(error.response?.data?.message || 'Failed to submit report');
-    } finally {
-      setBusyId('');
-    }
-  };
-
   const bounceTask = async (task) => {
     const reason = (bounceReasons[task.id] || '').trim();
     if (!reason) return toast.error('Add a bounce reason first');
@@ -182,7 +166,7 @@ export default function StaffTasks() {
       <div className="grid gap-4 xl:grid-cols-3">
         <section className="surface-card flex flex-wrap items-start gap-5 p-5 xl:col-span-2">
           <div className="relative shrink-0">
-            <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-full bg-blue-100 text-lg font-semibold text-blue-700">
+            <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-full text-lg font-semibold" style={{ background: 'var(--app-accent-muted)', color: 'var(--app-accent)' }}>
               {profile?.avatar_url ? (
                 <img src={profile.avatar_url} alt={profile?.name || 'Staff'} className="h-full w-full object-cover" />
               ) : (
@@ -195,11 +179,11 @@ export default function StaffTasks() {
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
               <h1 className="theme-text text-lg font-semibold">{profile?.name || 'Staff Member'}</h1>
-              <span className="rounded-full bg-blue-50 px-2 py-0.5 text-xs font-semibold text-blue-600">
+              <span className="rounded-full px-2 py-0.5 text-xs font-semibold" style={{ background: 'var(--app-accent-muted)', color: 'var(--app-accent)' }}>
                 Staff ID: {profile?.id || '-'}
               </span>
             </div>
-            <p className="text-sm text-blue-600">{profile?.role || 'Field Staff'}</p>
+            <p className="text-sm" style={{ color: 'var(--app-accent)' }}>{profile?.role || 'Field Staff'}</p>
 
             <div className="mt-3 grid gap-2 text-xs text-slate-500 sm:grid-cols-2">
               <span className="flex items-center gap-1.5">
@@ -228,7 +212,7 @@ export default function StaffTasks() {
           <h2 className="theme-text mb-3 text-sm font-semibold">My Stats</h2>
           <div className="grid grid-cols-2 gap-3">
             <div className="rounded-xl bg-slate-50 p-3">
-              <p className="text-xl font-semibold text-blue-600">{stats.completed}</p>
+              <p className="text-xl font-semibold" style={{ color: 'var(--app-accent)' }}>{stats.completed}</p>
               <p className="text-xs text-slate-500">Tasks Completed</p>
             </div>
             <div className="rounded-xl bg-slate-50 p-3">
@@ -240,7 +224,7 @@ export default function StaffTasks() {
               <p className="text-xs text-slate-500">Tasks Overdue</p>
             </div>
             <div className="rounded-xl bg-slate-50 p-3">
-              <p className="text-xl font-semibold text-purple-600">{stats.rate}%</p>
+              <p className="text-xl font-semibold" style={{ color: 'var(--app-accent)' }}>{stats.rate}%</p>
               <p className="text-xs text-slate-500">Completion Rate</p>
             </div>
           </div>
@@ -252,7 +236,7 @@ export default function StaffTasks() {
         <section className="surface-card p-4 xl:col-span-2">
           <div>
             <h2 className="theme-text text-sm font-semibold">Pending Tasks</h2>
-            <p className="text-xs text-slate-500">Tasks assigned to you that are pending completion.</p>
+            <p className="text-xs text-slate-500">Tasks assigned to you. Submit reports and testimonial images from the Reports page.</p>
           </div>
 
           <div className="mt-4 divide-y divide-slate-100">
@@ -269,7 +253,7 @@ export default function StaffTasks() {
                       className="flex w-full items-center gap-3 text-left"
                       onClick={() => setExpandedId(isOpen ? '' : task.id)}
                     >
-                      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-blue-50 text-blue-600">
+                      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg" style={{ background: 'var(--app-accent-muted)', color: 'var(--app-accent)' }}>
                         <FileText size={16} />
                       </span>
                       <span className="min-w-0 flex-1">
@@ -286,25 +270,19 @@ export default function StaffTasks() {
                       >
                         {due.label}
                       </span>
-                      <span className={`rounded-full px-2 py-1 text-xs font-semibold capitalize ${statusClasses(task.status)}`}>
+                      <span className={`rounded-full px-2 py-1 text-xs font-semibold capitalize ${statusClasses(task.status)}`} style={taskStatusStyle(task.status)}>
                         {task.status || 'pending'}
                       </span>
                       {isOpen ? <ChevronUp size={16} className="text-slate-400" /> : <ChevronDown size={16} className="text-slate-400" />}
                     </button>
 
                     {isOpen && (
-                      <div className="mt-3 grid gap-3 rounded-xl bg-slate-50 p-3 sm:grid-cols-2">
+                      <div className="mt-3 grid gap-3 rounded-xl bg-slate-50 p-3">
                         <div>
-                          <label className="block text-xs font-semibold text-slate-500">
-                            Work report
-                            <textarea
-                              className="form-input mt-1 min-h-24"
-                              value={reports[task.id] || ''}
-                              onChange={(event) => setReports((current) => ({ ...current, [task.id]: event.target.value }))}
-                              placeholder="Describe what happened on site..."
-                            />
-                          </label>
-                          <div className="mt-2 flex flex-wrap gap-2">
+                          <p className="text-xs text-slate-500">
+                            Use this page to review assigned work and update task progress. Reports and testimonial images are submitted from Reports.
+                          </p>
+                          <div className="mt-3 flex flex-wrap gap-2">
                             <button
                               type="button"
                               className="btn-secondary"
@@ -313,10 +291,6 @@ export default function StaffTasks() {
                             >
                               <FileText size={14} />
                               Start
-                            </button>
-                            <button type="button" className="btn-primary" onClick={() => submitReport(task)} disabled={busyId === task.id}>
-                              <CheckCircle2 size={14} />
-                              Submit report
                             </button>
                           </div>
                         </div>
@@ -350,7 +324,7 @@ export default function StaffTasks() {
           </div>
 
           {pendingTasks.length > 0 && (
-            <button type="button" className="mt-3 w-full text-center text-xs font-semibold text-blue-600 hover:underline" onClick={load}>
+            <button type="button" className="mt-3 w-full text-center text-xs font-semibold hover:underline" style={{ color: 'var(--app-accent)' }} onClick={load}>
               View all pending tasks
             </button>
           )}
@@ -377,7 +351,7 @@ export default function StaffTasks() {
                 <p className="theme-text">{profile?.role || '-'}</p>
               </div>
             </div>
-            <button type="button" className="btn-secondary mt-4 w-full justify-center text-blue-600">
+            <button type="button" className="btn-secondary mt-4 w-full justify-center" style={{ color: 'var(--app-accent)' }}>
               Edit Profile
             </button>
           </section>

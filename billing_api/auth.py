@@ -1,8 +1,9 @@
 from functools import wraps
 
 from rest_framework.response import Response
+from django.utils import timezone
 
-from .models import Tenant
+from .models import Tenant, TenantSubscription
 from .services import decode_admin_token, decode_tenant_token, ref
 
 PAGE_RULES = [
@@ -26,16 +27,21 @@ PAGE_RULES = [
 ]
 
 DEFAULT_MEMBER_PAGES = {"staff_tasks", "staff_reports", "staff_requisitions"}
+SUBSCRIPTION_PAYMENT_PREFIXES = ("subscription/status",)
 
 
-def _request_page_key(request):
+def _normalized_api_path(request):
     path = request.path.strip("/").lower()
     parts = path.split("/")
     if parts and parts[0] == "api":
         parts = parts[1:]
     if parts and parts[0] == "v1":
         parts = parts[1:]
-    path = "/".join(parts)
+    return "/".join(parts)
+
+
+def _request_page_key(request):
+    path = _normalized_api_path(request)
     for page_key, prefixes in PAGE_RULES:
         if any(path.startswith(prefix) for prefix in prefixes):
             return page_key
@@ -80,8 +86,32 @@ def tenant_required(view):
             tenant = Tenant.objects.filter(pk=decoded["id"]).first()
             if not tenant:
                 return Response({"message": "Tenant not found"}, status=401)
+            normalized_path = _normalized_api_path(request)
+            subscription = TenantSubscription.objects.filter(tenant=tenant).first()
+            if tenant.status == "active" and subscription and subscription.expires_at and subscription.expires_at < timezone.now():
+                tenant.status = "suspended"
+                tenant.save(update_fields=["status", "updated_at"])
+                ref(f"tenants/{tenant.pk}").update(
+                    {
+                        "status": "suspended",
+                        "suspended_reason": "expired_subscription",
+                        "subscription_expired_at": subscription.expires_at.isoformat(),
+                    }
+                )
             if tenant.status != "active":
-                return Response({"message": "Your account is pending admin activation."}, status=403)
+                if tenant.status == "suspended" and any(normalized_path.startswith(prefix) for prefix in SUBSCRIPTION_PAYMENT_PREFIXES):
+                    pass
+                elif tenant.status == "suspended":
+                    return Response(
+                        {
+                            "message": "Your subscription has expired. Please pay to continue using the billing system.",
+                            "code": "SUBSCRIPTION_PAYMENT_REQUIRED",
+                            "redirect": "/billing/payment",
+                        },
+                        status=402,
+                    )
+                else:
+                    return Response({"message": "Your account is pending admin activation."}, status=403)
             request.tenant = tenant.as_dict(include_id=True)
             request.tenant["password"] = tenant.password
             request.tenant_member = None

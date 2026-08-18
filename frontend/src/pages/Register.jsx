@@ -19,6 +19,8 @@ const labels = {
   password: 'Password',
 };
 
+const trialDays = import.meta.env.VITE_TENANT_TRIAL_DAYS || '14';
+
 function Field({ name, type = 'text', value, error, onChange }) {
   return (
     <div>
@@ -75,7 +77,7 @@ export default function Register() {
           <p className="text-sm font-semibold uppercase tracking-wide text-blue-600">Expressnetbilling</p>
           <h1 className="mt-2 text-2xl font-bold text-slate-900">Register your hotspot business</h1>
           <p className="mt-2 text-sm text-slate-500">
-            Create your tenant account and billing workspace. Payment settlement details can be added later in Settings.
+            Create your tenant account and billing workspace. New tenants get a {trialDays}-day grace period before system payment is required.
           </p>
         </div>
 

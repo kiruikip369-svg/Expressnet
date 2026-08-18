@@ -90,6 +90,7 @@ urlpatterns = [
     path("reports/customers", management_views.report_customers),
     path("reports/packages", management_views.report_packages),
     path("reports/expenses", management_views.report_expenses),
+    path("subscription/status", core_views.tenant_subscription_status),
     path("profile", management_views.profile),
     path("settings/business", management_views.settings_business),
     path("settings/logo", management_views.settings_logo),

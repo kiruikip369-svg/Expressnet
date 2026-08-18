@@ -20,10 +20,16 @@ function newestFirst(a, b) {
 }
 
 function statusClass(status) {
-  if (status === 'approved') return 'bg-blue-100 text-blue-700';
   if (status === 'issued') return 'bg-emerald-100 text-emerald-700';
   if (status === 'rejected') return 'bg-red-100 text-red-700';
   return 'bg-amber-100 text-amber-700';
+}
+
+function statusStyle(status) {
+  if (status === 'approved') {
+    return { background: 'var(--app-accent-muted)', color: 'var(--app-accent)' };
+  }
+  return undefined;
 }
 
 export default function StaffRequisitions() {
@@ -114,7 +120,7 @@ export default function StaffRequisitions() {
                 <td className="table-cell">{item.quantity || '1'}</td>
                 <td className="table-cell">{item.reason || '-'}</td>
                 <td className="table-cell">
-                  <span className={`rounded-full px-2 py-1 text-xs font-semibold capitalize ${statusClass(item.status)}`}>{item.status || 'pending'}</span>
+                  <span className={`rounded-full px-2 py-1 text-xs font-semibold capitalize ${statusClass(item.status)}`} style={statusStyle(item.status)}>{item.status || 'pending'}</span>
                 </td>
                 <td className="table-cell">{formatDate(item.created_at)}</td>
               </tr>
@@ -134,7 +140,7 @@ export default function StaffRequisitions() {
           >
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-base font-semibold text-slate-900">Create Requisition</h2>
-              <button type="button" className="text-slate-400 hover:text-slate-600" onClick={closeModal}>
+              <button type="button" className="text-slate-400 hover:text-[var(--app-accent)]" onClick={closeModal}>
                 <X size={18} />
               </button>
             </div>

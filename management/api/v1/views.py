@@ -1236,16 +1236,40 @@ def _current_member_payload(request):
     }
 
 
+def _task_date(value):
+    parsed = parse_date(value)
+    if parsed:
+        return parsed.date()
+    return None
+
+
+def _is_current_week_task(task):
+    today = timezone.localdate()
+    week_start = today - timedelta(days=today.weekday())
+    week_end = week_start + timedelta(days=6)
+    candidate = _task_date(task.get("due_date")) or _task_date(task.get("created_at")) or _task_date(task.get("updated_at"))
+    return bool(candidate and week_start <= candidate <= week_end)
+
+
+def _staff_task_visible(task):
+    status = str(task.get("status") or "pending").lower()
+    return status in {"pending", "in_progress"} or _is_current_week_task(task)
+
+
+def _assigned_staff_tasks(tenant_id, member_id):
+    return [
+        item for item in list_children(f"tenants/{tenant_id}/tickets")
+        if str(item.get("assigned_to") or "") == str(member_id) and _staff_task_visible(item)
+    ]
+
+
 @csrf_exempt
 @api_view(["GET"])
 @tenant_required
 def staff_profile(request):
     member = _current_member_payload(request)
     tenant_id = request.tenant["id"]
-    tasks = [
-        item for item in list_children(f"tenants/{tenant_id}/tickets")
-        if str(item.get("assigned_to") or "") == str(member["id"])
-    ]
+    tasks = _assigned_staff_tasks(tenant_id, member["id"])
     reports = _tenant_extra_dict(tenant_id, "staff_work_reports")
     requisitions = _tenant_extra_dict(tenant_id, "requisitions")
     my_reports = [report for report in reports.values() if str(report.get("staff_id") or "") == str(member["id"])]
@@ -1328,10 +1352,7 @@ def staff_tasks(request, ticket_id=None):
     member_id = member["id"]
     tenant_id = request.tenant["id"]
     if method(request, "GET") and not ticket_id:
-        tasks = [
-            item for item in list_children(f"tenants/{tenant_id}/tickets")
-            if str(item.get("assigned_to") or "") == str(member_id)
-        ]
+        tasks = _assigned_staff_tasks(tenant_id, member_id)
         return as_collection_response(request, tasks)
     if not ticket_id:
         return ok({"message": "Task id is required"}, 400)
@@ -1350,6 +1371,10 @@ def staff_tasks(request, ticket_id=None):
     if "work_report" in data:
         updates["work_report"] = str(data.get("work_report") or "").strip()
         updates["reported_at"] = iso_now()
+    if "work_image" in data:
+        updates["work_image"] = str(data.get("work_image") or "").strip()
+        updates["work_image_name"] = str(data.get("work_image_name") or "").strip()
+        updates["work_image_uploaded_at"] = iso_now()
     if not updates:
         return ok({"message": "No task updates provided"}, 400)
     updates["updated_at"] = iso_now()
@@ -1380,12 +1405,19 @@ def staff_reports(request):
         "staff_name": member["name"],
         "staff_role": member["role"],
         "report": report,
+        "work_image": str(data.get("work_image") or "").strip(),
+        "work_image_name": str(data.get("work_image_name") or "").strip(),
         "created_at": iso_now(),
     }
     reports[report_id] = item
     _save_tenant_extra_dict(tenant_id, "staff_work_reports", reports)
     if task_id:
-        ref(f"tenants/{tenant_id}/tickets/{task_id}").update({"work_report": report, "reported_at": iso_now(), "updated_at": iso_now()})
+        updates = {"work_report": report, "reported_at": iso_now(), "updated_at": iso_now()}
+        if item["work_image"]:
+            updates["work_image"] = item["work_image"]
+            updates["work_image_name"] = item["work_image_name"]
+            updates["work_image_uploaded_at"] = iso_now()
+        ref(f"tenants/{tenant_id}/tickets/{task_id}").update(updates)
     return ok({"success": True, "message": "Work report submitted", "report": {"id": report_id, **item}}, 201)
 
 
@@ -1398,7 +1430,31 @@ def staff_requisitions(request):
         items = _tenant_extra_dict(request.tenant["id"], "requisitions")
         mine = [{"id": item_id, **item} for item_id, item in items.items() if str(item.get("requested_by") or "") == str(member["id"])]
         return as_collection_response(request, mine)
-    return requisitions(request)
+    data = body(request)
+    item_type = str(data.get("type") or data.get("item_type") or "").strip()
+    title = str(data.get("title") or data.get("item") or "").strip()
+    quantity = str(data.get("quantity") or "1").strip()
+    if not item_type or not title:
+        return ok({"message": "Requisition type and item are required"}, 400)
+    member = _current_member_payload(request)
+    tenant_id = request.tenant["id"]
+    items = _tenant_extra_dict(tenant_id, "requisitions")
+    new_id = secrets.token_hex(8)
+    item = {
+        "type": item_type,
+        "title": title,
+        "quantity": quantity,
+        "reason": str(data.get("reason") or "").strip(),
+        "status": "pending",
+        "requested_by": member["id"],
+        "requested_by_name": member["name"],
+        "requested_by_role": member["role"],
+        "created_at": iso_now(),
+        "updated_at": iso_now(),
+    }
+    items[new_id] = item
+    _save_tenant_extra_dict(tenant_id, "requisitions", items)
+    return ok({"success": True, "message": "Requisition created", "requisition": {"id": new_id, **item}}, 201)
 
 
 @csrf_exempt

@@ -15,6 +15,7 @@ import AdminTenantDetail from './pages/admin/AdminTenantDetail';
 import AdminTenants from './pages/admin/AdminTenants';
 import AdminUsers from './pages/admin/AdminUsers';
 import BusinessSettings from './pages/BusinessSettings';
+import BillingPayment from './pages/BillingPayment';
 import Customers from './pages/Customers';
 import CustomerPortal from './pages/CustomerPortal';
 import Dashboard from './pages/Dashboard';
@@ -69,6 +70,7 @@ function DashboardLayout() {
         <main className="mx-auto w-full max-w-[1200px] px-4 py-4 sm:px-8 sm:py-5">
           <Routes>
             <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="billing/payment/" element={<BillingPayment />} />
             <Route path="/customers" element={<Customers title="Users" />} />
             <Route path="/pppoe-customers" element={<Customers initialFilter="pppoe" serviceLocked="pppoe" title="PPPoE Customers" />} />
             <Route path="/hotspot-customers" element={<Customers initialFilter="hotspot" serviceLocked="hotspot" title="Hotspot Customers" />} />

@@ -262,6 +262,7 @@ def _tenant_login_payload(tenant, member_id=None):
             "business_name": tenant.get("business_name"),
             "email": tenant.get("email"),
             "role": "tenant_admin",
+            "status": tenant.get("status") or "active",
             "is_admin": True,
             **tenant_theme_payload(tenant),
         }
@@ -472,6 +473,7 @@ def health_payload():
 
 def ensure_subscription(tenant, plan="basic"):
     plan_amounts = {"basic": 1500, "pro": 3500, "enterprise": 8000}
+    trial_days = int(os.getenv("TENANT_TRIAL_DAYS", os.getenv("TENANT_GRACE_PERIOD_DAYS", "14")))
     now = timezone.now()
     subscription, _ = TenantSubscription.objects.get_or_create(
         tenant=tenant,
@@ -479,7 +481,9 @@ def ensure_subscription(tenant, plan="basic"):
             "plan": plan if plan in plan_amounts else "basic",
             "amount": plan_amounts.get(plan, 1500),
             "started_at": now,
-            "expires_at": now + timedelta(days=30),
+            "expires_at": now + timedelta(days=trial_days),
+            "grace_period_days": trial_days,
+            "notes": f"Initial {trial_days}-day trial/grace period",
         },
     )
     return subscription
@@ -514,7 +518,33 @@ def record_subscription_payment(subscription, data, admin_email=""):
     if subscription.tenant.status == "suspended":
         subscription.tenant.status = "active"
         subscription.tenant.save(update_fields=["status", "updated_at"])
+        ref(f"tenants/{subscription.tenant_id}").update(
+            {
+                "status": "active",
+                "subscription_restored_at": iso_now(),
+                "suspended_reason": "",
+                "updated_at": iso_now(),
+            }
+        )
     return payment
+
+
+@csrf_exempt
+@api_view(["GET", "POST"])
+@tenant_required
+def tenant_subscription_status(request):
+    tenant = Tenant.objects.filter(pk=request.tenant["id"]).first()
+    if not tenant:
+        return ok({"message": "Tenant not found"}, 404)
+    subscription = ensure_subscription(tenant)
+    if method(request, "GET"):
+        return ok({"subscription": subscription_payload(subscription), "payment_required": subscription.is_expired() or tenant.status == "suspended"})
+    data = body(request)
+    reference = str(data.get("reference") or "").strip()
+    if not reference:
+        return ok({"message": "Payment reference is required"}, 400)
+    payment = record_subscription_payment(subscription, {**data, "method": data.get("method") or "manual"}, "")
+    return ok({"success": True, "message": "Payment submitted", "payment": payment.as_dict(), "subscription": subscription_payload(subscription)})
 
 
 def react_app(request):
@@ -688,6 +718,9 @@ def auth_register(request):
             subaccount_status = {"paystack_subaccount_status": "failed", "paystack_subaccount_error": exc.detail}
         ref(f"tenants/{tenant_ref.key}").update(subaccount_status)
     notify_admins_tenant_signup(tenant_ref.key, {**tenant_data, **subaccount_status})
+    tenant_instance = Tenant.objects.filter(pk=tenant_ref.key).first()
+    if tenant_instance:
+        ensure_subscription(tenant_instance, data.get("plan") or "basic")
     return ok({"success": True, "message": "Business registered successfully. Your account is active.", "tenantId": tenant_ref.key, **subaccount_status})
 
 
@@ -765,7 +798,7 @@ def auth_login(request):
             return ok({"message": "Wrong password"}, 401)
         _clear_login_failures(request, email)
         tenant = tenant_obj.as_dict(include_id=True)
-        if tenant.get("status") != "active":
+        if tenant.get("status") not in {"active", "suspended"}:
             tenant_obj.status = "active"
             tenant_obj.save(update_fields=["status"])
             tenant["status"] = "active"
