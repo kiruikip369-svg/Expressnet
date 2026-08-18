@@ -37,7 +37,7 @@ export default function MikrotikSettings() {
   const [pullingStatus, setPullingStatus] = useState(false);
   const [assigning, setAssigning] = useState(false);
   const [activeStep, setActiveStep] = useState('link');
-  const [selectedServices, setSelectedServices] = useState(['pppoe']);
+  const [selectedServices, setSelectedServices] = useState(['hotspot']);
   const [selectedPorts, setSelectedPorts] = useState([]);
   const [routerName, setRouterName] = useState('');
   const [savingName, setSavingName] = useState(false);

@@ -1034,6 +1034,15 @@ def _clear_wireless_password_for_hotspot(api, interface_name):
         return None
 
 
+def _enable_router_interface(api, interface):
+    if not interface or not interface.get(".id"):
+        return
+    try:
+        api.path("interface").update(**{".id": interface[".id"], "disabled": "no"})
+    except Exception:
+        pass
+
+
 def configure_router_port(tenant, interface_name, service_type, profile_name="default", base_url=None):
     service_type = str(service_type or "").lower().strip()
     if service_type not in {"pppoe", "hotspot"}:
@@ -1045,6 +1054,7 @@ def configure_router_port(tenant, interface_name, service_type, profile_name="de
         interface = next((item for item in interfaces if item.get("name") == interface_name), None)
         if not interface or not interface.get(".id"):
             raise ValueError("Router interface not found")
+        _enable_router_interface(api, interface)
 
         # 1. Remove the interface from any existing bridge
         _remove_port_from_any_bridge(api, interface_name)
@@ -1082,6 +1092,12 @@ def configure_router_port(tenant, interface_name, service_type, profile_name="de
 
         # Add the target interface to our managed bridge
         api.path("interface", "bridge", "port").add(bridge=managed_bridge, interface=interface_name)
+        for port in api.path("interface", "bridge", "port").select():
+            if port.get("interface") == interface_name and port.get(".id"):
+                try:
+                    api.path("interface", "bridge", "port").update(**{".id": port[".id"], "disabled": "no"})
+                except Exception:
+                    pass
         bind_interface = managed_bridge
 
         wireless_security_profile = None
@@ -1323,6 +1339,7 @@ def _build_port_command_script(interface_name, service_type, profile_name, porta
     cleanup_block = ':log info "Billing SaaS: preserving existing PPP secrets and Hotspot users"; '
 
     return (
+        f':do {{ /interface enable [find name="{interface_name}"] }} on-error={{ :log warning "Billing SaaS: failed to enable interface {interface_name}" }}; '
         f'/interface bridge port remove [find interface="{interface_name}"]; '
         f':if ([:len [/interface bridge find name="{bridge_name}"]] = 0) do={{ /interface bridge add name="{bridge_name}" comment="Created by Expressnet" }}; '
         f':do {{ /ip pool add name=Expressnet-pool ranges=172.31.0.2-172.31.255.254 comment="IP Pool created by Expressnet" }} on-error={{ /ip pool set [find name=Expressnet-pool] ranges=172.31.0.2-172.31.255.254 comment="IP Pool created by Expressnet" }}; '
@@ -1331,7 +1348,9 @@ def _build_port_command_script(interface_name, service_type, profile_name, porta
         f':do {{ /ip dhcp-server network add address=172.31.0.0/16 gateway=172.31.0.1 dns-server=8.8.8.8,8.8.4.4 }} on-error={{ /ip dhcp-server network set [find address=172.31.0.0/16] gateway=172.31.0.1 dns-server=8.8.8.8,8.8.4.4 }}; '
         f'{customer_bridge_isolation}'
         f'/interface bridge port add bridge="{bridge_name}" interface="{interface_name}"; '
+        f':do {{ /interface bridge port set [find interface="{interface_name}"] disabled=no }} on-error={{}}; '
         f':do {{ /interface set [find name="{interface_name}"] comment="billing-saas:{service_type}:portal={portal_comment}" }} on-error={{ :log warning "Billing SaaS: failed to set interface comment" }}; '
+        f':if ([:len [/interface bridge port find interface="{interface_name}" bridge="{bridge_name}" disabled=no]] = 0) do={{ :log error "Billing SaaS: {interface_name} is not active on {bridge_name}"; :error "Customer interface not active on billing bridge" }}; '
         f'{cleanup_block}'
         f':if ("{service_type}" = "pppoe") do={{ '
         f'  {pppoe_server_block}'
