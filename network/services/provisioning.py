@@ -1091,6 +1091,7 @@ def configure_router_port(tenant, interface_name, service_type, profile_name="de
         bridge_note = f"Interface '{interface_name}' successfully moved into Expressnet managed bridge '{managed_bridge}'."
 
         if service_type == "pppoe":
+            _set_bridge_port_pppoe_only(api, interface_name)
             api.path("interface").update(**{".id": interface[".id"], "comment": f"billing-saas:{service_type}:profile={profile_name or 'default'}"})
             servers = list(api.path("interface", "pppoe-server", "server").select())
             existing = next((item for item in servers if item.get("interface") == bind_interface), None)
@@ -1109,6 +1110,7 @@ def configure_router_port(tenant, interface_name, service_type, profile_name="de
             return {"created": True, "service_type": service_type, "interface": interface_name, "bound_interface": bind_interface, "note": bridge_note}
 
         captive = ensure_hotspot_captive_portal(tenant, base_url) or {}
+        _clear_bridge_port_pppoe_only(api, interface_name)
         hotspot_profile = captive.get("profile") or "Expressnet-profile"
         api.path("interface").update(**{".id": interface[".id"], "comment": f"billing-saas:hotspot:portal={captive.get('portal_url') or ''}".strip()})
         
@@ -1139,6 +1141,28 @@ def configure_router_port(tenant, interface_name, service_type, profile_name="de
         api.close()
 
 
+def _clear_bridge_port_pppoe_only(api, interface_name):
+    for item in list(api.path("interface", "bridge", "filter").select()):
+        if item.get("comment") == f"billing-saas pppoe-only {interface_name}" and item.get(".id"):
+            try:
+                api.path("interface", "bridge", "filter").remove(item[".id"])
+            except Exception:
+                pass
+
+
+def _set_bridge_port_pppoe_only(api, interface_name):
+    _clear_bridge_port_pppoe_only(api, interface_name)
+    bridge_filter = api.path("interface", "bridge", "filter")
+    comment = f"billing-saas pppoe-only {interface_name}"
+    for chain in ("input", "forward"):
+        bridge_filter.add(chain=chain, **{"in-interface": interface_name, "mac-protocol": "pppoe-discovery", "action": "accept", "comment": comment})
+        bridge_filter.add(chain=chain, **{"in-interface": interface_name, "mac-protocol": "pppoe", "action": "accept", "comment": comment})
+        bridge_filter.add(chain=chain, **{"in-interface": interface_name, "action": "drop", "comment": comment})
+    bridge_filter.add(chain="output", **{"out-interface": interface_name, "mac-protocol": "pppoe-discovery", "action": "accept", "comment": comment})
+    bridge_filter.add(chain="output", **{"out-interface": interface_name, "mac-protocol": "pppoe", "action": "accept", "comment": comment})
+    bridge_filter.add(chain="output", **{"out-interface": interface_name, "action": "drop", "comment": comment})
+
+
 def _isolate_customer_bridge_from_router_management(api, bridge_name):
     """Allow captive network services, then drop all other router input from customer ports."""
     for item in list(api.path("interface", "list", "member").select()):
@@ -1147,6 +1171,21 @@ def _isolate_customer_bridge_from_router_management(api, bridge_name):
                 api.path("interface", "list", "member").remove(item[".id"])
             except Exception:
                 pass
+    try:
+        upsert_router_item(
+            api,
+            ("interface", "list"),
+            {"name": "EXPRESSNET-CUSTOMER"},
+            {"name": "EXPRESSNET-CUSTOMER", "comment": "Expressnet customer-only interfaces"},
+        )
+        upsert_router_item(
+            api,
+            ("interface", "list", "member"),
+            {"interface": bridge_name},
+            {"list": "EXPRESSNET-CUSTOMER", "interface": bridge_name, "comment": "billing-saas customer bridge"},
+        )
+    except Exception:
+        pass
 
     comments = {
         "billing-saas allow customer dns",
@@ -1198,6 +1237,8 @@ def _build_port_command_script(interface_name, service_type, profile_name, porta
 
     customer_bridge_isolation = (
         f':do {{ /interface list member remove [find interface="{_rsc_escape(bridge_name)}"] }} on-error={{}}; '
+        f':do {{ /interface list add name=EXPRESSNET-CUSTOMER comment="Expressnet customer-only interfaces" }} on-error={{}}; '
+        f':do {{ /interface list member add list=EXPRESSNET-CUSTOMER interface="{_rsc_escape(bridge_name)}" comment="billing-saas customer bridge" }} on-error={{ /interface list member set [find interface="{_rsc_escape(bridge_name)}"] list=EXPRESSNET-CUSTOMER comment="billing-saas customer bridge" }}; '
         f':do {{ /ip firewall filter remove [find comment="billing-saas allow customer dns"] }} on-error={{}}; '
         f':do {{ /ip firewall filter remove [find comment="billing-saas allow customer dhcp"] }} on-error={{}}; '
         f':do {{ /ip firewall filter remove [find comment="billing-saas allow customer hotspot service"] }} on-error={{}}; '
@@ -1224,7 +1265,9 @@ def _build_port_command_script(interface_name, service_type, profile_name, porta
     if portal_url:
         hotspot_setup = (
             f':do {{ /ip dns set allow-remote-requests=yes }} on-error={{ :log warning "Billing SaaS: failed to enable DNS for hotspot clients" }}; '
-            f':do {{ /interface list member add list=LAN interface="{_rsc_escape(bridge_name)}" comment="billing-saas captive LAN" }} on-error={{ /interface list member set [find interface="{_rsc_escape(bridge_name)}"] list=LAN comment="billing-saas captive LAN" }}; '
+            f':do {{ /interface list member remove [find interface="{_rsc_escape(bridge_name)}"] }} on-error={{}}; '
+            f':do {{ /interface list add name=EXPRESSNET-CUSTOMER comment="Expressnet customer-only interfaces" }} on-error={{}}; '
+            f':do {{ /interface list member add list=EXPRESSNET-CUSTOMER interface="{_rsc_escape(bridge_name)}" comment="billing-saas captive customer" }} on-error={{ /interface list member set [find interface="{_rsc_escape(bridge_name)}"] list=EXPRESSNET-CUSTOMER comment="billing-saas captive customer" }}; '
             f':do {{ /ip firewall filter remove [find comment="billing-saas allow hotspot dns"] }} on-error={{}}; '
             f':do {{ /ip firewall filter remove [find comment="billing-saas allow hotspot dhcp"] }} on-error={{}}; '
             f':do {{ /ip firewall filter remove [find comment="billing-saas allow hotspot web-proxy"] }} on-error={{}}; '
@@ -1251,6 +1294,15 @@ def _build_port_command_script(interface_name, service_type, profile_name, porta
 
     # --- Default PPPoE server creation (at provisioning time, not lazy per-port) ---
     pppoe_server_block = (
+        f'  :do {{ /interface bridge filter remove [find comment="billing-saas pppoe-only {interface_name}"] }} on-error={{}}; '
+        f'  :foreach billingChain in={{"input";"forward"}} do={{ '
+        f'    :do {{ /interface bridge filter add chain=$billingChain in-interface="{interface_name}" mac-protocol=pppoe-discovery action=accept comment="billing-saas pppoe-only {interface_name}" }} on-error={{}}; '
+        f'    :do {{ /interface bridge filter add chain=$billingChain in-interface="{interface_name}" mac-protocol=pppoe action=accept comment="billing-saas pppoe-only {interface_name}" }} on-error={{}}; '
+        f'    :do {{ /interface bridge filter add chain=$billingChain in-interface="{interface_name}" action=drop comment="billing-saas pppoe-only {interface_name}" }} on-error={{}}; '
+        f'  }}; '
+        f'  :do {{ /interface bridge filter add chain=output out-interface="{interface_name}" mac-protocol=pppoe-discovery action=accept comment="billing-saas pppoe-only {interface_name}" }} on-error={{}}; '
+        f'  :do {{ /interface bridge filter add chain=output out-interface="{interface_name}" mac-protocol=pppoe action=accept comment="billing-saas pppoe-only {interface_name}" }} on-error={{}}; '
+        f'  :do {{ /interface bridge filter add chain=output out-interface="{interface_name}" action=drop comment="billing-saas pppoe-only {interface_name}" }} on-error={{}}; '
         f'  :local billingSvc [/interface pppoe-server server find interface="{bridge_name}"]; '
         f'  :if ([:len $billingSvc] > 0) do={{ /interface pppoe-server server set $billingSvc service-name="billing-{interface_name}" authentication=pap,chap,mschap1,mschap2 default-profile="{profile_name}" one-session-per-host=yes disabled=no }} else={{ /interface pppoe-server server add service-name="billing-{interface_name}" authentication=pap,chap,mschap1,mschap2 interface="{bridge_name}" default-profile="{profile_name}" one-session-per-host=yes disabled=no }}; '
     )
@@ -1258,6 +1310,7 @@ def _build_port_command_script(interface_name, service_type, profile_name, porta
     # --- Hotspot server creation ---
     hotspot_server_block = (
         f'  {hotspot_setup}'
+        f'  :do {{ /interface bridge filter remove [find comment="billing-saas pppoe-only {interface_name}"] }} on-error={{}}; '
         f'  :do {{ /interface wireless security-profiles add name="billing-saas-open" mode=none authentication-types="" wpa-pre-shared-key="" wpa2-pre-shared-key="" supplicant-identity="billing-saas" }} on-error={{ /interface wireless security-profiles set [find name="billing-saas-open"] mode=none authentication-types="" wpa-pre-shared-key="" wpa2-pre-shared-key="" supplicant-identity="billing-saas" }}; '
         f'  :do {{ /interface wireless set [find name="{interface_name}"] security-profile="billing-saas-open" disabled=no }} on-error={{}}; '
         f'  :local billingHs [/ip hotspot find interface="{bridge_name}"]; '

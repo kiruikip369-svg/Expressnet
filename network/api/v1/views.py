@@ -995,10 +995,10 @@ def captive_portal_page(request, tenant_id):
     theme_vars = html.escape(_portal_theme_vars(tenant), quote=True)
     body_html_v3 = f"""
       <div style="{theme_vars}">
-      <header>
+      <header">
         <div class="hero-logo">{logo_html}</div>
         <h1>{html.escape(str(tenant.get('business_name') or 'Internet packages'))}</h1>
-        <div class="steps"><span>Select</span><span class="chev">&gt;</span><span>Pay</span><span class="chev">&gt;</span><span>Connect</span></div>
+       
         <a class="call" href="tel:{phone_value}">Call {phone_value}</a>
       </header>
       <main>
@@ -2936,6 +2936,9 @@ def router_provision_script(request, token):
     # API can't be reached from the open hotspot bridge — only from LAN or the VPN tunnel.
     mgmt_lockdown_script = f"""
         :log info "Billing SaaS: locking down management plane";
+        :do {{ /interface list member remove [find interface="{_rsc_escape(bridge_name)}"] }} on-error={{}}
+        :do {{ /interface list add name=EXPRESSNET-CUSTOMER comment="Expressnet customer-only interfaces" }} on-error={{}}
+        :do {{ /interface list member add list=EXPRESSNET-CUSTOMER interface="{_rsc_escape(bridge_name)}" comment="billing-saas customer bridge" }} on-error={{ /interface list member set [find interface="{_rsc_escape(bridge_name)}"] list=EXPRESSNET-CUSTOMER comment="billing-saas customer bridge" }}
         :do {{ /ip service set api address={_rsc_escape(wg_server_tunnel_ip + '/32') if vpn_peer_enabled else '0.0.0.0/0'} }} on-error={{ :log warning "Billing SaaS: api service lockdown failed" }}
         :do {{ /ip service set api-ssl disabled=yes }} on-error={{}}
         :do {{ /ip service set telnet disabled=yes }} on-error={{}}
@@ -3135,7 +3138,9 @@ def router_provision_script(request, token):
         :log info "Billing SaaS Step 2: creating bridge, DHCP, IP pool, firewall, and NAT";
         :local billingBridge "{_rsc_escape(bridge_name)}";
         :do {{ /interface bridge add name=$billingBridge comment="Created by Expressnet" }} on-error={{ /interface bridge set [find name=$billingBridge] comment="Created by Expressnet" }}
-        :do {{ /interface list member add list=LAN interface=$billingBridge comment="Added by Expressnet" }} on-error={{ /interface list member set [find interface=$billingBridge] list=LAN comment="Added by Expressnet" }}
+        :do {{ /interface list member remove [find interface=$billingBridge] }} on-error={{}}
+        :do {{ /interface list add name=EXPRESSNET-CUSTOMER comment="Expressnet customer-only interfaces" }} on-error={{}}
+        :do {{ /interface list member add list=EXPRESSNET-CUSTOMER interface=$billingBridge comment="billing-saas customer bridge" }} on-error={{ /interface list member set [find interface=$billingBridge] list=EXPRESSNET-CUSTOMER comment="billing-saas customer bridge" }}
         :do {{ /ip address add address={_rsc_escape(lan_cidr)} interface=$billingBridge comment="Added by Expressnet" }} on-error={{ /ip address set [find comment="Added by Expressnet" interface=$billingBridge] address={_rsc_escape(lan_cidr)} interface=$billingBridge }}
         :do {{ /ip pool add name={hotspot_pool_name} ranges={_rsc_escape(dhcp_pool)} comment="IP Pool created by Expressnet" }} on-error={{ /ip pool set [find name={hotspot_pool_name}] ranges={_rsc_escape(dhcp_pool)} comment="IP Pool created by Expressnet" }}
         :do {{ /ip dhcp-server add name=Expressnet-dhcp interface=$billingBridge address-pool={hotspot_pool_name} disabled=no lease-time=4h }} on-error={{ /ip dhcp-server set [find name=Expressnet-dhcp] interface=$billingBridge address-pool={hotspot_pool_name} disabled=no lease-time=4h }}
