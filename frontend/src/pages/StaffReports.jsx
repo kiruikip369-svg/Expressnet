@@ -5,18 +5,22 @@ import {
   Search, ClipboardList, Filter, Calendar, X, Loader2, CheckCircle2,
 } from 'lucide-react';
 
-// ---------------------------------------------------------------------------
-// NOTE ON ASSUMED TICKET FIELDS
-// staff_tasks() only reveals: id, assigned_to, status, bounce_reason,
-// bounced_at, work_report, reported_at, updated_at.
-// The table below also expects: title (or task_title), description, client,
-// priority ('high' | 'medium' | 'low'), due_date (ISO string), and
-// assigned_by (either a string name, or { name, role }).
-// Adjust the field lookups below if your ticket objects use different keys.
-// ---------------------------------------------------------------------------
-
 function items(data) {
   return Array.isArray(data) ? data : data?.results || [];
+}
+
+function normalizeTask(task = {}) {
+  return {
+    ...task,
+    title: task.title || task.task_title || task.type || task.task_type || 'Assigned task',
+    description: task.description || task.notes || task.customer_name || '',
+    priority: task.priority || 'medium',
+    status: task.status || 'pending',
+    assigned_by: task.assigned_by || {
+      name: task.assigned_to_name || task.staff_name || '',
+      role: task.assigned_to_role || task.staff_role || '',
+    },
+  };
 }
 
 const PRIORITY_STYLES = {
@@ -83,6 +87,7 @@ function ReportModal({ task, onClose, onSubmitted }) {
         task_title: task.title || task.task_title || '',
         report: report.trim(),
       });
+      await api.patch(`/staff/tasks/${task.id}`, { work_report: report.trim(), status: 'complete' });
       toast.success('Work report submitted');
       onSubmitted(data?.report || { task_id: task.id, report: report.trim() });
       onClose();
@@ -147,7 +152,7 @@ export default function StaffReports() {
     setLoading(true);
     api
       .get('/staff/tasks')
-      .then(({ data }) => setTasks(items(data)))
+      .then(({ data }) => setTasks(items(data).map(normalizeTask)))
       .catch((error) => toast.error(error.response?.data?.message || 'Failed to load tasks'))
       .finally(() => setLoading(false));
   };
@@ -158,9 +163,10 @@ export default function StaffReports() {
 
   const pendingCount = tasks.filter((t) => t.status === 'pending').length;
   const inProgressCount = tasks.filter((t) => t.status === 'in_progress').length;
+  const completeCount = tasks.filter((t) => ['complete', 'completed'].includes(t.status)).length;
 
   const filteredTasks = useMemo(() => {
-    let list = tasks.filter((t) => t.status === activeTab);
+    let list = tasks.filter((t) => (activeTab === 'complete' ? ['complete', 'completed'].includes(t.status) : t.status === activeTab));
     if (priorityFilter !== 'all') {
       list = list.filter((t) => (t.priority || '').toLowerCase() === priorityFilter);
     }
@@ -179,7 +185,7 @@ export default function StaffReports() {
 
   const handleReportSubmitted = (report) => {
     setTasks((prev) =>
-      prev.map((t) => (t.id === report.task_id ? { ...t, work_report: report.report } : t))
+      prev.map((t) => (t.id === report.task_id ? normalizeTask({ ...t, work_report: report.report, reported_at: report.created_at, status: 'complete' }) : t))
     );
   };
 
@@ -221,7 +227,13 @@ export default function StaffReports() {
               onClick={() => setActiveTab('in_progress')}
               className={`pb-2 ${activeTab === 'in_progress' ? 'border-b-2 border-blue-600 text-blue-600' : 'theme-muted'}`}
             >
-              In Progress Tasks
+              In Progress Tasks ({inProgressCount})
+            </button>
+            <button
+              onClick={() => setActiveTab('complete')}
+              className={`pb-2 ${activeTab === 'complete' ? 'border-b-2 border-blue-600 text-blue-600' : 'theme-muted'}`}
+            >
+              Submitted Reports ({completeCount})
             </button>
           </div>
           <div className="relative flex items-center gap-2">
@@ -268,7 +280,7 @@ export default function StaffReports() {
                 <th className="pb-2 font-medium">Task</th>
                 <th className="pb-2 font-medium">Priority</th>
                 <th className="pb-2 font-medium">Due Date</th>
-                <th className="pb-2 font-medium">Assigned By</th>
+                <th className="pb-2 font-medium">Assigned Staff</th>
                 <th className="pb-2 font-medium">Status</th>
                 <th className="pb-2 font-medium">Actions</th>
               </tr>
@@ -307,11 +319,11 @@ export default function StaffReports() {
                             PRIORITY_STYLES[(task.priority || '').toLowerCase()] || 'bg-slate-100 text-slate-600'
                           }`}
                         >
-                          {task.priority || '—'}
+                          {task.priority || '-'}
                         </span>
                       </td>
                       <td className="py-3 pr-4">
-                        <p className="theme-text">{task.due_date ? new Date(task.due_date).toLocaleDateString() : '—'}</p>
+                        <p className="theme-text">{task.due_date ? new Date(task.due_date).toLocaleDateString() : '-'}</p>
                         {due.label && <p className={`text-xs ${due.className}`}>{due.label}</p>}
                       </td>
                       <td className="py-3 pr-4">
@@ -320,7 +332,7 @@ export default function StaffReports() {
                             {initials(assignedByName)}
                           </span>
                           <div>
-                            <p className="theme-text text-xs font-medium">{assignedByName || '—'}</p>
+                            <p className="theme-text text-xs font-medium">{assignedByName || '-'}</p>
                             {assignedByRole && <p className="theme-muted text-xs">{assignedByRole}</p>}
                           </div>
                         </div>
@@ -397,3 +409,4 @@ export default function StaffReports() {
     </div>
   );
 }
+

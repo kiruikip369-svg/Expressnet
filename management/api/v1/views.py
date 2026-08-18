@@ -1226,8 +1226,45 @@ def _current_member_payload(request):
     return {
         "id": member.get("id") or request.tenant.get("member_id") or "",
         "name": member.get("name") or request.tenant.get("name") or request.tenant.get("email") or "",
+        "email": member.get("email") or request.tenant.get("email") or "",
+        "phone": member.get("phone") or request.tenant.get("phone") or "",
         "role": member.get("role") or request.tenant.get("role") or "",
+        "status": member.get("status") or "active",
+        "created_at": member.get("created_at") or "",
+        "updated_at": member.get("updated_at") or "",
+        "permissions": _normalize_permissions(member.get("permissions")),
     }
+
+
+@csrf_exempt
+@api_view(["GET"])
+@tenant_required
+def staff_profile(request):
+    member = _current_member_payload(request)
+    tenant_id = request.tenant["id"]
+    tasks = [
+        item for item in list_children(f"tenants/{tenant_id}/tickets")
+        if str(item.get("assigned_to") or "") == str(member["id"])
+    ]
+    reports = _tenant_extra_dict(tenant_id, "staff_work_reports")
+    requisitions = _tenant_extra_dict(tenant_id, "requisitions")
+    my_reports = [report for report in reports.values() if str(report.get("staff_id") or "") == str(member["id"])]
+    my_requisitions = [item for item in requisitions.values() if str(item.get("requested_by") or "") == str(member["id"])]
+    complete_statuses = {"complete", "completed"}
+    completed = sum(1 for task in tasks if str(task.get("status") or "").lower() in complete_statuses)
+    return ok(
+        {
+            "staff": member,
+            "tasks": tasks,
+            "stats": {
+                "assigned_tasks": len(tasks),
+                "completed_tasks": completed,
+                "pending_tasks": max(len(tasks) - completed, 0),
+                "reports_submitted": len(my_reports),
+                "requisitions_submitted": len(my_requisitions),
+            },
+        }
+    )
 
 
 @csrf_exempt

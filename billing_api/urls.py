@@ -108,6 +108,7 @@ urlpatterns = [
     path("requisitions/<str:requisition_id>", management_views.requisitions),
     path("staff/tasks", management_views.staff_tasks),
     path("staff/tasks/<str:ticket_id>", management_views.staff_tasks),
+    path("staff/profile", management_views.staff_profile),
     path("staff/reports", management_views.staff_reports),
     path("staff/requisitions", management_views.staff_requisitions),
     path("tickets", management_views.tickets),

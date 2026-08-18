@@ -15,6 +15,7 @@ import {
 import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import api from '../api/axios';
+import { useAuth } from '../context/AuthContext';
 
 function items(data) {
   return Array.isArray(data) ? data : data?.results || [];
@@ -61,7 +62,7 @@ function statusClasses(status) {
 const isDone = (status) => ['complete', 'completed'].includes((status || '').toLowerCase());
 
 function dueMeta(dueDate) {
-  if (!dueDate) return { label: '—', overdue: false, dueToday: false };
+  if (!dueDate) return { label: '-', overdue: false, dueToday: false };
   const due = new Date(dueDate);
   const now = new Date();
   due.setHours(0, 0, 0, 0);
@@ -74,9 +75,35 @@ function dueMeta(dueDate) {
   return { label: `${diffDays} day${diffDays === 1 ? '' : 's'} left`, overdue: false, dueToday: false };
 }
 
+function normalizeTask(task = {}) {
+  const title = task.title || task.task_title || task.type || task.task_type || 'Assigned task';
+  const description = task.description || task.notes || task.customer_name || task.client || '';
+  return {
+    ...task,
+    title,
+    description,
+    priority: task.priority || 'normal',
+    status: task.status || 'pending',
+  };
+}
+
+function normalizeProfile(staff = {}, tenant = {}) {
+  return {
+    ...staff,
+    id: staff.id || tenant?.member_id || '',
+    name: staff.name || tenant?.name || tenant?.email || 'Staff Member',
+    email: staff.email || tenant?.email || '',
+    phone: staff.phone || tenant?.phone || '',
+    role: staff.role || tenant?.role || 'Field Staff',
+    status: staff.status || tenant?.status || 'active',
+    created_at: staff.created_at || tenant?.created_at || '',
+  };
+}
+
 export default function StaffTasks() {
+  const { tenant } = useAuth();
   const [tasks, setTasks] = useState([]);
-  const [profile, setProfile] = useState(null);
+  const [profile, setProfile] = useState(() => normalizeProfile({}, tenant));
   const [reports, setReports] = useState({});
   const [bounceReasons, setBounceReasons] = useState({});
   const [busyId, setBusyId] = useState('');
@@ -84,26 +111,21 @@ export default function StaffTasks() {
 
   const load = async () => {
     try {
-      const { data } = await api.get('/staff/tasks?all=1');
-      setTasks(items(data));
-    } catch (error) {
-      toast.error(error.response?.data?.message || 'Failed to load assigned tasks');
-    }
-  };
-
-  // Adjust the endpoint/shape to whatever your staff-profile API actually returns.
-  const loadProfile = async () => {
-    try {
       const { data } = await api.get('/staff/profile');
-      setProfile(data?.staff || data);
-    } catch {
-      // Profile card just falls back to placeholders if this endpoint isn't wired up yet.
+      setProfile(normalizeProfile(data?.staff, tenant));
+      setTasks(items(data?.tasks).map(normalizeTask));
+    } catch (error) {
+      try {
+        const { data } = await api.get('/staff/tasks?all=1');
+        setTasks(items(data).map(normalizeTask));
+      } catch (taskError) {
+        toast.error(taskError.response?.data?.message || error.response?.data?.message || 'Failed to load assigned tasks');
+      }
     }
   };
 
   useEffect(() => {
     load();
-    loadProfile();
   }, []);
 
   const stats = useMemo(() => {
@@ -120,7 +142,7 @@ export default function StaffTasks() {
     setBusyId(task.id);
     try {
       const { data } = await api.patch(`/staff/tasks/${task.id}`, payload);
-      setTasks((current) => current.map((item) => (item.id === task.id ? data.task : item)));
+      setTasks((current) => current.map((item) => (item.id === task.id ? normalizeTask(data.task) : item)));
       toast.success(message);
     } catch (error) {
       toast.error(error.response?.data?.message || 'Failed to update task');
@@ -136,7 +158,7 @@ export default function StaffTasks() {
     try {
       await api.post('/staff/reports', { task_id: task.id, task_title: task.title, report });
       const { data } = await api.patch(`/staff/tasks/${task.id}`, { work_report: report, status: 'complete' });
-      setTasks((current) => current.map((item) => (item.id === task.id ? data.task : item)));
+      setTasks((current) => current.map((item) => (item.id === task.id ? normalizeTask(data.task) : item)));
       setReports((current) => ({ ...current, [task.id]: '' }));
       toast.success('Work report submitted');
       setExpandedId('');
@@ -162,9 +184,9 @@ export default function StaffTasks() {
           <div className="relative shrink-0">
             <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-full bg-blue-100 text-lg font-semibold text-blue-700">
               {profile?.avatar_url ? (
-                <img src={profile.avatar_url} alt={profile?.full_name || 'Staff'} className="h-full w-full object-cover" />
+                <img src={profile.avatar_url} alt={profile?.name || 'Staff'} className="h-full w-full object-cover" />
               ) : (
-                initials(profile?.full_name)
+                initials(profile?.name)
               )}
             </div>
             <span className="absolute bottom-0 right-0 h-3.5 w-3.5 rounded-full bg-emerald-500 ring-2 ring-white" />
@@ -172,31 +194,31 @@ export default function StaffTasks() {
 
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
-              <h1 className="theme-text text-lg font-semibold">{profile?.full_name || 'Staff Member'}</h1>
+              <h1 className="theme-text text-lg font-semibold">{profile?.name || 'Staff Member'}</h1>
               <span className="rounded-full bg-blue-50 px-2 py-0.5 text-xs font-semibold text-blue-600">
-                Staff ID: {profile?.staff_id || '—'}
+                Staff ID: {profile?.id || '-'}
               </span>
             </div>
             <p className="text-sm text-blue-600">{profile?.role || 'Field Staff'}</p>
 
             <div className="mt-3 grid gap-2 text-xs text-slate-500 sm:grid-cols-2">
               <span className="flex items-center gap-1.5">
-                <Mail size={13} /> {profile?.email || '—'}
+                <Mail size={13} /> {profile?.email || '-'}
               </span>
               <span className="flex items-center gap-1.5">
-                <Phone size={13} /> {profile?.phone || '—'}
+                <Phone size={13} /> {profile?.phone || '-'}
               </span>
               <span className="flex items-center gap-1.5">
-                <MapPin size={13} /> {profile?.location || '—'}
+                <MapPin size={13} /> {profile?.status || 'active'}
               </span>
               <span className="flex items-center gap-1.5">
-                <Briefcase size={13} /> {profile?.department || '—'}
+                <Briefcase size={13} /> {profile?.role || '-'}
               </span>
               <span className="flex items-center gap-1.5">
-                <Calendar size={13} /> Joined {profile?.date_joined || '—'}
+                <Calendar size={13} /> Joined {profile?.created_at ? new Date(profile.created_at).toLocaleDateString() : '-'}
               </span>
               <span className="flex items-center gap-1.5">
-                <User size={13} /> Reporting to {profile?.manager_name || '—'}
+                <User size={13} /> Tenant staff member
               </span>
             </div>
           </div>
@@ -340,19 +362,19 @@ export default function StaffTasks() {
             <div className="mt-3 space-y-3 text-sm">
               <div>
                 <p className="text-xs font-semibold text-slate-400">Full Name</p>
-                <p className="theme-text">{profile?.full_name || '—'}</p>
+                <p className="theme-text">{profile?.name || '-'}</p>
               </div>
               <div>
                 <p className="text-xs font-semibold text-slate-400">Email</p>
-                <p className="theme-text">{profile?.email || '—'}</p>
+                <p className="theme-text">{profile?.email || '-'}</p>
               </div>
               <div>
                 <p className="text-xs font-semibold text-slate-400">Phone</p>
-                <p className="theme-text">{profile?.phone || '—'}</p>
+                <p className="theme-text">{profile?.phone || '-'}</p>
               </div>
               <div>
-                <p className="text-xs font-semibold text-slate-400">Department</p>
-                <p className="theme-text">{profile?.department || '—'}</p>
+                <p className="text-xs font-semibold text-slate-400">Role</p>
+                <p className="theme-text">{profile?.role || '-'}</p>
               </div>
             </div>
             <button type="button" className="btn-secondary mt-4 w-full justify-center text-blue-600">
@@ -382,3 +404,5 @@ export default function StaffTasks() {
     </div>
   );
 }
+
+

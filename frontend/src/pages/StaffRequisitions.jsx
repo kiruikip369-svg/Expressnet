@@ -3,10 +3,20 @@ import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import api from '../api/axios';
 
-const blankForm = { type: 'tools', title: '', reason: '' };
+const blankForm = { type: 'tools', title: '', quantity: '1', reason: '' };
 
 function items(data) {
   return Array.isArray(data) ? data : data?.results || [];
+}
+
+function formatDate(value) {
+  if (!value) return '-';
+  const date = new Date(value);
+  return Number.isNaN(date.valueOf()) ? '-' : date.toLocaleDateString();
+}
+
+function newestFirst(a, b) {
+  return new Date(b.created_at || 0) - new Date(a.created_at || 0);
 }
 
 function statusClass(status) {
@@ -25,7 +35,7 @@ export default function StaffRequisitions() {
   const load = async () => {
     try {
       const { data } = await api.get('/staff/requisitions');
-      setRequisitions(items(data));
+      setRequisitions(items(data).sort(newestFirst));
     } catch (error) {
       toast.error(error.response?.data?.message || 'Failed to load requisitions');
     }
@@ -48,6 +58,7 @@ export default function StaffRequisitions() {
   const submit = async (event) => {
     event.preventDefault();
     if (!form.title.trim()) return toast.error('Enter the item or request');
+    if (!form.quantity || Number(form.quantity) < 1) return toast.error('Enter a valid quantity');
     setSaving(true);
     try {
       const { data } = await api.post('/staff/requisitions', form);
@@ -64,8 +75,6 @@ export default function StaffRequisitions() {
 
   const update = (field, value) => setForm((current) => ({ ...current, [field]: value }));
 
-  const latestRequisitions = requisitions.slice(0, 3);
-
   return (
     <div className="space-y-4">
       <section className="surface-card p-4 flex items-start justify-between gap-4">
@@ -81,31 +90,33 @@ export default function StaffRequisitions() {
 
       <section className="table-shell overflow-x-auto">
         <div className="flex items-center justify-between px-4 pt-4">
-          <h2 className="text-sm font-semibold text-slate-700">Latest Requisitions</h2>
-          {requisitions.length > 3 && (
-            <span className="text-xs text-slate-400">Showing 3 of {requisitions.length}</span>
-          )}
+          <h2 className="text-sm font-semibold text-slate-700">My Submitted Requisitions</h2>
+          <span className="text-xs text-slate-400">{requisitions.length} total</span>
         </div>
-        <table className="min-w-[760px] divide-y divide-slate-200">
+        <table className="min-w-[860px] divide-y divide-slate-200">
           <thead className="table-head">
             <tr>
               <th className="px-4 py-3">Item</th>
               <th className="px-4 py-3">Type</th>
+              <th className="px-4 py-3">Qty</th>
               <th className="px-4 py-3">Reason</th>
               <th className="px-4 py-3">Status</th>
+              <th className="px-4 py-3">Requested</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {latestRequisitions.length === 0 ? (
-              <tr><td className="table-cell text-slate-500" colSpan="4">No requisitions submitted yet.</td></tr>
-            ) : latestRequisitions.map((item) => (
+            {requisitions.length === 0 ? (
+              <tr><td className="table-cell text-slate-500" colSpan="6">No requisitions submitted yet.</td></tr>
+            ) : requisitions.map((item) => (
               <tr key={item.id}>
                 <td className="table-cell font-medium text-slate-950">{item.title}</td>
                 <td className="table-cell capitalize">{item.type}</td>
+                <td className="table-cell">{item.quantity || '1'}</td>
                 <td className="table-cell">{item.reason || '-'}</td>
                 <td className="table-cell">
                   <span className={`rounded-full px-2 py-1 text-xs font-semibold capitalize ${statusClass(item.status)}`}>{item.status || 'pending'}</span>
                 </td>
+                <td className="table-cell">{formatDate(item.created_at)}</td>
               </tr>
             ))}
           </tbody>
@@ -140,6 +151,10 @@ export default function StaffRequisitions() {
               <label className="block text-xs font-semibold text-slate-500">
                 Item
                 <input className="form-input" value={form.title} onChange={(event) => update('title', event.target.value)} placeholder="e.g. Ladder, cable tester, router" />
+              </label>
+              <label className="block text-xs font-semibold text-slate-500">
+                Quantity
+                <input className="form-input" type="number" min="1" step="1" value={form.quantity} onChange={(event) => update('quantity', event.target.value)} />
               </label>
               <label className="block text-xs font-semibold text-slate-500">
                 Reason
