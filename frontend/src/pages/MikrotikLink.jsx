@@ -41,6 +41,7 @@ export default function MikrotikSettings() {
   const [selectedPorts, setSelectedPorts] = useState([]);
   const [routerName, setRouterName] = useState('');
   const [savingName, setSavingName] = useState(false);
+  const [migrationMode, setMigrationMode] = useState(false);
 
   const configured = useMemo(
     () => Boolean(
@@ -125,7 +126,11 @@ export default function MikrotikSettings() {
 
   async function loadProvisionCommand() {
     try {
-      const { data } = await api.get(`/router/provision-command${isAddingRouter ? '?fresh=1' : ''}`);
+      const params = new URLSearchParams();
+      if (isAddingRouter) params.set('fresh', '1');
+      if (migrationMode) params.set('migrate', '1');
+      const query = params.toString();
+      const { data } = await api.get(`/router/provision-command${query ? `?${query}` : ''}`);
       setProvision(data);
     } catch (error) {
       toast.error(error.response?.data?.message || 'Failed to create provisioning command');
@@ -136,6 +141,10 @@ export default function MikrotikSettings() {
     loadConfig();
     loadProvisionCommand();
   }, []);
+
+  useEffect(() => {
+    loadProvisionCommand();
+  }, [migrationMode]);
 
   const copy = async (value, label) => {
     try {
@@ -253,26 +262,42 @@ export default function MikrotikSettings() {
               {savingName ? 'Saving...' : 'Save Name'}
             </button>
           </div>
-          <div className="mt-4 rounded-lg bg-slate-950 p-4 text-white">
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-xs font-bold uppercase tracking-wide text-slate-300">Advanced mode command</span>
-              <button type="button" className="btn-secondary border-slate-700 bg-slate-800 text-white hover:bg-slate-700" onClick={() => copy('/system/device-mode/update mode=advanced', 'Advanced mode command')}>
+          <label className="mt-4 flex cursor-pointer items-start gap-3 rounded-lg border border-slate-200 bg-white p-4">
+            <input
+              type="checkbox"
+              className="mt-1 h-4 w-4 rounded border-slate-300 text-[var(--app-accent)] focus:ring-[var(--app-accent)]"
+              checked={migrationMode}
+              onChange={(event) => setMigrationMode(event.target.checked)}
+            />
+            <span>
+              <span className="block text-sm font-semibold text-slate-950">Migrate from another system</span>
+              <span className="mt-1 block text-sm text-slate-600">
+                Export existing PPPoE secrets, Hotspot customers, package profiles, and active sessions first. Run normal provisioning after the export has completed.
+              </span>
+            </span>
+          </label>
+          <div className="mt-4 overflow-hidden rounded-lg bg-slate-950 text-white">
+            <div className="flex items-center justify-between gap-3 bg-slate-800 px-4 py-2">
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-slate-100">Run the command below in the MikroTik terminal if the device mode is not set to advanced mode</p>
+                <pre className="mt-1 overflow-auto whitespace-pre-wrap break-all text-xs leading-5 text-slate-100">/system/device-mode/update mode=advanced</pre>
+              </div>
+              <button type="button" className="btn-secondary shrink-0 border-slate-700 bg-slate-900 text-white hover:bg-slate-700" onClick={() => copy('/system/device-mode/update mode=advanced', 'Advanced mode command')}>
                 <Clipboard size={15} />
                 Copy
               </button>
             </div>
-            <pre className="mt-3 overflow-auto whitespace-pre-wrap break-all rounded-md bg-slate-800 p-3 text-xs leading-6 text-slate-100">/system/device-mode/update mode=advanced</pre>
-            <p className="mt-3 text-xs font-semibold text-amber-200">After running it, restart the MikroTik when RouterOS asks for confirmation, then run the provisioning command below.</p>
-          </div>
-          <div className="mt-4 rounded-lg bg-slate-950 p-4 text-white">
             <div className="flex items-center justify-between gap-3">
-              <span className="text-xs font-bold uppercase tracking-wide text-slate-300">Router terminal</span>
+              <span className="px-4 pt-4 text-xs font-bold uppercase tracking-wide text-slate-300">{provision?.mode === 'migration' ? 'Migration export command' : 'Router terminal'}</span>
               <button type="button" className="btn-secondary border-slate-700 bg-slate-800 text-white hover:bg-slate-700" onClick={() => copy(provision?.command, 'Command')} disabled={!provision?.command}>
                 <Clipboard size={15} />
                 Copy
               </button>
             </div>
-            <pre className="mt-3 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-md bg-slate-800 p-3 text-xs leading-6 text-slate-100">{provision?.command || 'Generating command...'}</pre>
+            <pre className="mx-4 mt-3 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-md bg-slate-800 p-3 text-xs leading-6 text-slate-100">{provision?.command || 'Generating command...'}</pre>
+            {provision?.mode === 'migration' && (
+              <p className="px-4 pb-4 pt-3 text-xs font-semibold text-amber-200">This command only saves the current router data into Expressnet. Turn migration off afterward to generate the normal provisioning command.</p>
+            )}
           </div>
           {provisioningState?.status === 'completed' && (
             <div className="mt-3 grid gap-3 rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-800 sm:grid-cols-2 lg:grid-cols-4">

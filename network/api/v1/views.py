@@ -995,10 +995,10 @@ def captive_portal_page(request, tenant_id):
     theme_vars = html.escape(_portal_theme_vars(tenant), quote=True)
     body_html_v3 = f"""
       <div style="{theme_vars}">
-      <header">
+      <header>
         <div class="hero-logo">{logo_html}</div>
         <h1>{html.escape(str(tenant.get('business_name') or 'Internet packages'))}</h1>
-       
+        
         <a class="call" href="tel:{phone_value}">Call {phone_value}</a>
       </header>
       <main>
@@ -2258,6 +2258,157 @@ def _customer_secret_script(customer):
     )
 
 
+def _migration_export_items(tenant):
+    snapshot = (tenant or {}).get("mikrotik_router_snapshot") or {}
+    migration = (tenant or {}).get("mikrotik_migration_export") or snapshot.get("migration_export") or {}
+    if not isinstance(migration, dict):
+        return {}
+    return migration
+
+
+def _migration_secret_script(item, service_type):
+    username = _rsc_escape((item or {}).get("name") or (item or {}).get("username") or (item or {}).get("user") or "")
+    password = _rsc_escape((item or {}).get("password") or "")
+    profile = _rsc_escape((item or {}).get("profile") or "default")
+    disabled_value = str((item or {}).get("disabled") or "").lower()
+    disabled = "yes" if disabled_value in {"yes", "true", "1"} else "no"
+    if not username:
+        return ""
+    if not password or password in {"*", "**", "***", "****", "*****", "******"}:
+        return f':log warning "Billing SaaS migration: skipped {username}; router did not expose a readable password";'
+    if service_type == "pppoe":
+        return (
+            f':if ([:len [/ppp secret find name="{username}"]] = 0) do={{'
+            f' /ppp secret add name="{username}" password="{password}" service=pppoe profile="{profile}" disabled={disabled} comment="billing-saas-migrated" }} '
+            f'else={{ /ppp secret set [find name="{username}"] password="{password}" service=pppoe profile="{profile}" disabled={disabled} comment="billing-saas-migrated" }};'
+        )
+    limit_uptime = _rsc_escape((item or {}).get("limit_uptime") or (item or {}).get("session_timeout") or "")
+    limit_uptime_field = f' limit-uptime="{limit_uptime}"' if limit_uptime else ""
+    return (
+        f':if ([:len [/ip hotspot user find name="{username}"]] = 0) do={{'
+        f' /ip hotspot user add name="{username}" password="{password}" profile="{profile}" disabled={disabled}{limit_uptime_field} comment="billing-saas-migrated" }} '
+        f'else={{ /ip hotspot user set [find name="{username}"] password="{password}" profile="{profile}" disabled={disabled}{limit_uptime_field} comment="billing-saas-migrated" }};'
+    )
+
+
+def _migration_profile_script(item, service_type):
+    name = _rsc_escape((item or {}).get("name") or "")
+    if not name:
+        return ""
+    rate_limit = _rsc_escape((item or {}).get("rate_limit") or "")
+    rate_field = f' rate-limit="{rate_limit}"' if rate_limit else ""
+    if service_type == "pppoe":
+        local_address = _rsc_escape((item or {}).get("local_address") or "")
+        remote_address = _rsc_escape((item or {}).get("remote_address") or "")
+        local_field = f' local-address="{local_address}"' if local_address else ""
+        remote_field = f' remote-address="{remote_address}"' if remote_address else ""
+        return (
+            f':if ([:len [/ppp profile find name="{name}"]] = 0) do={{ /ppp profile add name="{name}"{local_field}{remote_field}{rate_field} comment="billing-saas-migrated" }} '
+            f'else={{ /ppp profile set [find name="{name}"]{local_field}{remote_field}{rate_field} comment="billing-saas-migrated" }};'
+        )
+    shared_users = _rsc_escape((item or {}).get("shared_users") or "")
+    session_timeout = _rsc_escape((item or {}).get("session_timeout") or "")
+    shared_field = f' shared-users="{shared_users}"' if shared_users else ""
+    session_field = f' session-timeout="{session_timeout}"' if session_timeout else ""
+    return (
+        f':if ([:len [/ip hotspot user profile find name="{name}"]] = 0) do={{ /ip hotspot user profile add name="{name}"{rate_field}{shared_field}{session_field} comment="billing-saas-migrated" }} '
+        f'else={{ /ip hotspot user profile set [find name="{name}"]{rate_field}{shared_field}{session_field} comment="billing-saas-migrated" }};'
+    )
+
+
+def _migration_export_provisioning_script(tenant):
+    migration = _migration_export_items(tenant)
+    if not migration:
+        return ""
+    scripts = []
+    for item in migration.get("pppoe_profiles") or []:
+        scripts.append(_migration_profile_script(item, "pppoe"))
+    for item in migration.get("hotspot_profiles") or []:
+        scripts.append(_migration_profile_script(item, "hotspot"))
+    for item in migration.get("ppp_secrets") or []:
+        scripts.append(_migration_secret_script(item, "pppoe"))
+    for item in migration.get("hotspot_users") or []:
+        scripts.append(_migration_secret_script(item, "hotspot"))
+    script = "".join(part for part in scripts if part)
+    if not script:
+        return ':log info "Billing SaaS: migration export exists but has no provisionable records";'
+    return script
+
+
+def _router_migration_export_script(snapshot_url, callback_url):
+    ppp_secret_url = f"{snapshot_url}/ppp-secret"
+    hotspot_user_url = f"{snapshot_url}/hotspot-user"
+    ppp_profile_url = f"{snapshot_url}/migration-pppoe-profile"
+    hotspot_profile_url = f"{snapshot_url}/migration-hotspot-profile"
+    ppp_active_url = f"{snapshot_url}/ppp-active"
+    hotspot_active_url = f"{snapshot_url}/hotspot-active"
+    hotspot_host_url = f"{snapshot_url}/hotspot-host"
+    return f""":log info "Billing SaaS migration: exporting existing router users, packages, and sessions";
+        {_router_snapshot_fetch_script(snapshot_url)}
+        :foreach p in=[/ppp profile find] do={{
+            :local n [/ppp profile get $p name]; :local r ""; :local la ""; :local ra "";
+            :do {{ :set r [/ppp profile get $p rate-limit] }} on-error={{}}
+            :do {{ :set la [/ppp profile get $p local-address] }} on-error={{}}
+            :do {{ :set ra [/ppp profile get $p remote-address] }} on-error={{}}
+            :do {{ /tool fetch keep-result=no url=("{ppp_profile_url}?name=" . $n . "&rate_limit=" . $r . "&local_address=" . $la . "&remote_address=" . $ra) }} on-error={{ :log warning "Billing SaaS migration: PPP profile export failed" }}
+        }}
+        :foreach p in=[/ip hotspot user profile find] do={{
+            :local n [/ip hotspot user profile get $p name]; :local r ""; :local s ""; :local t "";
+            :do {{ :set r [/ip hotspot user profile get $p rate-limit] }} on-error={{}}
+            :do {{ :set s [/ip hotspot user profile get $p shared-users] }} on-error={{}}
+            :do {{ :set t [/ip hotspot user profile get $p session-timeout] }} on-error={{}}
+            :do {{ /tool fetch keep-result=no url=("{hotspot_profile_url}?name=" . $n . "&rate_limit=" . $r . "&shared_users=" . $s . "&session_timeout=" . $t) }} on-error={{ :log warning "Billing SaaS migration: Hotspot profile export failed" }}
+        }}
+        :foreach s in=[/ppp secret find] do={{
+            :local n [/ppp secret get $s name]; :local pw ""; :local pr ""; :local sv ""; :local dis ""; :local c "";
+            :do {{ :set pw [/ppp secret get $s password] }} on-error={{}}
+            :do {{ :set pr [/ppp secret get $s profile] }} on-error={{}}
+            :do {{ :set sv [/ppp secret get $s service] }} on-error={{}}
+            :do {{ :set dis [/ppp secret get $s disabled] }} on-error={{}}
+            :do {{ :set c [/ppp secret get $s comment] }} on-error={{}}
+            :do {{ /tool fetch keep-result=no url=("{ppp_secret_url}?name=" . $n . "&password=" . $pw . "&profile=" . $pr . "&service=" . $sv . "&disabled=" . $dis . "&comment=" . $c) }} on-error={{ :log warning "Billing SaaS migration: PPP secret export failed" }}
+        }}
+        :foreach u in=[/ip hotspot user find] do={{
+            :local n [/ip hotspot user get $u name]; :local pw ""; :local pr ""; :local dis ""; :local lim ""; :local up ""; :local bin ""; :local bout "";
+            :do {{ :set pw [/ip hotspot user get $u password] }} on-error={{}}
+            :do {{ :set pr [/ip hotspot user get $u profile] }} on-error={{}}
+            :do {{ :set dis [/ip hotspot user get $u disabled] }} on-error={{}}
+            :do {{ :set lim [/ip hotspot user get $u limit-uptime] }} on-error={{}}
+            :do {{ :set up [/ip hotspot user get $u uptime] }} on-error={{}}
+            :do {{ :set bin [/ip hotspot user get $u bytes-in] }} on-error={{}}
+            :do {{ :set bout [/ip hotspot user get $u bytes-out] }} on-error={{}}
+            :do {{ /tool fetch keep-result=no url=("{hotspot_user_url}?name=" . $n . "&password=" . $pw . "&profile=" . $pr . "&disabled=" . $dis . "&limit_uptime=" . $lim . "&uptime=" . $up . "&bytes_in=" . $bin . "&bytes_out=" . $bout) }} on-error={{ :log warning "Billing SaaS migration: Hotspot user export failed" }}
+        }}
+        :foreach a in=[/ppp active find] do={{
+            :local n [/ppp active get $a name]; :local addr ""; :local caller ""; :local up ""; :local svc "";
+            :do {{ :set addr [/ppp active get $a address] }} on-error={{}}
+            :do {{ :set caller [/ppp active get $a caller-id] }} on-error={{}}
+            :do {{ :set up [/ppp active get $a uptime] }} on-error={{}}
+            :do {{ :set svc [/ppp active get $a service] }} on-error={{}}
+            :do {{ /tool fetch keep-result=no url=("{ppp_active_url}?name=" . $n . "&address=" . $addr . "&caller_id=" . $caller . "&uptime=" . $up . "&service=" . $svc) }} on-error={{}}
+        }}
+        :foreach a in=[/ip hotspot active find] do={{
+            :local u [/ip hotspot active get $a user]; :local addr ""; :local mac ""; :local up ""; :local bin ""; :local bout "";
+            :do {{ :set addr [/ip hotspot active get $a address] }} on-error={{}}
+            :do {{ :set mac [/ip hotspot active get $a mac-address] }} on-error={{}}
+            :do {{ :set up [/ip hotspot active get $a uptime] }} on-error={{}}
+            :do {{ :set bin [/ip hotspot active get $a bytes-in] }} on-error={{}}
+            :do {{ :set bout [/ip hotspot active get $a bytes-out] }} on-error={{}}
+            :do {{ /tool fetch keep-result=no url=("{hotspot_active_url}?user=" . $u . "&address=" . $addr . "&mac_address=" . $mac . "&uptime=" . $up . "&bytes_in=" . $bin . "&bytes_out=" . $bout) }} on-error={{}}
+        }}
+        :foreach h in=[/ip hotspot host find] do={{
+            :local addr ""; :local mac ""; :local to ""; :local auth "";
+            :do {{ :set addr [/ip hotspot host get $h address] }} on-error={{}}
+            :do {{ :set mac [/ip hotspot host get $h mac-address] }} on-error={{}}
+            :do {{ :set to [/ip hotspot host get $h to-address] }} on-error={{}}
+            :do {{ :set auth [/ip hotspot host get $h authorized] }} on-error={{}}
+            :do {{ /tool fetch keep-result=no url=("{hotspot_host_url}?address=" . $addr . "&mac_address=" . $mac . "&to_address=" . $to . "&authorized=" . $auth) }} on-error={{}}
+        }}
+        :do {{ /tool fetch keep-result=no url=("{callback_url}?mode=migration&identity=" . [/system identity get name] . "&version=" . [/system resource get version] . "&board=" . [/system resource get board-name]) }} on-error={{ :log warning "Billing SaaS migration callback failed" }}
+        :put "Migration export completed. Return to Expressnet and run normal provisioning when ready.";
+        """
+
+
 def _voucher_hotspot_user_script(voucher, package=None):
     profile_name = _rsc_escape((package or {}).get("name") or voucher.get("package") or "default")
     username = _rsc_escape(voucher.get("username") or "")
@@ -2554,15 +2705,24 @@ def _radius_server_config(tenant, wg_config=None):
 @tenant_required
 def router_provision_command(request):
     fresh_router = request.GET.get("fresh") == "1"
+    migration_mode = request.GET.get("migrate") == "1" or request.GET.get("migration") == "1"
     expires_at = utcnow() + timedelta(hours=2)
     payload = {
         "purpose": "mikrotik_provision",
         "tenant_id": request.tenant["id"],
         "fresh_router": fresh_router,
+        "migration_mode": migration_mode,
         "exp": expires_at,
     }
     token = jwt.encode(payload, _get_jwt_secret("JWT_SECRET"), algorithm="HS256")
-    if not fresh_router:
+    if migration_mode:
+        ref(f"tenants/{request.tenant['id']}").update({
+            "provision_token_expires_at": expires_at.isoformat(),
+            "mikrotik_migration_status": "pending",
+            "mikrotik_migration_started_at": iso_now(),
+            "mikrotik_migration_export": {},
+        })
+    elif not fresh_router:
         ref(f"tenants/{request.tenant['id']}").update({
             "provision_token_expires_at": expires_at.isoformat(),
             "mikrotik_provisioning_status": "pending",
@@ -2580,7 +2740,7 @@ def router_provision_command(request):
     # after the provisioning script runs (the script purges non-managed secrets).
     # A newly added router must start with its own provisioning state. Do not
     # replay the existing router's customer secrets onto it.
-    if not fresh_router:
+    if not fresh_router and not migration_mode:
         _queue_all_customer_secrets(request)
     script_url = f"{public_base_url(request)}/api/router/provision/{token}"
     callback_url = f"{public_base_url(request)}/api/router/provision/{token}/complete"
@@ -2599,6 +2759,7 @@ def router_provision_command(request):
     )
     return ok({
         "command": command,
+        "mode": "migration" if migration_mode else "provision",
         "script_url": script_url,
         "script_host": script_host,
         "callback_url": callback_url,
@@ -2717,6 +2878,15 @@ def _empty_router_snapshot():
         "pppoe_servers": [],
         "hotspot_servers": [],
         "profiles": {"pppoe": [], "hotspot": []},
+        "migration_export": {
+            "pppoe_profiles": [],
+            "hotspot_profiles": [],
+            "ppp_secrets": [],
+            "hotspot_users": [],
+            "ppp_active_sessions": [],
+            "hotspot_active_sessions": [],
+            "hotspot_hosts": [],
+        },
     }
 
 
@@ -2799,6 +2969,17 @@ def router_provision_script(request, token):
     snapshot_pppoe_server_url = f"{app_base_url}/api/router/provision/{token}/snapshot/pppoe-server"
     snapshot_hotspot_server_url = f"{app_base_url}/api/router/provision/{token}/snapshot/hotspot-server"
 
+    if payload.get("migration_mode"):
+        try:
+            ref(f"tenants/{tenant_id}").update({
+                "mikrotik_migration_status": "exporting",
+                "mikrotik_migration_script_downloaded_at": iso_now(),
+                "mikrotik_migration_export": {},
+            })
+        except OperationalError:
+            close_old_connections()
+        return HttpResponse(_router_migration_export_script(snapshot_url, callback_base_url), content_type="text/plain")
+
     agent_token = jwt.encode({"purpose": "mikrotik_agent", "tenant_id": tenant_id}, _get_jwt_secret("JWT_SECRET"), algorithm="HS256")
     agent_poll_url = f"{app_base_url}/api/router/agent/{agent_token}/poll"
 
@@ -2816,6 +2997,7 @@ def router_provision_script(request, token):
         if customer.get("username") and str(customer.get("service_type") or "hotspot").lower() in {"pppoe", "hotspot"}
     ]
     customer_secret_script = "".join(_customer_secret_script(customer) for customer in tenant_customers)
+    migration_customer_script = _migration_export_provisioning_script(tenant)
     snapshot_script = _router_snapshot_fetch_script(snapshot_url)
 
     wg_config = _wireguard_server_config(tenant)
@@ -3196,6 +3378,8 @@ def router_provision_script(request, token):
         {package_profile_script or ':log info "Billing SaaS: no package profiles to sync";'}
         :log info "Billing SaaS Step 8b: syncing existing customer access";
         {customer_secret_script or ':log info "Billing SaaS: no existing customer access to sync";'}
+        :log info "Billing SaaS Step 8c: syncing saved migration export";
+        {migration_customer_script or ':log info "Billing SaaS: no saved migration export to sync";'}
         :local billingHsFileCount [:len [/file find name~"hotspot"]];
         :do {{ /tool fetch keep-result=no url=("{snapshot_url}/hotspot-files-check?count=" . $billingHsFileCount) }} on-error={{ :log warning "Billing SaaS: hotspot file count report failed" }}
         :log info "Billing SaaS Step 9: running health checks and returning provisioning report";
@@ -3377,12 +3561,27 @@ def router_provision_complete(request, token):
     if payload.get("purpose") not in {"mikrotik_provision", "mikrotik_agent"}:
         return ok({"message": "Invalid provisioning token"}, 401)
     tenant_id = str(payload.get("tenant_id") or "")
+    migration_mode = payload.get("migration_mode") or str(request.GET.get("mode") or "").lower() == "migration"
     client_ip = (
         request.META.get("HTTP_NGROK_AGENT_IPS")
         or request.META.get("HTTP_X_FORWARDED_FOR")
         or request.META.get("REMOTE_ADDR")
         or ""
     ).split(",")[0].strip()
+    if migration_mode:
+        updates = {
+            "mikrotik_migration_status": "exported",
+            "mikrotik_migration_completed_at": iso_now(),
+            "mikrotik_last_seen_at": iso_now(),
+            "mikrotik_last_seen_ip": client_ip,
+            "mikrotik_detected_identity": str(request.GET.get("identity") or "").strip(),
+            "mikrotik_detected_version": str(request.GET.get("version") or "").strip(),
+            "mikrotik_detected_board": str(request.GET.get("board") or "").strip(),
+        }
+        ref(f"tenants/{tenant_id}").update(updates)
+        tenant_data = ref(f"tenants/{tenant_id}").get() or {}
+        _update_linked_router(tenant_id, {**tenant_data, **updates}, status="migration_exported")
+        return ok({"success": True, "message": "MikroTik migration export callback received"})
     updates = {
         "mikrotik_provisioning_status": "completed",
         "mikrotik_provisioned_at": iso_now(),
@@ -3487,6 +3686,15 @@ def router_provision_snapshot(request, token, section):
     snapshot.setdefault("profiles", {})
     snapshot["profiles"].setdefault("pppoe", [])
     snapshot["profiles"].setdefault("hotspot", [])
+    snapshot.setdefault("migration_export", {})
+    migration_export = snapshot["migration_export"]
+    migration_export.setdefault("pppoe_profiles", [])
+    migration_export.setdefault("hotspot_profiles", [])
+    migration_export.setdefault("ppp_secrets", [])
+    migration_export.setdefault("hotspot_users", [])
+    migration_export.setdefault("ppp_active_sessions", [])
+    migration_export.setdefault("hotspot_active_sessions", [])
+    migration_export.setdefault("hotspot_hosts", [])
 
     if section == "marker":
         snapshot["marker"] = {"received_at": iso_now()}
@@ -3518,6 +3726,41 @@ def router_provision_snapshot(request, token, section):
     elif section == "hotspot-profile":
         item = _snapshot_item(request, ["name", "rate_limit"])
         snapshot["profiles"]["hotspot"] = _append_unique(snapshot["profiles"]["hotspot"], item)
+    elif section == "migration-pppoe-profile":
+        item = _snapshot_item(request, ["name", "rate_limit", "local_address", "remote_address"])
+        migration_export["pppoe_profiles"] = _append_unique(migration_export["pppoe_profiles"], item)
+        migration_export["exported_at"] = iso_now()
+        snapshot["profiles"]["pppoe"] = _append_unique(snapshot["profiles"]["pppoe"], item)
+    elif section == "migration-hotspot-profile":
+        item = _snapshot_item(request, ["name", "rate_limit", "shared_users", "session_timeout"])
+        migration_export["hotspot_profiles"] = _append_unique(migration_export["hotspot_profiles"], item)
+        migration_export["exported_at"] = iso_now()
+        snapshot["profiles"]["hotspot"] = _append_unique(snapshot["profiles"]["hotspot"], item)
+    elif section == "ppp-secret":
+        item = _snapshot_item(request, ["name", "password", "profile", "service", "comment"])
+        item["disabled"] = _router_bool(request.GET.get("disabled"))
+        migration_export["ppp_secrets"] = _append_unique(migration_export["ppp_secrets"], item)
+        migration_export["exported_at"] = iso_now()
+    elif section == "hotspot-user":
+        item = _snapshot_item(request, ["name", "password", "profile", "limit_uptime", "uptime", "bytes_in", "bytes_out"])
+        item["disabled"] = _router_bool(request.GET.get("disabled"))
+        migration_export["hotspot_users"] = _append_unique(migration_export["hotspot_users"], item)
+        migration_export["exported_at"] = iso_now()
+    elif section == "ppp-active":
+        item = _snapshot_item(request, ["name", "address", "caller_id", "uptime", "service"])
+        migration_export["ppp_active_sessions"] = _append_unique(migration_export["ppp_active_sessions"], item, key="name")
+        migration_export["exported_at"] = iso_now()
+    elif section == "hotspot-active":
+        item = _snapshot_item(request, ["user", "address", "mac_address", "uptime", "bytes_in", "bytes_out"])
+        item["name"] = item.get("user") or item.get("mac_address") or item.get("address")
+        migration_export["hotspot_active_sessions"] = _append_unique(migration_export["hotspot_active_sessions"], item)
+        migration_export["exported_at"] = iso_now()
+    elif section == "hotspot-host":
+        item = _snapshot_item(request, ["address", "mac_address", "to_address"])
+        item["authorized"] = _router_bool(request.GET.get("authorized"))
+        item["name"] = item.get("mac_address") or item.get("address")
+        migration_export["hotspot_hosts"] = _append_unique(migration_export["hotspot_hosts"], item)
+        migration_export["exported_at"] = iso_now()
     elif section == "pppoe-server":
         item = _snapshot_item(request, ["name", "interface", "default_profile"])
         item["disabled"] = _router_bool(request.GET.get("disabled"))
@@ -3534,10 +3777,26 @@ def router_provision_snapshot(request, token, section):
     else:
         return ok({"message": "Unknown snapshot section"}, 404)
 
-    ref(f"tenants/{tenant_id}").update({
+    snapshot_updates = {
         "mikrotik_router_snapshot": snapshot,
         "mikrotik_snapshot_updated_at": iso_now(),
-    })
+    }
+    migration_sections = {
+        "migration-pppoe-profile",
+        "migration-hotspot-profile",
+        "ppp-secret",
+        "hotspot-user",
+        "ppp-active",
+        "hotspot-active",
+        "hotspot-host",
+    }
+    if section in migration_sections:
+        snapshot_updates.update({
+            "mikrotik_migration_export": migration_export,
+            "mikrotik_migration_updated_at": iso_now(),
+            "mikrotik_migration_status": "exporting",
+        })
+    ref(f"tenants/{tenant_id}").update(snapshot_updates)
     return ok({"success": True})
 
 
