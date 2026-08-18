@@ -324,7 +324,12 @@ def normalized_package_payload(data, default_service_type="hotspot", include_ser
         duration_unit = "months"
     else:
         duration_unit = "days"
-    duration_value = float((data or {}).get("duration_value") or (data or {}).get("duration_hours") or (data or {}).get("duration_days") or 1)
+    if duration_unit == "months":
+        duration_value = float((data or {}).get("duration_value") or (data or {}).get("duration_months") or 1)
+    elif duration_unit == "hours":
+        duration_value = float((data or {}).get("duration_value") or (data or {}).get("duration_hours") or 1)
+    else:
+        duration_value = float((data or {}).get("duration_value") or (data or {}).get("duration_days") or 1)
     if service_type == "pppoe" and duration_value < 1:
         duration_value = 1
     if duration_unit == "hours":
@@ -341,6 +346,7 @@ def normalized_package_payload(data, default_service_type="hotspot", include_ser
         "duration_value": duration_value,
         "duration_days": duration_days,
         "duration_hours": duration_hours,
+        "duration_months": duration_value if duration_unit == "months" else "",
     }
     if include_service_type:
         payload["service_type"] = service_type

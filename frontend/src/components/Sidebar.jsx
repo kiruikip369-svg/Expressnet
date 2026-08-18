@@ -11,6 +11,8 @@ import {
   FileText,
   Gauge,
   LayoutDashboard,
+  Mail,
+  MessageSquare,
   Network,
   Package,
   RadioTower,
@@ -76,6 +78,14 @@ const sections = [
     ],
   },
   {
+    title: 'Communication',
+    icon: MessageSquare,
+    links: [
+      { to: '/messages', label: 'Messages', icon: MessageSquare },
+      { to: '/emails', label: 'Emails', icon: Mail },
+    ],
+  },
+  {
     title: 'Network',
     icon: Network,
     links: [
@@ -112,7 +122,7 @@ export default function Sidebar({ open, onClose }) {
 
   const navClass = ({ isActive }) =>
     [
-      'flex h-9 items-center gap-3 rounded-md px-3 text-[13px] font-medium transition',
+      'flex h-8 items-center gap-2.5 rounded-md px-2.5 text-[12px] font-normal transition',
       isActive
         ? 'bg-[var(--sidebar-active)] text-white shadow-[inset_3px_0_0_rgba(255,255,255,0.28)]'
         : 'text-white/88 hover:bg-white/10 hover:text-white',
@@ -133,14 +143,23 @@ export default function Sidebar({ open, onClose }) {
         }`}
         style={{ background: 'linear-gradient(180deg, var(--sidebar-top) 0%, var(--sidebar-middle) 46%, var(--sidebar-bottom) 100%)' }}
       >
-        <div className="mb-4 flex h-12 items-start justify-between px-1">
-          <div>
-            <p className="text-[11px] font-bold uppercase tracking-wide text-white/78">Expressnet Billing</p>
-            <h1 className="mt-1 text-lg font-bold leading-tight text-white">Tenant Portal</h1>
+        <div className="mb-3 rounded-md border p-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]" style={{ background: 'color-mix(in srgb, var(--sidebar-bottom) 28%, transparent)', borderColor: 'color-mix(in srgb, var(--sidebar-border) 32%, transparent)' }}>
+          <div className="flex items-center gap-2.5">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-base font-semibold text-white shadow-sm" style={{ background: 'var(--sidebar-avatar)' }}>
+              {tenantInitial(tenant)}
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-[13px] font-semibold text-white">{tenant?.business_name || tenant?.name || 'Expressnet'}</p>
+              <p className="truncate text-[11px] font-normal text-white/70">Tenant Portal</p>
+            </div>
+            <ChevronDown size={14} className="text-white/75" />
           </div>
+        </div>
+
+        <div className="mb-2 flex justify-end px-1">
           <button
             type="button"
-            className="rounded-md p-2 text-white/85 hover:bg-white/10"
+            className="rounded-md p-1.5 text-white/85 hover:bg-white/10"
             onClick={onClose}
             aria-label="Close navigation"
           >
@@ -149,7 +168,7 @@ export default function Sidebar({ open, onClose }) {
           </button>
         </div>
 
-        <nav className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
+        <nav className="min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-1">
           {sections.map((section, index) => {
             if (section.staffOnly && isTenantAdmin(tenant)) return null;
             const links = visibleLinks(section.links);
@@ -160,10 +179,10 @@ export default function Sidebar({ open, onClose }) {
 
             if (!section.title) {
               return (
-                <div key={`single-${index}`} className={index ? 'border-t border-white/10 pt-3' : ''}>
+                <div key={`single-${index}`} className={index ? 'border-t border-white/10 pt-2' : ''}>
                   {links.map(({ to, label, icon: Icon, trailing: Trailing }) => (
                     <NavLink key={`${label}-${to}`} to={to} className={navClass} onClick={onClose}>
-                      <Icon size={17} strokeWidth={2.1} />
+                      <Icon size={16} strokeWidth={2} />
                       <span className="min-w-0 flex-1 truncate">{label}</span>
                       {Trailing && <Trailing size={15} />}
                     </NavLink>
@@ -173,30 +192,30 @@ export default function Sidebar({ open, onClose }) {
             }
 
             return (
-              <div key={section.title} className="border-t border-white/10 pt-3 first:border-t-0 first:pt-0">
+              <div key={section.title} className="border-t border-white/10 pt-2 first:border-t-0 first:pt-0">
                 <button
                   type="button"
-                  className={`flex h-8 w-full items-center gap-3 rounded-md px-3 text-left text-[13px] font-medium transition hover:bg-white/10 ${groupActive ? 'text-white' : 'text-white/88'}`}
+                  className={`flex h-7 w-full items-center gap-2.5 rounded-md px-2.5 text-left text-[12px] font-normal transition hover:bg-white/10 ${groupActive ? 'text-white' : 'text-white/84'}`}
                   onClick={() => toggleSection(section.title)}
                   aria-expanded={expanded}
                 >
-                  {SectionIcon && <SectionIcon size={16} strokeWidth={2.1} />}
+                  {SectionIcon && <SectionIcon size={15} strokeWidth={2} />}
                   <span className="min-w-0 flex-1 truncate">{section.title}</span>
-                  {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+                  {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                 </button>
                 {expanded && (
-                  <div className="mt-1 space-y-0.5">
+                  <div className="mt-0.5 space-y-0.5">
                     {links.map(({ to, label, icon: Icon }) => (
                       <NavLink
                         key={`${section.title}-${label}-${to}`}
                         to={to}
                         className={({ isActive }) => [
-                          'ml-7 flex h-7 items-center gap-2 rounded-md px-2 text-[13px] font-normal transition',
+                          'ml-6 flex h-7 items-center gap-2 rounded-md px-2 text-[12px] font-normal transition',
                           isActive ? 'bg-[var(--sidebar-active)] text-white' : 'text-white/84 hover:bg-white/10 hover:text-white',
                         ].join(' ')}
                         onClick={onClose}
                       >
-                        <Icon size={13} strokeWidth={2.2} />
+                        <Icon size={12} strokeWidth={2} />
                         <span className="min-w-0 flex-1 truncate">{label}</span>
                       </NavLink>
                     ))}
@@ -207,18 +226,6 @@ export default function Sidebar({ open, onClose }) {
           })}
         </nav>
 
-        <div className="mt-4 rounded-md border p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]" style={{ background: 'color-mix(in srgb, var(--sidebar-bottom) 28%, transparent)', borderColor: 'color-mix(in srgb, var(--sidebar-border) 32%, transparent)' }}>
-          <div className="flex items-center gap-3">
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-lg font-bold text-white shadow-sm" style={{ background: 'var(--sidebar-avatar)' }}>
-              {tenantInitial(tenant)}
-            </span>
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-[13px] font-bold text-white">{tenant?.business_name || tenant?.name || 'Expressnet'}</p>
-              <p className="truncate text-[11px] text-white/70">Tenant ID: {tenant?.id || 'TEN-001'}</p>
-            </div>
-            <ChevronDown size={15} className="text-white/75" />
-          </div>
-        </div>
       </aside>
     </>
   );

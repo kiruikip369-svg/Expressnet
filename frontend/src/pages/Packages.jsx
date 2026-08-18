@@ -14,6 +14,14 @@ const initialForm = {
   is_active: true,
 };
 
+const MONTH_DURATION_OPTIONS = [
+  ['1', '1 Month'],
+  ['2', '2 Months'],
+  ['3', '3 Months'],
+  ['6', '6 Months'],
+  ['12', '1 Year'],
+];
+
 function packageDuration(pkg) {
   if (pkg.duration_label) return pkg.duration_label;
   const unit = pkg.duration_unit || 'days';
@@ -136,8 +144,9 @@ export default function Packages() {
         speed: form.speed,
         duration_value: Number(form.duration_value),
         duration_unit: form.duration_unit,
-        duration_days: form.duration_unit === 'hours' ? 1 : form.duration_unit === 'months' ? Number(form.duration_value) * 31 : Number(form.duration_value),
-        duration_hours: form.duration_unit === 'hours' ? Number(form.duration_value) : form.duration_unit === 'months' ? Number(form.duration_value) * 31 * 24 : Number(form.duration_value) * 24,
+        duration_days: form.duration_unit === 'hours' ? 1 : form.duration_unit === 'months' ? undefined : Number(form.duration_value),
+        duration_hours: form.duration_unit === 'hours' ? Number(form.duration_value) : form.duration_unit === 'months' ? undefined : Number(form.duration_value) * 24,
+        duration_months: form.duration_unit === 'months' ? Number(form.duration_value) : undefined,
         price: Number(form.price),
         is_active: form.is_active,
       };
@@ -402,13 +411,25 @@ export default function Packages() {
               <div>
                 <label className="form-label" htmlFor="duration_value">Duration</label>
                 <div className="grid grid-cols-[1fr_auto] gap-2">
-                  <input id="duration_value" name="duration_value" type="number" min="1" step="1" className="form-input" value={form.duration_value} onChange={update} />
+                  {form.duration_unit === 'months' ? (
+                    <select id="duration_value" name="duration_value" className="form-input" value={form.duration_value} onChange={update}>
+                      <option value="">Select months</option>
+                      {MONTH_DURATION_OPTIONS.map(([value, label]) => (
+                        <option key={value} value={value}>{label}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input id="duration_value" name="duration_value" type="number" min="1" step="1" className="form-input" value={form.duration_value} onChange={update} />
+                  )}
                   <select name="duration_unit" className="form-input" value={form.duration_unit} onChange={update}>
                     {form.service_type !== 'pppoe' && <option value="hours">Hours</option>}
                     <option value="days">Days</option>
                     <option value="months">Months</option>
                   </select>
                 </div>
+                {form.duration_unit === 'months' && (
+                  <p className="mt-1 text-xs text-slate-500">Calendar months are used, so expiry follows the real month length.</p>
+                )}
                 {errors.duration_value && <p className="form-error">{errors.duration_value}</p>}
               </div>
               <div>
