@@ -156,17 +156,6 @@ export default function Sidebar({ open, onClose }) {
           </div>
         </div>
 
-        <div className="mb-2 flex justify-end px-1">
-          <button
-            type="button"
-            className="rounded-md p-1.5 text-white/85 hover:bg-white/10"
-            onClick={onClose}
-            aria-label="Close navigation"
-          >
-            <X size={20} className="lg:hidden" />
-            <ChevronLeft size={19} className="hidden lg:block" />
-          </button>
-        </div>
 
         <nav className="min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-1">
           {sections.map((section, index) => {

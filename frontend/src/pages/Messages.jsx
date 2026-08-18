@@ -1,6 +1,5 @@
 import {
   AlertTriangle,
-  Info,
   MessageSquare,
   Save,
   Send,
@@ -26,14 +25,6 @@ const defaults = {
   sms_balance: 0,
   sms_sent_count: 0,
 };
-
-const PLACEHOLDERS = [
-  { tag: '{{name}}', label: "Customer's name" },
-  { tag: '{{username}}', label: 'Hotspot/PPPoE username' },
-  { tag: '{{password}}', label: 'Hotspot/PPPoE password' },
-  { tag: '{{package}}', label: 'Package name' },
-  { tag: '{{amount}}', label: 'Amount paid' },
-];
 
 function Toggle({ checked, disabled, onChange }) {
   return (
@@ -61,6 +52,30 @@ function charCount(text) {
   return { chars: len, parts: Math.max(1, Math.ceil(len / 160)) };
 }
 
+function ensureAccessDetails(template, serviceLabel) {
+  const text = String(template || '').trim();
+  const fallback = `Your ${serviceLabel} package is active.`;
+  const base = text || fallback;
+  const hasUsername = base.includes('{{username}}');
+  const hasPassword = base.includes('{{password}}');
+  if (hasUsername && hasPassword) return base;
+  const suffix = [
+    !hasUsername ? 'Username: {{username}}' : '',
+    !hasPassword ? 'Password: {{password}}' : '',
+  ].filter(Boolean).join(', ');
+  return `${base}${base.endsWith('.') ? '' : '.'} ${suffix}.`;
+}
+
+function stripAccessDetails(template) {
+  return String(template || '')
+    .replace(/\s*Username:\s*\{\{username\}\}\s*,?\s*/gi, ' ')
+    .replace(/\s*Password:\s*\{\{password\}\}\s*\.?/gi, ' ')
+    .replace(/\s*\{\{username\}\}\s*,?\s*/gi, ' ')
+    .replace(/\s*\{\{password\}\}\s*\.?/gi, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
 export default function Messages() {
   const [form, setForm] = useState(defaults);
   const [loading, setLoading] = useState(true);
@@ -80,8 +95,8 @@ export default function Messages() {
           roamtech_sender_id: data.roamtech_sender_id || '',
           sms_template_maintenance: data.sms_template_maintenance || '',
           sms_template_promotion: data.sms_template_promotion || '',
-          sms_template_hotspot: data.sms_template_hotspot || '',
-          sms_template_pppoe: data.sms_template_pppoe || '',
+          sms_template_hotspot: stripAccessDetails(data.sms_template_hotspot || ''),
+          sms_template_pppoe: stripAccessDetails(data.sms_template_pppoe || ''),
           sms_balance: data.sms_balance || 0,
           sms_sent_count: data.sms_sent_count || 0,
         });
@@ -108,7 +123,12 @@ export default function Messages() {
     event.preventDefault();
     setSaving(true);
     try {
-      const { data } = await api.patch('/settings/notifications', form);
+      const payload = {
+        ...form,
+        sms_template_hotspot: ensureAccessDetails(form.sms_template_hotspot, 'hotspot'),
+        sms_template_pppoe: ensureAccessDetails(form.sms_template_pppoe, 'PPPoE'),
+      };
+      const { data } = await api.patch('/settings/notifications', payload);
       toast.success(data.message || 'Roamtech message settings saved');
     } catch (error) {
       toast.error(error.response?.data?.message || 'Failed to save message settings');
@@ -211,17 +231,6 @@ export default function Messages() {
             </span>
           </label>
           <div className="flex flex-wrap items-center gap-4">
-            <div className="min-w-[180px]">
-              <label className="form-label" htmlFor="roamtech_sender_id">Roamtech sender ID</label>
-              <input
-                id="roamtech_sender_id"
-                name="roamtech_sender_id"
-                className="form-input"
-                value={form.roamtech_sender_id}
-                onChange={update}
-                placeholder="Your approved sender ID"
-              />
-            </div>
             <p className="whitespace-nowrap text-sm font-semibold text-slate-700">
               Balance: {form.sms_balance} &nbsp;|&nbsp; Sent: {form.sms_sent_count}
             </p>
@@ -301,61 +310,33 @@ export default function Messages() {
 
         {/* Message Templates */}
         {tab === 'templates' && (
-          <div className="grid grid-cols-1 gap-5 p-4 lg:grid-cols-[1fr_260px]">
-            <div>
-              <p className="mb-3 text-xs text-slate-500">Edit the SMS sent for each event. Changes save with the button below.</p>
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                {templateCards.map((row) => {
-                  const Icon = row.icon;
-                  const { chars, parts } = charCount(form[row.templateField]);
-                  return (
-                    <div key={row.id} className="rounded-lg border border-slate-200 p-4">
-                      <div className="mb-2.5 flex items-center gap-2">
-                        <span className={`flex h-6 w-6 items-center justify-center rounded-full ${row.iconBg}`}>
-                          <Icon className={`h-3 w-3 ${row.iconColor}`} strokeWidth={2.25} />
-                        </span>
-                        <span className="text-sm font-medium text-slate-800">{row.templateLabel}</span>
-                      </div>
-                      <textarea
-                        name={row.templateField}
-                        value={form[row.templateField]}
-                        onChange={update}
-                        className="min-h-24 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-xs leading-relaxed text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-app-accent focus:ring-2 focus:ring-blue-100"
-                        placeholder={`Write the ${row.templateLabel.toLowerCase()}...`}
-                      />
-                      <p className="mt-2 text-[11px] text-slate-400">
-                        Characters: {chars} &nbsp;|&nbsp; Parts: {parts}
-                      </p>
+          <div className="p-4">
+            <p className="mb-3 text-xs text-slate-500">Write the message text only. Customer username and password are added automatically for Hotspot and PPPoE templates.</p>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              {templateCards.map((row) => {
+                const Icon = row.icon;
+                const { chars, parts } = charCount(form[row.templateField]);
+                return (
+                  <div key={row.id} className="rounded-lg border border-slate-200 p-4">
+                    <div className="mb-2.5 flex items-center gap-2">
+                      <span className={`flex h-6 w-6 items-center justify-center rounded-full ${row.iconBg}`}>
+                        <Icon className={`h-3 w-3 ${row.iconColor}`} strokeWidth={2.25} />
+                      </span>
+                      <span className="text-sm font-medium text-slate-800">{row.templateLabel}</span>
                     </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Sidebar */}
-            <div className="space-y-4">
-              <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-4">
-                <div className="mb-1.5 flex items-center gap-1.5 text-sm font-semibold text-slate-800">
-                  <Info className="h-3.5 w-3.5 text-slate-400" />
-                  About SMS Notifications
-                </div>
-                <p className="text-xs leading-relaxed text-slate-500">
-                  Keep your customers informed about package purchases, network maintenance, and offers.
-                </p>
-              </div>
-
-              <div className="rounded-lg border border-slate-200 p-4">
-                <p className="mb-2.5 text-sm font-semibold text-slate-800">Available Placeholders</p>
-                <p className="mb-3 text-xs text-slate-500">Use these placeholders in your templates:</p>
-                <ul className="space-y-1.5">
-                  {PLACEHOLDERS.map((p) => (
-                    <li key={p.tag} className="flex items-baseline justify-between gap-2 text-xs">
-                      <code className="font-mono text-rose-500">{p.tag}</code>
-                      <span className="text-right text-slate-500">{p.label}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
+                    <textarea
+                      name={row.templateField}
+                      value={form[row.templateField]}
+                      onChange={update}
+                      className="min-h-24 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-xs leading-relaxed text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-app-accent focus:ring-2 focus:ring-blue-100"
+                      placeholder={`Write the ${row.templateLabel.toLowerCase()}...`}
+                    />
+                    <p className="mt-2 text-[11px] text-slate-400">
+                      Characters: {chars} &nbsp;|&nbsp; Parts: {parts}
+                    </p>
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}
