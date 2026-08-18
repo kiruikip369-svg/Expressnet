@@ -37,6 +37,10 @@ function packageType(pkg) {
   return 'hotspot';
 }
 
+function amountPayable(pkg) {
+  return Number(pkg?.amount_payable ?? pkg?.price ?? 0);
+}
+
 export default function Packages() {
   const [packages, setPackages] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -148,6 +152,7 @@ export default function Packages() {
         duration_hours: form.duration_unit === 'hours' ? Number(form.duration_value) : form.duration_unit === 'months' ? undefined : Number(form.duration_value) * 24,
         duration_months: form.duration_unit === 'months' ? Number(form.duration_value) : undefined,
         price: Number(form.price),
+        amount_payable: Number(form.price),
         is_active: form.is_active,
       };
 
@@ -325,6 +330,7 @@ export default function Packages() {
                 <th className="px-4 py-3">Speed</th>
                 <th className="px-4 py-3">Duration</th>
                 <th className="px-4 py-3">Price</th>
+                <th className="px-4 py-3">Amount Payable</th>
                 <th className="px-4 py-3">Active</th>
                 <th className="px-4 py-3">Router</th>
                 <th className="px-4 py-3">Actions</th>
@@ -332,9 +338,9 @@ export default function Packages() {
             </thead>
             <tbody className="divide-y divide-slate-100">
               {loading ? (
-                <tr><td className="table-cell text-slate-500" colSpan="8">Loading packages...</td></tr>
+                <tr><td className="table-cell text-slate-500" colSpan="9">Loading packages...</td></tr>
               ) : filteredPackages.length === 0 ? (
-                <tr><td className="table-cell text-slate-500" colSpan="8">No packages found.</td></tr>
+                <tr><td className="table-cell text-slate-500" colSpan="9">No packages found.</td></tr>
               ) : filteredPackages.map((pkg, index) => (
                 <tr key={pkg.id} className={index % 2 === 0 ? 'bg-white' : 'bg-slate-50'}>
                   <td className="table-cell font-medium text-slate-950">{pkg.name}</td>
@@ -347,6 +353,7 @@ export default function Packages() {
                   <td className="table-cell">{pkg.speed}</td>
                   <td className="table-cell">{packageDuration(pkg)}</td>
                   <td className="table-cell font-medium text-slate-950">KES {pkg.price}</td>
+                  <td className="table-cell font-semibold text-slate-950">KES {amountPayable(pkg).toLocaleString('en-KE')}</td>
                   <td className="table-cell">
                     <button type="button" className={`rounded-full px-2 py-1 text-xs font-semibold ${pkg.is_active === false ? 'bg-slate-100 text-slate-500' : 'bg-emerald-100 text-emerald-700'}`} onClick={() => togglePackage(pkg)}>
                       {pkg.is_active === false ? 'Disabled' : 'Enabled'}
@@ -436,6 +443,10 @@ export default function Packages() {
                 <label className="form-label" htmlFor="price">Price</label>
                 <input id="price" name="price" type="number" className="form-input" value={form.price} onChange={update} />
                 {errors.price && <p className="form-error">{errors.price}</p>}
+              </div>
+              <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                <p className="text-xs font-semibold uppercase text-slate-500">Amount payable</p>
+                <p className="mt-1 text-base font-bold text-slate-950">KES {Number(form.price || 0).toLocaleString('en-KE')}</p>
               </div>
               <label className="flex items-center gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700 sm:col-span-2">
                 <input type="checkbox" name="is_active" checked={form.is_active} onChange={update} />

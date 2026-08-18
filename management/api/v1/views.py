@@ -534,6 +534,13 @@ def tenant_theme_payload(tenant):
         "bank_name": tenant.get("bank_name") or "",
         "bank_account_number": tenant.get("bank_account_number") or "",
         "payment_methods": tenant.get("payment_methods") if isinstance(tenant.get("payment_methods"), list) else ["daraja_paybill"],
+        "daraja_consumer_key": tenant.get("daraja_consumer_key") or "",
+        "daraja_consumer_secret": tenant.get("daraja_consumer_secret") or "",
+        "daraja_shortcode": tenant.get("daraja_shortcode") or "",
+        "daraja_passkey": tenant.get("daraja_passkey") or "",
+        "daraja_till_number": tenant.get("daraja_till_number") or "",
+        "daraja_shortcode_type": tenant.get("daraja_shortcode_type") or "CustomerPayBillOnline",
+        "daraja_environment": tenant.get("daraja_environment") or "production",
         "settlement_status": tenant.get("settlement_status") or ("ready" if tenant_payout_details(tenant).get("payout_phone") else "missing_payout_details"),
         "settlement_pending_amount": float(tenant.get("settlement_pending_amount") or 0),
     }
@@ -587,8 +594,10 @@ def public_tenant(request, tenant_id):
 
 
 def _public_package_payload(pkg):
+    amount_payable = float(pkg.get("amount_payable") or pkg.get("price") or 0)
     return {
         **{key: pkg.get(key) for key in ["id", "name", "speed", "duration_days", "duration_unit", "duration_value", "duration_hours", "price", "service_type"]},
+        "amount_payable": amount_payable,
         "service_type": package_service_type(pkg),
         "duration_label": package_duration_label(pkg),
     }
@@ -638,6 +647,7 @@ def _public_pay_impl(request, tenant_id):
         return ok({"message": f"This package is only available for {package_type.upper()} customers"}, 400)
     if service_type == "tv" and package_type != "hotspot":
         return ok({"message": "TV MAC access is only available for hotspot packages"}, 400)
+    amount_payable = float(pkg.get("amount_payable") or pkg.get("price") or 0)
     customer = None
     mac_address = ""
     if service_type == "pppoe":
@@ -663,7 +673,8 @@ def _public_pay_impl(request, tenant_id):
             "customer_name": customer.get("name") if customer else None,
             "package_id": data["package_id"],
             "package_name": pkg.get("name"),
-            "amount": float(pkg.get("price") or 0),
+            "amount": amount_payable,
+            "amount_payable": amount_payable,
             "payment_code": None,
             "phone": phone,
             "status": "pending",
@@ -688,7 +699,7 @@ def _public_pay_impl(request, tenant_id):
         checkout = initiate_daraja_payment(
             platform_daraja_config(tenant),
             payment_ref.key,
-            pkg.get("price"),
+            amount_payable,
             phone=phone,
             description=f"{pkg.get('name')} internet package",
             metadata={
@@ -1466,6 +1477,7 @@ def customer_renew(request, customer_id):
     package = ref(f"tenants/{request.tenant['id']}/packages/{package_id}").get() if package_id else find_child_by_field(f"tenants/{request.tenant['id']}/packages", "name", customer.get("package"))
     if not package or package.get("is_active") is False:
         return ok({"message": "Active package not found"}, 404)
+    amount_payable = float(package.get("amount_payable") or package.get("price") or 0)
     payment_ref = ref(f"tenants/{request.tenant['id']}/payments").push(
         {
             "customer_id": customer_id,
@@ -1473,7 +1485,8 @@ def customer_renew(request, customer_id):
             "package_id": package_id or package.get("id"),
             "package_name": package.get("name"),
             "service_type": customer.get("service_type") or "pppoe",
-            "amount": float(package.get("price") or 0),
+            "amount": amount_payable,
+            "amount_payable": amount_payable,
             "payment_code": f"MANUAL-{secrets.token_hex(4).upper()}",
             "phone": customer.get("phone"),
             "status": "success",
@@ -1871,6 +1884,13 @@ def settings_business(request):
         "bank_account_number",
         "payment_methods",
         "payment_provider",
+        "daraja_consumer_key",
+        "daraja_consumer_secret",
+        "daraja_shortcode",
+        "daraja_passkey",
+        "daraja_till_number",
+        "daraja_shortcode_type",
+        "daraja_environment",
     ]
     updates = {}
     for field in allowed:
@@ -1882,6 +1902,12 @@ def settings_business(request):
                 updates[field] = [str(item).strip().lower() for item in requested if str(item).strip().lower() in {"daraja_paybill", "daraja_buygoods"}] or ["daraja_paybill"]
             elif field == "payment_provider":
                 updates[field] = "mpesa"
+            elif field == "daraja_shortcode_type":
+                value = str(data[field] or "").strip()
+                updates[field] = value if value in {"CustomerPayBillOnline", "CustomerBuyGoodsOnline"} else "CustomerPayBillOnline"
+            elif field == "daraja_environment":
+                value = str(data[field] or "production").strip().lower()
+                updates[field] = "sandbox" if value == "sandbox" else "production"
             else:
                 updates[field] = str(data[field]).strip()
     if updates.get("theme_mode") not in {None, "light", "dark", "system"}:
@@ -2113,8 +2139,8 @@ def settings_notifications(request):
                 "sms_sent_count": int(request.tenant.get("sms_sent_count") or 0),
                 "whatsapp_enabled": bool(request.tenant.get("whatsapp_enabled")) or os.getenv("WHATSAPP_ENABLED", "false").lower() in {"1", "true", "yes", "on"},
                 "roamtech_sender_id": request.tenant.get("roamtech_sender_id") or "",
-                "payment_sms_template": request.tenant.get("payment_sms_template") or "Hi {{name}}, your {{package}} payment of Ksh {{amount}} is confirmed. Username: {{username}}, Password: {{password}}.",
-                "payment_whatsapp_template": request.tenant.get("payment_whatsapp_template") or "Hi {{name}}, your {{package}} internet package is active. Amount: Ksh {{amount}}. Username: {{username}}, Password: {{password}}.",
+                "payment_sms_template": request.tenant.get("payment_sms_template") or "Hi {{name}}, your {{package}} payment of Ksh {{amount_payable}} is confirmed. Username: {{username}}, Password: {{password}}.",
+                "payment_whatsapp_template": request.tenant.get("payment_whatsapp_template") or "Hi {{name}}, your {{package}} internet package is active. Amount payable: Ksh {{amount_payable}}. Username: {{username}}, Password: {{password}}.",
             }
         )
     data = body(request)
@@ -2150,14 +2176,15 @@ def render_notification_template(template, context):
 
 
 def notify_payment_access(tenant, payment, access):
-    service_type = str(payment.get("service_type") or "hotspot").lower()
-    template = (tenant or {}).get("sms_template_pppoe" if service_type == "pppoe" else "sms_template_hotspot") or "Your package is active. Username: {{username}}, Password: {{password}}."
+    amount_payable = payment.get("amount_payable") or payment.get("amount") or ""
+    template = (tenant or {}).get("payment_sms_template") or "Hi {{name}}, your {{package}} payment of Ksh {{amount_payable}} is confirmed. Username: {{username}}, Password: {{password}}."
     message = render_notification_template(
         template,
         {
             "name": payment.get("customer_name") or payment.get("phone") or "customer",
             "package": payment.get("package_name") or "",
             "amount": payment.get("amount") or "",
+            "amount_payable": amount_payable,
             "username": access.get("username") or access.get("mac_address") or "",
             "password": access.get("password") or "",
             "expires_at": access.get("expiry_date") or "",
@@ -2176,7 +2203,7 @@ def notify_payment_access(tenant, payment, access):
                     ref(f"tenants/{tenant_id}").update({"sms_balance": balance - 1, "sms_sent_count": int((tenant or {}).get("sms_sent_count") or 0) + 1})
     if (tenant or {}).get("whatsapp_enabled") or os.getenv("WHATSAPP_ENABLED", "false").lower() in {"1", "true", "yes", "on"}:
         whatsapp_template = (tenant or {}).get("payment_whatsapp_template") or message
-        results["whatsapp"] = send_whatsapp_message(payment.get("phone"), render_notification_template(whatsapp_template, {"name": payment.get("customer_name") or payment.get("phone") or "customer", "package": payment.get("package_name") or "", "amount": payment.get("amount") or "", "username": access.get("username") or "", "password": access.get("password") or ""}), tenant)
+        results["whatsapp"] = send_whatsapp_message(payment.get("phone"), render_notification_template(whatsapp_template, {"name": payment.get("customer_name") or payment.get("phone") or "customer", "package": payment.get("package_name") or "", "amount": payment.get("amount") or "", "amount_payable": amount_payable, "username": access.get("username") or access.get("mac_address") or "", "password": access.get("password") or ""}), tenant)
     return results
 
 

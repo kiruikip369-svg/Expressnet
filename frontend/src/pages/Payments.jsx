@@ -56,7 +56,20 @@ export default function Payments() {
   const [tab, setTab] = useState('checked');
   const [modalOpen, setModalOpen] = useState(false);
   const [draft, setDraft] = useState(blankPayment);
-  const [paymentSettings, setPaymentSettings] = useState({ methods: ['daraja_paybill'], businessNumber: '', payoutPhone: '', bankCode: '', bankName: '', bankAccount: '' });
+  const [paymentSettings, setPaymentSettings] = useState({
+    methods: ['daraja_paybill'],
+    businessNumber: '',
+    payoutPhone: '',
+    bankCode: '',
+    bankName: '',
+    bankAccount: '',
+    consumerKey: '',
+    consumerSecret: '',
+    shortcode: '',
+    passkey: '',
+    tillNumber: '',
+    environment: 'production',
+  });
   const [selectedMethod, setSelectedMethod] = useState('daraja_paybill');
   const [savingMethods, setSavingMethods] = useState(false);
   const [methodsOpen, setMethodsOpen] = useState(false);
@@ -78,7 +91,18 @@ export default function Payments() {
     loadPayments();
     api.get('/settings/business').then(({ data }) => {
       setPaymentSettings({
-      methods: data.payment_methods || ['daraja_paybill'], businessNumber: data.business_number || '', payoutPhone: data.payout_phone || '', bankCode: data.bank_code || '', bankName: data.bank_name || '', bankAccount: data.bank_account_number || '',
+      methods: data.payment_methods || ['daraja_paybill'],
+      businessNumber: data.business_number || '',
+      payoutPhone: data.payout_phone || '',
+      bankCode: data.bank_code || '',
+      bankName: data.bank_name || '',
+      bankAccount: data.bank_account_number || '',
+      consumerKey: data.daraja_consumer_key || '',
+      consumerSecret: data.daraja_consumer_secret || '',
+      shortcode: data.daraja_shortcode || '',
+      passkey: data.daraja_passkey || '',
+      tillNumber: data.daraja_till_number || '',
+      environment: data.daraja_environment || 'production',
       });
       const method = (data.payment_methods || [])[0];
       setSelectedMethod(['daraja_paybill', 'daraja_buygoods'].includes(method) ? method : 'daraja_paybill');
@@ -90,7 +114,22 @@ export default function Payments() {
   const savePaymentMethods = async () => {
     setSavingMethods(true);
     try {
-      const { data } = await api.patch('/settings/business', { payment_methods: paymentSettings.methods, business_number: paymentSettings.businessNumber, payout_phone: paymentSettings.payoutPhone, bank_code: paymentSettings.bankCode, bank_name: paymentSettings.bankName, bank_account_number: paymentSettings.bankAccount });
+      const { data } = await api.patch('/settings/business', {
+        payment_methods: paymentSettings.methods,
+        business_number: paymentSettings.businessNumber,
+        payout_phone: paymentSettings.payoutPhone,
+        bank_code: paymentSettings.bankCode,
+        bank_name: paymentSettings.bankName,
+        bank_account_number: paymentSettings.bankAccount,
+        daraja_consumer_key: paymentSettings.consumerKey,
+        daraja_consumer_secret: paymentSettings.consumerSecret,
+        daraja_shortcode: paymentSettings.shortcode,
+        daraja_passkey: paymentSettings.passkey,
+        daraja_till_number: paymentSettings.tillNumber,
+        daraja_environment: paymentSettings.environment,
+        daraja_shortcode_type: selectedMethod === 'daraja_buygoods' ? 'CustomerBuyGoodsOnline' : 'CustomerPayBillOnline',
+        payment_provider: 'mpesa',
+      });
       setSettlementStatus(data.config?.settlement_status || 'ready');
       toast.success('Payment settings saved');
       setMethodsOpen(false);
@@ -171,8 +210,8 @@ export default function Payments() {
         {selectedMethod === 'bank' && <div className="mt-4 grid gap-3 sm:grid-cols-3"><input className="form-input" placeholder="Bank code" value={paymentSettings.bankCode} onChange={(e) => setPaymentSettings((c) => ({ ...c, bankCode: e.target.value }))} /><input className="form-input" placeholder="Bank name" value={paymentSettings.bankName} onChange={(e) => setPaymentSettings((c) => ({ ...c, bankName: e.target.value }))} /><input className="form-input" placeholder="Bank account number" value={paymentSettings.bankAccount} onChange={(e) => setPaymentSettings((c) => ({ ...c, bankAccount: e.target.value }))} /></div>}
         {selectedMethod === 'paybill' && <div className="mt-4 grid gap-3 sm:grid-cols-2"><label className="form-label">Paybill number<input className="form-input" placeholder="Enter Paybill number" value={paymentSettings.businessNumber} onChange={(e) => setPaymentSettings((c) => ({ ...c, businessNumber: e.target.value }))} /></label><label className="form-label">Account number<input className="form-input" placeholder="Enter account number" value={paymentSettings.bankAccount} onChange={(e) => setPaymentSettings((c) => ({ ...c, bankAccount: e.target.value }))} /></label></div>}
         {selectedMethod === 'buygoods' && <div className="mt-4"><label className="form-label">Buy Goods till number<input className="form-input" placeholder="Enter Till number" value={paymentSettings.businessNumber} onChange={(e) => setPaymentSettings((c) => ({ ...c, businessNumber: e.target.value }))} /></label></div>}
-        {selectedMethod === 'daraja_paybill' && <div className="mt-4 grid gap-3 sm:grid-cols-2"><input className="form-input" placeholder="Consumer key" value={paymentSettings.consumerKey} onChange={(e) => setPaymentSettings((c) => ({ ...c, consumerKey: e.target.value }))} /><input className="form-input" type="password" placeholder="Consumer secret" value={paymentSettings.consumerSecret} onChange={(e) => setPaymentSettings((c) => ({ ...c, consumerSecret: e.target.value }))} /><input className="form-input" placeholder="M-Pesa shortcode" value={paymentSettings.shortcode} onChange={(e) => setPaymentSettings((c) => ({ ...c, shortcode: e.target.value }))} /><input className="form-input" value="CustomerPayBillOnline" readOnly /><input className="form-input" type="password" placeholder="M-Pesa passkey" value={paymentSettings.passkey} onChange={(e) => setPaymentSettings((c) => ({ ...c, passkey: e.target.value }))} /></div>}
-        {selectedMethod === 'daraja_buygoods' && <div className="mt-4 grid gap-3 sm:grid-cols-2"><input className="form-input" placeholder="Consumer key" value={paymentSettings.consumerKey} onChange={(e) => setPaymentSettings((c) => ({ ...c, consumerKey: e.target.value }))} /><input className="form-input" type="password" placeholder="Consumer secret" value={paymentSettings.consumerSecret} onChange={(e) => setPaymentSettings((c) => ({ ...c, consumerSecret: e.target.value }))} /><input className="form-input" type="password" placeholder="Passkey" value={paymentSettings.passkey} onChange={(e) => setPaymentSettings((c) => ({ ...c, passkey: e.target.value }))} /><input className="form-input" placeholder="M-Pesa shortcode" value={paymentSettings.shortcode} onChange={(e) => setPaymentSettings((c) => ({ ...c, shortcode: e.target.value }))} /><input className="form-input" value="CustomerBuyGoodsOnline" readOnly /><input className="form-input" placeholder="Buy Goods till number" value={paymentSettings.tillNumber} onChange={(e) => setPaymentSettings((c) => ({ ...c, tillNumber: e.target.value }))} /></div>}
+        {selectedMethod === 'daraja_paybill' && <div className="mt-4 grid gap-3 sm:grid-cols-2"><input className="form-input" placeholder="Consumer key" value={paymentSettings.consumerKey} onChange={(e) => setPaymentSettings((c) => ({ ...c, consumerKey: e.target.value }))} /><input className="form-input" type="password" placeholder="Consumer secret" value={paymentSettings.consumerSecret} onChange={(e) => setPaymentSettings((c) => ({ ...c, consumerSecret: e.target.value }))} /><input className="form-input" placeholder="M-Pesa shortcode" value={paymentSettings.shortcode} onChange={(e) => setPaymentSettings((c) => ({ ...c, shortcode: e.target.value }))} /><input className="form-input" value="CustomerPayBillOnline" readOnly /><input className="form-input" type="password" placeholder="M-Pesa passkey" value={paymentSettings.passkey} onChange={(e) => setPaymentSettings((c) => ({ ...c, passkey: e.target.value }))} /><select className="form-input" value={paymentSettings.environment} onChange={(e) => setPaymentSettings((c) => ({ ...c, environment: e.target.value }))}><option value="production">Production</option><option value="sandbox">Sandbox</option></select></div>}
+        {selectedMethod === 'daraja_buygoods' && <div className="mt-4 grid gap-3 sm:grid-cols-2"><input className="form-input" placeholder="Consumer key" value={paymentSettings.consumerKey} onChange={(e) => setPaymentSettings((c) => ({ ...c, consumerKey: e.target.value }))} /><input className="form-input" type="password" placeholder="Consumer secret" value={paymentSettings.consumerSecret} onChange={(e) => setPaymentSettings((c) => ({ ...c, consumerSecret: e.target.value }))} /><input className="form-input" type="password" placeholder="Passkey" value={paymentSettings.passkey} onChange={(e) => setPaymentSettings((c) => ({ ...c, passkey: e.target.value }))} /><input className="form-input" placeholder="M-Pesa shortcode" value={paymentSettings.shortcode} onChange={(e) => setPaymentSettings((c) => ({ ...c, shortcode: e.target.value }))} /><input className="form-input" value="CustomerBuyGoodsOnline" readOnly /><input className="form-input" placeholder="Buy Goods till number" value={paymentSettings.tillNumber} onChange={(e) => setPaymentSettings((c) => ({ ...c, tillNumber: e.target.value }))} /><select className="form-input" value={paymentSettings.environment} onChange={(e) => setPaymentSettings((c) => ({ ...c, environment: e.target.value }))}><option value="production">Production</option><option value="sandbox">Sandbox</option></select></div>}
         <div className="mt-5 flex justify-end"><button type="button" className="btn-primary" onClick={savePaymentMethods} disabled={savingMethods}>{savingMethods ? 'Saving...' : 'Save payment methods'}</button></div>
         <p className={`mt-3 text-xs font-semibold ${settlementStatus === 'active' ? 'text-emerald-600' : 'text-amber-600'}`}>Tenant settlement: {settlementStatus === 'active' ? 'Ready — payments will settle to the configured bank account.' : settlementStatus.replaceAll('_', ' ')}</p>
       </section></div>}

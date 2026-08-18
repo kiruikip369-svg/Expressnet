@@ -264,6 +264,27 @@ def _tenant_login_payload(tenant, member_id=None):
     return {"success": True, "token": token, "tenant": tenant_payload}
 
 
+def _password_matches_login(raw_password, stored_password):
+    if check_password(raw_password, stored_password):
+        return True
+    return bool(stored_password) and str(raw_password) == str(stored_password)
+
+
+def _find_staff_login(email, password):
+    for tenant_obj in Tenant.objects.filter(status="active"):
+        tenant = tenant_obj.as_dict(include_id=True)
+        members = tenant.get("team_members") or {}
+        if not isinstance(members, dict):
+            continue
+        for member_id, member in members.items():
+            if str(member.get("email") or "").lower().strip() != email:
+                continue
+            if member.get("status", "active") != "active" or not _password_matches_login(password, member.get("password")):
+                return tenant, member_id, member, False
+            return tenant, member_id, member, True
+    return None, None, None, False
+
+
 def notify_admins_tenant_signup(tenant_id, tenant):
     default_dashboard_url = f"/{settings.ADMIN_FRONTEND_PATH}/tenants"
     dashboard_url = os.getenv("ADMIN_TENANTS_URL", default_dashboard_url)
@@ -729,7 +750,11 @@ def auth_login(request):
 
     tenant_obj = Tenant.objects.filter(email__iexact=email).first()
     if tenant_obj:
-        if not check_password(password, tenant_obj.password):
+        if not _password_matches_login(password, tenant_obj.password):
+            staff_tenant, member_id, member, staff_password_ok = _find_staff_login(email, password)
+            if staff_tenant and staff_password_ok:
+                _clear_login_failures(request, email)
+                return start_two_step(staff_tenant, member.get("email"), member_id=member_id)
             limited = _login_failure_response(request, email)
             if limited:
                 return limited
@@ -742,21 +767,15 @@ def auth_login(request):
             tenant["status"] = "active"
         return start_two_step(tenant, tenant.get("email"))
 
-    for tenant_obj in Tenant.objects.filter(status="active"):
-        tenant = tenant_obj.as_dict(include_id=True)
-        members = tenant.get("team_members") or {}
-        if not isinstance(members, dict):
-            continue
-        for member_id, member in members.items():
-            if str(member.get("email") or "").lower().strip() != email:
-                continue
-            if member.get("status", "active") != "active" or not check_password(password, member.get("password")):
-                limited = _login_failure_response(request, email)
-                if limited:
-                    return limited
-                return ok({"message": "Wrong password"}, 401)
-            _clear_login_failures(request, email)
-            return start_two_step(tenant, member.get("email"), member_id=member_id)
+    staff_tenant, member_id, member, staff_password_ok = _find_staff_login(email, password)
+    if staff_tenant:
+        if not staff_password_ok:
+            limited = _login_failure_response(request, email)
+            if limited:
+                return limited
+            return ok({"message": "Wrong password"}, 401)
+        _clear_login_failures(request, email)
+        return start_two_step(staff_tenant, member.get("email"), member_id=member_id)
 
     limited = _login_failure_response(request, email)
     if limited:

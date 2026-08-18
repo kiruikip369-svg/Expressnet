@@ -560,8 +560,10 @@ def public_pppoe_profile(request, tenant_id):
 
 
 def _public_package_payload(pkg):
+    amount_payable = float(pkg.get("amount_payable") or pkg.get("price") or 0)
     return {
         **{key: pkg.get(key) for key in ["id", "name", "speed", "duration_days", "duration_unit", "duration_value", "duration_hours", "price", "service_type"]},
+        "amount_payable": amount_payable,
         "service_type": package_service_type(pkg),
         "duration_label": package_duration_label(pkg),
     }
@@ -924,7 +926,7 @@ def captive_portal_page(request, tenant_id):
             <div class="card pkg">
               <div>
                 <div class="pkg-title">{html.escape(str(pkg.get('name') or 'Package'))}</div>
-                <div class="pkg-meta"><span class="price">Ksh {html.escape(str(pkg.get('price') or 0))}</span> for {html.escape(str(pkg.get('duration_label') or ''))}</div>
+                <div class="pkg-meta"><span class="price">Ksh {html.escape(str(pkg.get('amount_payable') or pkg.get('price') or 0))}</span> for {html.escape(str(pkg.get('duration_label') or ''))}</div>
                 {f"<div class='muted'>{html.escape(str(pkg.get('speed') or ''))}</div>" if pkg.get('speed') else ""}
               </div>
               <a class="buy-btn" href="#pay-{html.escape(str(pkg.get('id')), quote=True)}">Buy</a>
@@ -1103,7 +1105,7 @@ def captive_portal_page(request, tenant_id):
                 <strong>{html.escape(str(pkg.get('name') or 'Package'))}</strong>
                 <div class="muted">{html.escape(str(pkg.get('speed') or ''))} · {html.escape(str(pkg.get('duration_label') or ''))}</div>
               </div>
-              <div class="price">KES {html.escape(str(pkg.get('price') or 0))}</div>
+              <div class="price">KES {html.escape(str(pkg.get('amount_payable') or pkg.get('price') or 0))}</div>
               {('<input name="username" required placeholder="PPPoE username">' if pkg.get('service_type') == 'pppoe' else '')}
               <input name="phone" inputmode="tel" required placeholder="M-Pesa/phone number">
               <button type="submit">Buy</button>
@@ -1277,6 +1279,7 @@ def _public_pay_impl(request, tenant_id):
         return ok({"message": f"This package is only available for {package_type.upper()} customers"}, 400)
     if service_type == "tv" and package_type != "hotspot":
         return ok({"message": "TV MAC access is only available for hotspot packages"}, 400)
+    amount_payable = float(pkg.get("amount_payable") or pkg.get("price") or 0)
     customer = None
     mac_address = ""
     if service_type == "pppoe":
@@ -1302,7 +1305,8 @@ def _public_pay_impl(request, tenant_id):
             "customer_name": customer.get("name") if customer else None,
             "package_id": data["package_id"],
             "package_name": pkg.get("name"),
-            "amount": float(pkg.get("price") or 0),
+            "amount": amount_payable,
+            "amount_payable": amount_payable,
             "payment_code": None,
             "phone": phone,
             "status": "pending",
@@ -1327,7 +1331,7 @@ def _public_pay_impl(request, tenant_id):
         checkout = initiate_daraja_payment(
             platform_daraja_config(tenant),
             payment_ref.key,
-            pkg.get("price"),
+            amount_payable,
             phone=phone,
             description=f"{pkg.get('name')} internet package",
             metadata={
@@ -1779,7 +1783,7 @@ def packages(request, package_id=None):
         existing = ref(f"tenants/{tenant_id}/packages/{package_id}").get()
         if not existing:
             return ok({"message": "Package not found"}, 404)
-        updates = {key: data[key] for key in ["name", "speed", "duration_days", "duration_unit", "duration_value", "duration_hours", "price", "is_active", "service_type"] if key in data}
+        updates = {key: data[key] for key in ["name", "speed", "duration_days", "duration_unit", "duration_value", "duration_hours", "price", "amount_payable", "is_active", "service_type"] if key in data}
         if not updates:
             return ok({"message": "No package fields provided"}, 400)
         if "service_type" in updates:
@@ -1789,6 +1793,10 @@ def packages(request, package_id=None):
             updates["service_type"] = requested_service_type
         if "price" in updates:
             updates["price"] = float(updates["price"])
+        if "amount_payable" in updates:
+            updates["amount_payable"] = float(updates["amount_payable"])
+        elif "price" in updates:
+            updates["amount_payable"] = updates["price"]
         if "is_active" in updates:
             updates["is_active"] = bool(updates["is_active"])
         if any(key in data for key in ["service_type", "duration_unit", "duration_value", "duration_days", "duration_hours"]):
@@ -1885,6 +1893,7 @@ def package_add(request):
             "speed": data["speed"],
             **package_payload,
             "price": float(data["price"]),
+            "amount_payable": float(data.get("amount_payable") or data["price"]),
             "is_active": data.get("is_active") is not False,
             "ppp_profile_status": "synced" if router_synced else "queued" if router_queued else "pending",
             "ppp_profile_synced_at": iso_now() if router_synced else "",
