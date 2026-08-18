@@ -38,7 +38,7 @@ function formatDate(value) {
   const date = toDate(value);
   return date && !Number.isNaN(date.valueOf()) ? date.toLocaleDateString() : '-';
 }
-
+//df
 function serviceTypeOf(customer) {
   return String(customer?.service_type || 'pppoe').toLowerCase();
 }
