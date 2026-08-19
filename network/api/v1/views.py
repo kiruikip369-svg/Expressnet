@@ -3388,7 +3388,14 @@ def router_provision_script(request, token):
     pppoe_script = f"""
         :log info "Billing SaaS Step 8: provisioning PPPoE service without mixing Hotspot profiles";
         :do {{ /ppp profile add name="{ppp_profile_name}" local-address={_rsc_escape(lan_gateway)} remote-address={hotspot_pool_name} dns-server=8.8.8.8 only-one=yes comment="Added by Expressnet" }} on-error={{ /ppp profile set [find name="{ppp_profile_name}"] local-address={_rsc_escape(lan_gateway)} remote-address={hotspot_pool_name} dns-server=8.8.8.8 only-one=yes comment="Added by Expressnet" }}
-        :do {{ /interface pppoe-server server add service-name="{pppoe_service_name}" authentication=pap,chap,mschap1,mschap2 interface=$billingBridge default-profile="{ppp_profile_name}" one-session-per-host=yes disabled=no }} on-error={{ /interface pppoe-server server set [find service-name="{pppoe_service_name}"] authentication=pap,chap,mschap1,mschap2 interface=$billingBridge default-profile="{ppp_profile_name}" one-session-per-host=yes disabled=no }}
+        :local billingPppoeServer [/interface pppoe-server server find service-name="{pppoe_service_name}"];
+        :if ([:len $billingPppoeServer] = 0) do={{ :set billingPppoeServer [/interface pppoe-server server find interface=$billingBridge] }}
+        :if ([:len $billingPppoeServer] > 0) do={{
+            /interface pppoe-server server set $billingPppoeServer service-name="{pppoe_service_name}" authentication=pap,chap,mschap1,mschap2 interface=$billingBridge default-profile="{ppp_profile_name}" one-session-per-host=yes disabled=no
+        }} else={{
+            /interface pppoe-server server add service-name="{pppoe_service_name}" authentication=pap,chap,mschap1,mschap2 interface=$billingBridge default-profile="{ppp_profile_name}" one-session-per-host=yes disabled=no
+        }}
+        :if ([:len [/interface pppoe-server server find service-name="{pppoe_service_name}" disabled=no]] = 0) do={{ :log error "Billing SaaS: PPPoE server was not created or is disabled"; :error "PPPoE server missing" }}
     """
 
     # --- Extracted from field export: /ip firewall address-list + /ip hotspot walled-garden ip
@@ -3486,6 +3493,7 @@ def router_provision_script(request, token):
         {radius_verify_script}
         :foreach hs in=[/ip hotspot find interface=$billingBridge] do={{ :do {{ /ip hotspot set $hs profile={hotspot_profile_name} disabled=no }} on-error={{ :log warning "Expressnet: hotspot server radius profile update failed" }} }}
         :log info "Billing SaaS: Hotspot server is active on the billing bridge.";
+        {pppoe_script}
         :log info "Billing SaaS Step 7b: locking down management plane";
         {mgmt_lockdown_script}
         :log info "Billing SaaS Step 8: syncing package profiles by service type";
