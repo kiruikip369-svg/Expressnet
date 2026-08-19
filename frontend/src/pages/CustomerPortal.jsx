@@ -56,6 +56,7 @@ export default function CustomerPortal() {
   const [tenant, setTenant] = useState(null);
   const [packages, setPackages] = useState([]);
   const [phone, setPhone] = useState('');
+  const [customerName, setCustomerName] = useState('');
   const [serviceType, setServiceType] = useState(pathServiceType() || 'hotspot');
   const [pppoeUsername, setPppoeUsername] = useState('');
   const [macAddress, setMacAddress] = useState('');
@@ -74,6 +75,7 @@ export default function CustomerPortal() {
   const [error, setError] = useState('');
   const [routerContext, setRouterContext] = useState({ ip: '', mac: '', linkLogin: '', dst: '' });
   const [paymentMethod, setPaymentMethod] = useState('');
+  const [pendingPaymentId, setPendingPaymentId] = useState('');
 
   useEffect(() => {
     const routeServiceType = pathServiceType();
@@ -154,10 +156,49 @@ export default function CustomerPortal() {
     void routerMac;
   }, [tenantId]);
 
+  useEffect(() => {
+    if (!pendingPaymentId) return undefined;
+    let stopped = false;
+    let attempts = 0;
+
+    async function verifyMpesaPayment() {
+      attempts += 1;
+      setVerifying(true);
+      try {
+        const { data } = await publicApi.get(`/public/${tenantId}/verify?payment_id=${encodeURIComponent(pendingPaymentId)}`);
+        if (stopped) return;
+        setVerification(data);
+        if (data.success) {
+          setPendingPaymentId('');
+          toast.success('Payment verified');
+          submitRouterLogin(routerContext.ip || data.router_ip, data.username, data.password, routerContext.linkLogin || data.link_login, routerContext.dst || data.dst);
+        } else if (attempts >= 18) {
+          setPendingPaymentId('');
+        }
+      } catch (err) {
+        if (stopped) return;
+        if (attempts >= 18) {
+          setPendingPaymentId('');
+          setVerification({ success: false, message: err.response?.data?.message || 'Payment verification is still pending. Please contact your ISP if this continues.' });
+        }
+      } finally {
+        if (!stopped) setVerifying(false);
+      }
+    }
+
+    verifyMpesaPayment();
+    const timer = window.setInterval(verifyMpesaPayment, 5000);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [pendingPaymentId, routerContext.dst, routerContext.ip, routerContext.linkLogin, tenantId]);
+
   const openPayment = (pkg, type = serviceType) => {
     setSelectedPackage(pkg);
     setServiceType(type);
     setPhone('');
+    setCustomerName('');
     setPppoeUsername('');
     setMacAddress('');
   };
@@ -166,6 +207,7 @@ export default function CustomerPortal() {
     if (!paying) {
       setSelectedPackage(null);
       setPhone('');
+      setCustomerName('');
       setPppoeUsername('');
       setMacAddress('');
     }
@@ -210,6 +252,7 @@ export default function CustomerPortal() {
       const { data } = await publicApi.post(`/public/${tenantId}/pay`, {
         package_id: selectedPackage.id,
         phone,
+        customer_name: customerName,
         service_type: serviceType,
         username: pppoeUsername,
         mac_address: macAddress,
@@ -222,7 +265,15 @@ export default function CustomerPortal() {
         payment_method: paymentMethod,
       });
       toast.success(data.message || 'Check your phone for the M-Pesa prompt');
-      closePayment();
+      if (data.paymentId) {
+        setVerification({ success: false, status: 'pending', message: 'Waiting for M-Pesa confirmation.' });
+        setPendingPaymentId(data.paymentId);
+      }
+      setSelectedPackage(null);
+      setPhone('');
+      setCustomerName('');
+      setPppoeUsername('');
+      setMacAddress('');
     } catch (err) {
       toast.error(err.response?.data?.message || 'Could not start payment');
     } finally {
@@ -485,6 +536,14 @@ export default function CustomerPortal() {
                   </div>
                 </div>
               )}
+              <label className="form-label" htmlFor="customerName">Full name</label>
+              <input
+                id="customerName"
+                className="form-input mb-4"
+                placeholder="Customer name"
+                value={customerName}
+                onChange={(event) => setCustomerName(event.target.value)}
+              />
               <label className="form-label" htmlFor="phone">Phone number</label>
               <div className="relative mt-1">
                 <Phone className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />

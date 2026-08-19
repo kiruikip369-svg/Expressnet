@@ -635,6 +635,7 @@ def _public_pay_impl(request, tenant_id):
         return ok({"message": "Package not found"}, 404)
     tenant = {"id": tenant_id, **tenant_data}
     phone = normalize_phone(data["phone"])
+    customer_name = str(data.get("customer_name") or data.get("name") or "").strip()
     router_ip = str(data.get("ip") or data.get("router_ip") or "").strip()
     router_mac = str(data.get("mac") or data.get("router_mac") or "").strip()
     link_login = str(data.get("link_login") or data.get("link-login") or "").strip()
@@ -670,7 +671,7 @@ def _public_pay_impl(request, tenant_id):
     payment_ref = ref(f"tenants/{tenant_id}/payments").push(
         {
             "customer_id": customer.get("id") if customer else None,
-            "customer_name": customer.get("name") if customer else None,
+            "customer_name": customer.get("name") if customer else customer_name,
             "package_id": data["package_id"],
             "package_name": pkg.get("name"),
             "amount": amount_payable,
@@ -705,6 +706,7 @@ def _public_pay_impl(request, tenant_id):
             metadata={
                 "package_id": data["package_id"],
                 "package_name": pkg.get("name"),
+                "customer_name": customer.get("name") if customer else customer_name,
                 "service_type": service_type,
                 "username": (customer or {}).get("username") or (username if service_type == "pppoe" else None),
                 "mac_address": mac_address,
@@ -762,12 +764,18 @@ def public_pay(request, tenant_id):
 @api_view(["GET"])
 def public_verify(request, tenant_id):
     reference = request.GET.get("reference") or request.GET.get("trxref")
-    if not reference:
+    requested_payment_id = request.GET.get("payment_id") or request.GET.get("paymentId")
+    if requested_payment_id:
+        payment_id = str(requested_payment_id)
+        payment = ref(f"tenants/{tenant_id}/payments/{payment_id}").get()
+        found_tenant_id = str(tenant_id) if payment else None
+    elif reference:
+        found_tenant_id, payment_id, payment = find_payment_by_paystack_reference(reference, tenant_id=tenant_id)
+    else:
         return ok({"message": "Payment reference is required"}, 400)
-    found_tenant_id, payment_id, payment = find_payment_by_paystack_reference(reference, tenant_id=tenant_id)
     if found_tenant_id != str(tenant_id) or not payment:
         return ok({"message": "Payment not found"}, 404)
-    if payment.get("status") != "success":
+    if payment.get("status") != "success" and reference:
         tenant = {"id": tenant_id, **(ref(f"tenants/{tenant_id}").get() or {})}
         try:
             verified = verify_paystack_transaction(tenant, reference)
@@ -779,6 +787,8 @@ def public_verify(request, tenant_id):
                 return ok({"success": False, "status": "failed", "message": verified.get("gateway_response") or "Payment was not successful"}, 400)
         except Exception:
             return ok({"success": False, "status": payment.get("status") or "pending", "message": "Payment verification is still pending. Please contact your ISP if this continues."}, 202)
+    elif payment.get("status") != "success":
+        return ok({"success": False, "status": payment.get("status") or "pending", "message": "Waiting for M-Pesa confirmation."}, 202)
     return ok(
         {
             "success": payment.get("status") == "success",
@@ -2270,6 +2280,41 @@ def to_access_username(phone):
     return "".join(ch for ch in str(phone or "") if ch.isdigit())
 
 
+def _payment_customer_name(payment, phone, username):
+    name = str(
+        payment.get("customer_name")
+        or payment.get("name")
+        or payment.get("full_name")
+        or payment.get("payer_name")
+        or ""
+    ).strip()
+    return name or str(phone or username or "Customer").strip()
+
+
+def _upsert_sql_customer(tenant_id, data):
+    try:
+        tenant_obj = Tenant.objects.get(pk=tenant_id)
+    except Tenant.DoesNotExist:
+        logger.warning("Paid access SQL customer sync skipped; tenant model not found tenant=%s", tenant_id)
+        return None
+
+    username = str(data.get("username") or "").strip()
+    phone = str(data.get("phone") or "").strip()
+    customer = None
+    if username:
+        customer = Customer.objects.filter(tenant=tenant_obj, username=username).first()
+    if not customer and phone:
+        customer = Customer.objects.filter(tenant=tenant_obj, phone=phone).first()
+    if not customer:
+        customer = Customer(tenant=tenant_obj)
+
+    customer.apply_data(data)
+    if not customer.radius_secret:
+        customer.radius_secret = customer.password or ""
+    customer.save()
+    return customer
+
+
 def render_notification_template(template, context):
     rendered = str(template or "")
     for key, value in context.items():
@@ -2329,37 +2374,46 @@ def activate_paid_access(tenant, payment_id, payment, phone, payment_code):
     mac_address = normalize_mac(payment.get("mac_address") or (customer or {}).get("mac_address"))
     username = mac_address if service_type == "tv" else (payment.get("username") or (customer or {}).get("username") or to_access_username(phone))
     password = str((customer or {}).get("password") or payment_code) if service_type == "pppoe" else str(payment_code)
+    customer_name = _payment_customer_name({**(customer or {}), **payment}, phone, username)
     if customer:
-        updates = {"username": username, "password": password, "package": package_for_access, "service_type": service_type, "status": "active", "expiry_date": expiry.isoformat(), "last_payment_id": payment_id, "last_payment_code": payment_code, "auto_reconnect": True, "updated_at": iso_now()}
+        updates = {"name": customer_name, "phone": phone, "username": username, "password": password, "package": package_for_access, "service_type": service_type, "status": "active", "expiry_date": expiry.isoformat(), "last_payment_id": payment_id, "last_payment_code": payment_code, "auto_reconnect": True, "updated_at": iso_now()}
         if mac_address:
             updates["mac_address"] = mac_address
         ref(f"tenants/{tenant_id}/customers/{customer['id']}").update(updates)
         customer_id = customer["id"]
     else:
-        new_ref = ref(f"tenants/{tenant_id}/customers").push({"name": mac_address or phone, "phone": phone, "username": username, "password": password, "package": package_for_access, "service_type": service_type, "status": "active", "expiry_date": expiry.isoformat(), "last_payment_id": payment_id, "last_payment_code": payment_code, "auto_reconnect": True, "mac_address": mac_address, "created_at": iso_now()})
+        new_ref = ref(f"tenants/{tenant_id}/customers").push({"name": customer_name, "phone": phone, "username": username, "password": password, "package": package_for_access, "service_type": service_type, "status": "active", "expiry_date": expiry.isoformat(), "last_payment_id": payment_id, "last_payment_code": payment_code, "auto_reconnect": True, "mac_address": mac_address, "created_at": iso_now()})
         customer_id = new_ref.key
     if service_type == "tv" and not mac_address:
         raise ValueError("TV MAC address is required for activation")
+    sql_customer = None
+    try:
+        sql_customer = _upsert_sql_customer(
+            tenant_id,
+            {
+                "name": customer_name,
+                "phone": phone,
+                "username": username,
+                "password": password,
+                "radius_secret": password,
+                "package": package_for_access,
+                "service_type": service_type,
+                "status": "active",
+                "expiry_date": expiry.isoformat(),
+                "auto_reconnect": True,
+                "last_payment_id": payment_id,
+                "last_payment_code": payment_code,
+                "mac_address": mac_address,
+            },
+        )
+    except Exception as exc:
+        logger.warning("Paid access SQL customer sync failed tenant=%s payment=%s username=%s error=%s", tenant_id, payment_id, username, exc, exc_info=True)
     if tenant.get("radius_enabled") and service_type in {"hotspot", "pppoe"}:
         try:
             from billing_api.radius_provisioning import sync_radius_customer, upsert_pg_customer
 
             tenant_obj = Tenant.objects.get(pk=tenant_id)
-            pg_customer = upsert_pg_customer(
-                tenant_obj,
-                {
-                    "name": (customer or {}).get("name") or phone or username,
-                    "phone": phone,
-                    "username": username,
-                    "password": password,
-                    "package": package_for_access,
-                    "service_type": service_type,
-                    "status": "active",
-                    "expiry_date": expiry.isoformat(),
-                    "last_payment_id": payment_id,
-                    "last_payment_code": payment_code,
-                },
-            )
+            pg_customer = sql_customer or upsert_pg_customer(tenant_obj, {"name": customer_name, "phone": phone, "username": username, "password": password, "package": package_for_access, "service_type": service_type, "status": "active", "expiry_date": expiry.isoformat(), "last_payment_id": payment_id, "last_payment_code": payment_code})
             sync_radius_customer(tenant_obj, pg_customer or {"username": username, "password": password})
             logger.info(
                 "Paid access prepared for RADIUS tenant=%s payment=%s username=%s service=%s package=%s expires_at=%s",
@@ -2372,7 +2426,7 @@ def activate_paid_access(tenant, payment_id, payment, phone, payment_code):
             )
         except Exception as exc:
             logger.warning("Paid access RADIUS sync failed tenant=%s payment=%s username=%s error=%s", tenant_id, payment_id, username, exc, exc_info=True)
-            raise
+            ref(f"tenants/{tenant_id}/payments/{payment_id}").update({"radius_status": "failed", "radius_error": str(exc)})
     router_access_status = "active"
     router_access_error = None
     access_payload = {

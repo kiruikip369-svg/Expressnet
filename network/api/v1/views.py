@@ -882,9 +882,13 @@ def captive_portal_page(request, tenant_id):
         return _html_page("Portal unavailable", "<main><div class='alert'>This provider is not accepting payments.</div></main>", 403)
 
     reference = request.GET.get("reference") or request.GET.get("trxref")
+    payment_id = request.GET.get("payment_id") or request.GET.get("paymentId")
     payment_notice = ""
-    if reference:
-        _, _, payment = find_payment_by_paystack_reference(reference, tenant_id=tenant_id)
+    if reference or payment_id:
+        if payment_id:
+            payment = ref(f"tenants/{tenant_id}/payments/{payment_id}").get()
+        else:
+            _, _, payment = find_payment_by_paystack_reference(reference, tenant_id=tenant_id)
         if payment and payment.get("status") == "success":
             router_ip = _router_ip_from_captive_data(request.GET, tenant, payment)
             link_login = payment.get("link_login") or request.GET.get("link_login") or request.GET.get("link-login") or ""
@@ -912,7 +916,9 @@ def captive_portal_page(request, tenant_id):
               {auto_redirect}
             """
         else:
-            payment_notice = "<div class='alert'>Payment is not confirmed yet. If you have paid, wait a moment and refresh this page.</div>"
+            retry_query = dict(request.GET.items())
+            retry_url = f"/api/captive/{html.escape(str(tenant_id))}?{urlencode(retry_query)}" if retry_query else f"/api/captive/{html.escape(str(tenant_id))}"
+            payment_notice = f"<div class='alert'>Payment is not confirmed yet. If you have paid, this page will keep checking.</div><script>setTimeout(function(){{window.location.href='{retry_url}';}}, 5000);</script>"
 
     packages = sorted(_captive_packages(tenant_id), key=lambda item: float(item.get("price") or 0))
     hidden = "".join(
@@ -950,6 +956,7 @@ def captive_portal_page(request, tenant_id):
                 <input type="hidden" name="payment_method" value="{html.escape(selected_payment_method)}">
                 {hidden}
                 {('<input name="username" required placeholder="PPPoE username">' if pkg.get('service_type') == 'pppoe' else '')}
+                <input name="customer_name" placeholder="Full name" autocomplete="name">
                 <input name="phone" inputmode="tel" required placeholder="M-Pesa/phone number" autocomplete="tel">
                 <div class="modal-actions">
                   <a class="secondary close-link" href="#">Cancel</a>
@@ -1044,6 +1051,7 @@ def captive_portal_page(request, tenant_id):
             <input type="hidden" name="service_type" id="pay-service-type" value="hotspot">
             <input type="hidden" name="payment_method" value="{html.escape(selected_payment_method)}">
             <span id="pay-hidden-fields"></span>
+            <input name="customer_name" placeholder="Full name" autocomplete="name">
             <input name="phone" inputmode="tel" required placeholder="M-Pesa/phone number" autocomplete="tel">
             <div class="modal-actions">
               <button class="secondary" type="button" id="pay-cancel">Cancel</button>
@@ -1244,9 +1252,18 @@ def captive_portal_pay(request, tenant_id):
     if authorization_url:
         return redirect(authorization_url)
     if payload.get("provider") == "mpesa":
+        query = {
+            "payment_id": payload.get("paymentId"),
+            "ip": data.get("ip") or data.get("router_ip") or "",
+            "mac": data.get("mac") or data.get("router_mac") or "",
+            "router_ip": data.get("router_ip") or data.get("ip") or "",
+            "link_login": data.get("link_login") or data.get("link-login") or "",
+            "dst": data.get("dst") or data.get("link-orig") or "",
+        }
+        refresh_url = f"/api/captive/{html.escape(str(tenant_id))}?{urlencode({key: value for key, value in query.items() if value})}"
         return _html_page(
             "Confirm payment",
-            f"<main><div class='card'><strong>{html.escape(str(payload.get('message') or 'Check your phone and enter your M-Pesa PIN to complete payment.'))}</strong><p class='muted'>After payment is confirmed, your access will be activated automatically. If nothing happens after a minute, reconnect to WiFi and open the portal again.</p></div></main>",
+            f"<main><div class='card'><strong>{html.escape(str(payload.get('message') or 'Check your phone and enter your M-Pesa PIN to complete payment.'))}</strong><p class='muted'>After payment is confirmed, this page will connect your device automatically.</p><p><a href='{refresh_url}'>I have paid</a></p></div><script>setTimeout(function(){{window.location.href='{refresh_url}';}}, 8000);</script></main>",
             201,
         )
     return _html_page("Payment unavailable", "<main><div class='alert'>Payment checkout was not returned. Please try again.</div></main>", 502)
@@ -1268,6 +1285,7 @@ def _public_pay_impl(request, tenant_id):
         return ok({"message": "Package not found"}, 404)
     tenant = {"id": tenant_id, **tenant_data}
     phone = normalize_phone(data["phone"])
+    customer_name = str(data.get("customer_name") or data.get("name") or "").strip()
     router_ip = _router_ip_from_captive_data(data, tenant)
     router_mac = str(data.get("mac") or data.get("router_mac") or "").strip()
     link_login = str(data.get("link_login") or data.get("link-login") or "").strip()
@@ -1303,7 +1321,7 @@ def _public_pay_impl(request, tenant_id):
     payment_ref = ref(f"tenants/{tenant_id}/payments").push(
         {
             "customer_id": customer.get("id") if customer else None,
-            "customer_name": customer.get("name") if customer else None,
+            "customer_name": customer.get("name") if customer else customer_name,
             "package_id": data["package_id"],
             "package_name": pkg.get("name"),
             "amount": amount_payable,
@@ -1338,6 +1356,7 @@ def _public_pay_impl(request, tenant_id):
             metadata={
                 "package_id": data["package_id"],
                 "package_name": pkg.get("name"),
+                "customer_name": customer.get("name") if customer else customer_name,
                 "service_type": service_type,
                 "username": (customer or {}).get("username") or (username if service_type == "pppoe" else None),
                 "mac_address": mac_address,
