@@ -3035,6 +3035,7 @@ def router_provision_script(request, token):
 
     wg_config = _wireguard_server_config(tenant, app_base_url)
     radius_config = _radius_server_config(tenant, wg_config, app_base_url)
+    vpn_interface_enabled = bool(wg_config["endpoint"] and wg_config["tunnel_ip"])
     vpn_peer_enabled = bool(wg_config["ready"])
     radius_enabled_for_router = bool(radius_config["ready"])
     wg_server_public_key = wg_config["public_key"]
@@ -3084,11 +3085,27 @@ def router_provision_script(request, token):
         :do {{ /ip firewall filter add chain=input action=accept src-address={_rsc_escape(wg_server_tunnel_ip)} comment="Expressnet WireGuard hub" }} on-error={{}}
         :do {{ /ip firewall filter add chain=output action=accept dst-address={_rsc_escape(wg_server_tunnel_ip)} comment="Expressnet WireGuard hub" }} on-error={{}}
         """
-    if not vpn_peer_enabled:
+    if vpn_interface_enabled and not vpn_peer_enabled:
         missing = ", ".join(wg_config["missing"] or ["server VPN settings"])
         logger.warning("MikroTik provisioning tenant=%s WireGuard unavailable because %s is missing; radius_ready=%s", tenant_id, missing, radius_enabled_for_router)
+        vpn_script = f"""
+        :log warning "Billing SaaS: WireGuard peer config missing ({_rsc_escape(missing)}); creating router tunnel interface and using agent/direct RADIUS until the platform peer is ready";
+        :do {{ /interface wireguard add name={wireguard_name} listen-port=19923 mtu=1360 }} on-error={{ /interface wireguard set [find name={wireguard_name}] listen-port=19923 mtu=1360 }}
+        {vpn_private_key_set}
+        :do {{ /ip address remove [find interface={wireguard_name}] }} on-error={{}}
+        :do {{ /ip address add address={_rsc_escape(wg_router_tunnel_ip)} interface={wireguard_name} }} on-error={{ :log warning "Expressnet: WireGuard address setup failed"; :error "WireGuard address setup failed" }}
+        :do {{ /ip firewall filter remove [find comment="Expressnet WireGuard hub"] }} on-error={{}}
+        :do {{ /ip firewall filter add chain=input action=accept src-address={_rsc_escape(wg_server_tunnel_ip)} comment="Expressnet WireGuard hub" }} on-error={{}}
+        :do {{ /ip firewall filter add chain=output action=accept dst-address={_rsc_escape(wg_server_tunnel_ip)} comment="Expressnet WireGuard hub" }} on-error={{}}
+        :do {{ /ip firewall filter remove [find comment="billing-saas allow api over vpn"] }} on-error={{}}
+        :do {{ /ip firewall filter remove [find comment="billing-saas allow api over vpn only"] }} on-error={{}}
+        :do {{ /ip firewall filter remove [find comment="billing-saas allow radius"] }} on-error={{}}
+        """
+    elif not vpn_interface_enabled:
+        missing = ", ".join(wg_config["missing"] or ["server VPN settings"])
+        logger.warning("MikroTik provisioning tenant=%s WireGuard interface unavailable because %s is missing; radius_ready=%s", tenant_id, missing, radius_enabled_for_router)
         vpn_script = (
-            f':log warning "Billing SaaS: WireGuard server config missing ({_rsc_escape(missing)}); keeping any existing WireGuard interface and using agent/direct RADIUS mode";\n'
+            f':log warning "Billing SaaS: WireGuard tunnel defaults missing ({_rsc_escape(missing)}); using agent/direct RADIUS mode";\n'
             ':do { /ip firewall filter remove [find comment="billing-saas allow api over vpn"] } on-error={}\n'
             ':do { /ip firewall filter remove [find comment="billing-saas allow api over vpn only"] } on-error={}\n'
             ':do { /ip firewall filter remove [find comment="billing-saas allow radius"] } on-error={}\n'
@@ -3105,7 +3122,7 @@ def router_provision_script(request, token):
         if vpn_peer_enabled
         else (
             ':do { /system scheduler remove [find name="Expressnet-wg-watchdog"] } on-error={}\n'
-            ':log info "Billing SaaS: WireGuard watchdog skipped, agent mode active";'
+            ':log info "Billing SaaS: WireGuard watchdog skipped until peer is active";'
         )
     )
 
@@ -3163,9 +3180,7 @@ def router_provision_script(request, token):
 
     provisioning_callback_script = f""":local billingWgPub "";
         :do {{ :set billingWgPub [/interface wireguard get [find name={wireguard_name}] public-key] }} on-error={{}}
-        :do {{ /tool fetch keep-result=no url=("{callback_url}{callback_join}wg_public_key=" . $billingWgPub . "&wg_tunnel_ip={_rsc_escape(wg_router_api_ip)}&bridge={_rsc_escape(bridge_name)}") }} on-error={{ :log warning "Billing SaaS provisioning callback failed" }}"""
-    if not vpn_peer_enabled:
-        provisioning_callback_script = f':do {{ /tool fetch keep-result=no url=("{callback_url}{callback_join}bridge={_rsc_escape(bridge_name)}&mode=agent") }} on-error={{ :log warning "Billing SaaS provisioning callback failed" }}'
+        :do {{ /tool fetch keep-result=no url=("{callback_url}{callback_join}wg_public_key=" . $billingWgPub . "&wg_tunnel_ip={_rsc_escape(wg_router_api_ip)}&bridge={_rsc_escape(bridge_name)}&mode={'wireguard' if vpn_interface_enabled else 'agent'}") }} on-error={{ :log warning "Billing SaaS provisioning callback failed" }}"""
     vpn_health_script = f"""
         :log info "Billing SaaS Step 5: verifying VPN connectivity";
         :local billingVpnPing 0;
@@ -3218,14 +3233,14 @@ def router_provision_script(request, token):
         ref(f"tenants/{tenant_id}").update({
             "mikrotik_provisioning_status": "script_downloaded",
             "mikrotik_script_downloaded_at": iso_now(),
-            "mikrotik_vpn_enabled": vpn_peer_enabled,
+            "mikrotik_vpn_enabled": vpn_interface_enabled,
             "mikrotik_vpn_peer_enabled": vpn_peer_enabled,
-            "mikrotik_vpn_status": "configured" if vpn_peer_enabled else "agent_mode",
-            "mikrotik_vpn_peer_status": "configured" if vpn_peer_enabled else "agent_mode",
+            "mikrotik_vpn_status": "configured" if vpn_peer_enabled else ("interface_configured" if vpn_interface_enabled else "agent_mode"),
+            "mikrotik_vpn_peer_status": "configured" if vpn_peer_enabled else ("pending_server_peer" if vpn_interface_enabled else "agent_mode"),
             "radius_enabled": radius_enabled_for_router,
             "radius_nas_configured": radius_enabled_for_router,
-            "mikrotik_vpn_tunnel_ip": wg_router_tunnel_ip if vpn_peer_enabled else "",
-            "mikrotik_host": wg_router_api_ip if vpn_peer_enabled else tenant.get("mikrotik_host", ""),
+            "mikrotik_vpn_tunnel_ip": wg_router_tunnel_ip if vpn_interface_enabled else "",
+            "mikrotik_host": wg_router_api_ip if vpn_interface_enabled else tenant.get("mikrotik_host", ""),
             "mikrotik_port": int(tenant.get("mikrotik_port") or 8728),
             "mikrotik_bridge_name": bridge_name,
             "mikrotik_wan_interface": wan_interface,
@@ -3242,14 +3257,14 @@ def router_provision_script(request, token):
             ref(f"tenants/{tenant_id}").update({
                 "mikrotik_provisioning_status": "script_downloaded",
                 "mikrotik_script_downloaded_at": iso_now(),
-                "mikrotik_vpn_enabled": vpn_peer_enabled,
+                "mikrotik_vpn_enabled": vpn_interface_enabled,
                 "mikrotik_vpn_peer_enabled": vpn_peer_enabled,
-                "mikrotik_vpn_status": "configured" if vpn_peer_enabled else "agent_mode",
-                "mikrotik_vpn_peer_status": "configured" if vpn_peer_enabled else "agent_mode",
+                "mikrotik_vpn_status": "configured" if vpn_peer_enabled else ("interface_configured" if vpn_interface_enabled else "agent_mode"),
+                "mikrotik_vpn_peer_status": "configured" if vpn_peer_enabled else ("pending_server_peer" if vpn_interface_enabled else "agent_mode"),
                 "radius_enabled": radius_enabled_for_router,
                 "radius_nas_configured": radius_enabled_for_router,
-                "mikrotik_vpn_tunnel_ip": wg_router_tunnel_ip if vpn_peer_enabled else "",
-                "mikrotik_host": wg_router_api_ip if vpn_peer_enabled else tenant.get("mikrotik_host", ""),
+                "mikrotik_vpn_tunnel_ip": wg_router_tunnel_ip if vpn_interface_enabled else "",
+                "mikrotik_host": wg_router_api_ip if vpn_interface_enabled else tenant.get("mikrotik_host", ""),
                 "mikrotik_port": int(tenant.get("mikrotik_port") or 8728),
                 "mikrotik_bridge_name": bridge_name,
                 "mikrotik_wan_interface": wan_interface,
