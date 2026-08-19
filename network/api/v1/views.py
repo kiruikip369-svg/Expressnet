@@ -2685,10 +2685,17 @@ def _wireguard_server_config(tenant):
 
 def _radius_server_config(tenant, wg_config=None):
     wg_config = wg_config or _wireguard_server_config(tenant)
+    fallback_ip = _config_value(
+        tenant,
+        ("RADIUS_FALLBACK_IP",),
+        ("radius_fallback_ip",),
+        "142.93.39.55",
+    )
     server_ip = _config_value(
         tenant,
         ("RADIUS_SERVER_IP", "RADIUS_SERVER_HOST", "RADIUS_HOST_IP"),
         ("radius_server_ip", "radius_server_host", "radius_host_ip"),
+        fallback_ip,
     )
     source_ip = _config_value(
         tenant,
@@ -3064,8 +3071,7 @@ def router_provision_script(request, token):
         missing = ", ".join(wg_config["missing"] or ["server VPN settings"])
         logger.warning("MikroTik provisioning tenant=%s WireGuard unavailable because %s is missing; radius_ready=%s", tenant_id, missing, radius_enabled_for_router)
         vpn_script = (
-            ':log info "Billing SaaS: using automatic local agent mode";\n'
-            f':do {{ /interface wireguard remove [find name="{wireguard_name}"] }} on-error={{}}\n'
+            f':log warning "Billing SaaS: WireGuard server config missing ({_rsc_escape(missing)}); keeping any existing WireGuard interface and using agent/direct RADIUS mode";\n'
             ':do { /ip firewall filter remove [find comment="billing-saas allow api over vpn"] } on-error={}\n'
             ':do { /ip firewall filter remove [find comment="billing-saas allow api over vpn only"] } on-error={}\n'
             ':do { /ip firewall filter remove [find comment="billing-saas allow radius"] } on-error={}\n'
