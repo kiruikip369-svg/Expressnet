@@ -70,7 +70,7 @@ function DashboardLayout() {
         <main className="mx-auto w-full max-w-[1200px] px-4 py-4 sm:px-8 sm:py-5">
           <Routes>
             <Route path="/dashboard" element={<Dashboard />} />
-            <Route path="billing/payment/" element={<BillingPayment />} />
+            <Route path="/billing/payment" element={<BillingPayment />} />
             <Route path="/customers" element={<Customers title="Users" />} />
             <Route path="/pppoe-customers" element={<Customers initialFilter="pppoe" serviceLocked="pppoe" title="PPPoE Customers" />} />
             <Route path="/hotspot-customers" element={<Customers initialFilter="hotspot" serviceLocked="hotspot" title="Hotspot Customers" />} />

@@ -1086,7 +1086,7 @@ def configure_router_port(tenant, interface_name, service_type, profile_name="de
             api,
             ("ip", "dhcp-server", "network"),
             {"address": "172.31.0.0/16"},
-            {"address": "172.31.0.0/16", "gateway": "172.31.0.1", "dns-server": "8.8.8.8,8.8.4.4"},
+            {"address": "172.31.0.0/16", "gateway": "172.31.0.1", "dns-server": "172.31.0.1"},
         )
         _isolate_customer_bridge_from_router_management(api, managed_bridge)
 
@@ -1227,7 +1227,7 @@ def _isolate_customer_bridge_from_router_management(api, bridge_name):
     add_customer_rule(chain="input", action="accept", **{"in-interface": bridge_name, "protocol": "udp", "dst-port": "53", "comment": "billing-saas allow customer dns"})
     add_customer_rule(chain="input", action="accept", **{"in-interface": bridge_name, "protocol": "tcp", "dst-port": "53", "comment": "billing-saas allow customer dns"})
     add_customer_rule(chain="input", action="accept", **{"in-interface": bridge_name, "protocol": "udp", "dst-port": "67,68", "comment": "billing-saas allow customer dhcp"})
-    add_customer_rule(chain="input", action="accept", **{"in-interface": bridge_name, "protocol": "tcp", "dst-port": "64872-64875", "comment": "billing-saas allow customer hotspot service"})
+    add_customer_rule(chain="input", action="accept", **{"in-interface": bridge_name, "protocol": "tcp", "dst-port": "80,443,64872-64875", "comment": "billing-saas allow customer hotspot service"})
     add_customer_rule(chain="input", action="drop", **{"in-interface": bridge_name, "comment": "billing-saas block customer router access"})
 
     try:
@@ -1264,13 +1264,13 @@ def _build_port_command_script(interface_name, service_type, profile_name, porta
         f'/ip firewall filter add chain=input action=accept in-interface="{_rsc_escape(bridge_name)}" protocol=udp dst-port=53 place-before=$billingInputDrop comment="billing-saas allow customer dns"; '
         f'/ip firewall filter add chain=input action=accept in-interface="{_rsc_escape(bridge_name)}" protocol=tcp dst-port=53 place-before=$billingInputDrop comment="billing-saas allow customer dns"; '
         f'/ip firewall filter add chain=input action=accept in-interface="{_rsc_escape(bridge_name)}" protocol=udp dst-port=67,68 place-before=$billingInputDrop comment="billing-saas allow customer dhcp"; '
-        f'/ip firewall filter add chain=input action=accept in-interface="{_rsc_escape(bridge_name)}" protocol=tcp dst-port=64872-64875 place-before=$billingInputDrop comment="billing-saas allow customer hotspot service"; '
+        f'/ip firewall filter add chain=input action=accept in-interface="{_rsc_escape(bridge_name)}" protocol=tcp dst-port=80,443,64872-64875 place-before=$billingInputDrop comment="billing-saas allow customer hotspot service"; '
         f'/ip firewall filter add chain=input action=drop in-interface="{_rsc_escape(bridge_name)}" place-before=$billingInputDrop comment="billing-saas block customer router access"; '
         f'}} else={{ '
         f'/ip firewall filter add chain=input action=accept in-interface="{_rsc_escape(bridge_name)}" protocol=udp dst-port=53 comment="billing-saas allow customer dns"; '
         f'/ip firewall filter add chain=input action=accept in-interface="{_rsc_escape(bridge_name)}" protocol=tcp dst-port=53 comment="billing-saas allow customer dns"; '
         f'/ip firewall filter add chain=input action=accept in-interface="{_rsc_escape(bridge_name)}" protocol=udp dst-port=67,68 comment="billing-saas allow customer dhcp"; '
-        f'/ip firewall filter add chain=input action=accept in-interface="{_rsc_escape(bridge_name)}" protocol=tcp dst-port=64872-64875 comment="billing-saas allow customer hotspot service"; '
+        f'/ip firewall filter add chain=input action=accept in-interface="{_rsc_escape(bridge_name)}" protocol=tcp dst-port=80,443,64872-64875 comment="billing-saas allow customer hotspot service"; '
         f'/ip firewall filter add chain=input action=drop in-interface="{_rsc_escape(bridge_name)}" comment="billing-saas block customer router access"; '
         f'}}; '
         f':do {{ /tool mac-server set allowed-interface-list=LAN }} on-error={{}}; '
@@ -1290,7 +1290,7 @@ def _build_port_command_script(interface_name, service_type, profile_name, porta
             f':do {{ /ip firewall filter add chain=input action=accept in-interface="{_rsc_escape(bridge_name)}" protocol=udp dst-port=53 place-before=[find comment="defconf: drop all not coming from LAN"] comment="billing-saas allow hotspot dns" }} on-error={{ /ip firewall filter add chain=input action=accept in-interface="{_rsc_escape(bridge_name)}" protocol=udp dst-port=53 comment="billing-saas allow hotspot dns" }}; '
             f':do {{ /ip firewall filter add chain=input action=accept in-interface="{_rsc_escape(bridge_name)}" protocol=tcp dst-port=53 place-before=[find comment="defconf: drop all not coming from LAN"] comment="billing-saas allow hotspot dns" }} on-error={{ /ip firewall filter add chain=input action=accept in-interface="{_rsc_escape(bridge_name)}" protocol=tcp dst-port=53 comment="billing-saas allow hotspot dns" }}; '
             f':do {{ /ip firewall filter add chain=input action=accept in-interface="{_rsc_escape(bridge_name)}" protocol=udp dst-port=67,68 place-before=[find comment="defconf: drop all not coming from LAN"] comment="billing-saas allow hotspot dhcp" }} on-error={{ /ip firewall filter add chain=input action=accept in-interface="{_rsc_escape(bridge_name)}" protocol=udp dst-port=67,68 comment="billing-saas allow hotspot dhcp" }}; '
-            f':do {{ /ip firewall filter add chain=input action=accept in-interface="{_rsc_escape(bridge_name)}" protocol=tcp dst-port=64872-64875 place-before=[find comment="defconf: drop all not coming from LAN"] comment="billing-saas allow hotspot web-proxy" }} on-error={{ /ip firewall filter add chain=input action=accept in-interface="{_rsc_escape(bridge_name)}" protocol=tcp dst-port=64872-64875 comment="billing-saas allow hotspot web-proxy" }}; '
+            f':do {{ /ip firewall filter add chain=input action=accept in-interface="{_rsc_escape(bridge_name)}" protocol=tcp dst-port=80,443,64872-64875 place-before=[find comment="defconf: drop all not coming from LAN"] comment="billing-saas allow hotspot web-proxy" }} on-error={{ /ip firewall filter add chain=input action=accept in-interface="{_rsc_escape(bridge_name)}" protocol=tcp dst-port=80,443,64872-64875 comment="billing-saas allow hotspot web-proxy" }}; '
             f':do {{ /ip hotspot profile add name="Expressnet-profile" hotspot-address=172.31.0.1 dns-name=hot.spot login-by=cookie,http-pap,trial,mac-cookie use-radius=yes html-directory=Expressnet-hotspot radius-interim-update=10m comment="Expressnet captive portal: {portal_comment}" }} '
             f'on-error={{ /ip hotspot profile set [find name="Expressnet-profile"] hotspot-address=172.31.0.1 dns-name=hot.spot login-by=cookie,http-pap,trial,mac-cookie use-radius=yes html-directory=Expressnet-hotspot radius-interim-update=10m comment="Expressnet captive portal: {portal_comment}" }}; '
             + "".join(
@@ -1345,7 +1345,7 @@ def _build_port_command_script(interface_name, service_type, profile_name, porta
         f':do {{ /ip pool add name=Expressnet-pool ranges=172.31.0.2-172.31.255.254 comment="IP Pool created by Expressnet" }} on-error={{ /ip pool set [find name=Expressnet-pool] ranges=172.31.0.2-172.31.255.254 comment="IP Pool created by Expressnet" }}; '
         f':do {{ /ip address add address=172.31.0.1/16 interface="{bridge_name}" comment="Added by Expressnet" }} on-error={{ /ip address set [find interface="{bridge_name}" comment="Added by Expressnet"] address=172.31.0.1/16 interface="{bridge_name}" }}; '
         f':do {{ /ip dhcp-server add name=Expressnet-dhcp interface="{bridge_name}" address-pool=Expressnet-pool lease-time=4h disabled=no }} on-error={{ /ip dhcp-server set [find name=Expressnet-dhcp] interface="{bridge_name}" address-pool=Expressnet-pool lease-time=4h disabled=no }}; '
-        f':do {{ /ip dhcp-server network add address=172.31.0.0/16 gateway=172.31.0.1 dns-server=8.8.8.8,8.8.4.4 }} on-error={{ /ip dhcp-server network set [find address=172.31.0.0/16] gateway=172.31.0.1 dns-server=8.8.8.8,8.8.4.4 }}; '
+        f':do {{ /ip dhcp-server network add address=172.31.0.0/16 gateway=172.31.0.1 dns-server=172.31.0.1 }} on-error={{ /ip dhcp-server network set [find address=172.31.0.0/16] gateway=172.31.0.1 dns-server=172.31.0.1 }}; '
         f'{customer_bridge_isolation}'
         f'/interface bridge port add bridge="{bridge_name}" interface="{interface_name}"; '
         f':do {{ /interface bridge port set [find interface="{interface_name}"] disabled=no }} on-error={{}}; '
