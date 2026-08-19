@@ -15,10 +15,6 @@ const emptyForm = {
   mikrotik_user: '',
   mikrotik_pass: '',
   mikrotik_port: '8728',
-  paystack_secret_key: '',
-  paystack_subaccount_code: '',
-  paystack_bearer: 'subaccount',
-  paystack_currency: 'KES',
   status: 'active',
   plan: 'basic',
 };
@@ -33,10 +29,6 @@ const labels = {
   mikrotik_user: 'MikroTik user',
   mikrotik_pass: 'MikroTik password',
   mikrotik_port: 'MikroTik port',
-  paystack_secret_key: 'Paystack secret key',
-  paystack_subaccount_code: 'Subaccount code',
-  paystack_bearer: 'Bearer',
-  paystack_currency: 'Currency',
   status: 'Status',
   plan: 'Plan',
 };
@@ -112,10 +104,6 @@ export default function AdminTenants() {
       mikrotik_user: tenant.mikrotik_user || '',
       mikrotik_pass: '',
       mikrotik_port: String(tenant.mikrotik_port || 8728),
-      paystack_secret_key: '',
-      paystack_subaccount_code: tenant.paystack_subaccount_code || '',
-      paystack_bearer: tenant.paystack_bearer || 'subaccount',
-      paystack_currency: tenant.paystack_currency || 'KES',
       status: tenant.status || 'active',
       plan: tenant.subscription?.plan || 'basic',
     });
@@ -137,7 +125,7 @@ export default function AdminTenants() {
 
   const validate = () => {
     const nextErrors = {};
-    const createRequired = Object.keys(emptyForm).filter((field) => !['status', 'plan', 'paystack_secret_key', 'paystack_subaccount_code', 'paystack_bearer', 'paystack_currency'].includes(field));
+    const createRequired = Object.keys(emptyForm).filter((field) => !['status', 'plan'].includes(field));
     const editRequired = ['business_name', 'owner_name', 'email', 'phone'];
     const required = modalMode === 'create' ? createRequired : editRequired;
 
@@ -166,7 +154,7 @@ export default function AdminTenants() {
 
       if (modalMode === 'edit') {
         delete payload.password;
-        ['mikrotik_pass', 'paystack_secret_key'].forEach((field) => {
+        ['mikrotik_pass'].forEach((field) => {
           if (!String(payload[field] || '').trim()) delete payload[field];
         });
         await adminApi.patch(`/admin/tenants/${editingTenant.id}`, payload);
@@ -384,23 +372,6 @@ export default function AdminTenants() {
                 <Field name="mikrotik_user" value={form.mikrotik_user} error={errors.mikrotik_user} onChange={update} />
                 <Field name="mikrotik_pass" type="password" value={form.mikrotik_pass} error={errors.mikrotik_pass} onChange={update} placeholder={modalMode === 'edit' ? 'Leave blank to keep existing' : ''} />
                 <Field name="mikrotik_port" type="number" value={form.mikrotik_port} error={errors.mikrotik_port} onChange={update} />
-              </div>
-            </section>
-
-            <section>
-              <h2 className="mb-3 text-sm font-bold text-slate-900">Paystack Payments</h2>
-              <div className="grid gap-4 md:grid-cols-2">
-                <Field name="paystack_secret_key" type="password" value={form.paystack_secret_key} error={errors.paystack_secret_key} onChange={update} placeholder={modalMode === 'edit' ? 'Leave blank to keep existing' : 'Tenant-owned secret key, or leave blank for platform key'} />
-                <Field name="paystack_subaccount_code" value={form.paystack_subaccount_code} error={errors.paystack_subaccount_code} onChange={update} />
-                <Field name="paystack_currency" value={form.paystack_currency} error={errors.paystack_currency} onChange={update} />
-                <div>
-                  <label className="form-label" htmlFor="paystack_bearer">Bearer</label>
-                  <select id="paystack_bearer" name="paystack_bearer" className="form-input" value={form.paystack_bearer} onChange={update}>
-                    <option value="subaccount">subaccount</option>
-                    <option value="account">account</option>
-                  </select>
-                  {errors.paystack_bearer && <p className="form-error">{errors.paystack_bearer}</p>}
-                </div>
               </div>
             </section>
 

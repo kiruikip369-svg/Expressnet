@@ -390,10 +390,10 @@ def normalize_public_url(value):
 
 def get_public_base_url():
     candidates = [
+        os.getenv("DARAJA_CALLBACK_BASE_URL"),
         os.getenv("PUBLIC_APP_URL"),
-        os.getenv("PAYSTACK_CALLBACK_BASE_URL"),
+        getattr(settings, "DARAJA_CALLBACK_BASE_URL", ""),
         getattr(settings, "PUBLIC_APP_URL", ""),
-        getattr(settings, "PAYSTACK_CALLBACK_BASE_URL", ""),
     ]
     if not settings.DEBUG:
         candidates = [item for item in candidates if item and "localhost" not in item and "127.0.0.1" not in item]

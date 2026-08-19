@@ -661,11 +661,10 @@ def walled_garden_hosts(tenant, portal_host=None):
     Derives the list from the tenant's configured payment provider when
     possible (stored in tenant.extra["payment_provider"]), and always
     includes the captive portal host plus Cloudflare challenges domain
-    (many gateways use Turnstile on their checkout pages).
+    .
 
     Supported payment_provider values:
-      - "paystack"   (default when Paystack keys are configured)
-      - "mpesa"      (M-Pesa STK push — no external hosts needed)
+      - "mpesa"      (M-Pesa STK push; no external hosts needed)
       - "pesapal"
       - "flutterwave"
       - "paypal"
@@ -682,17 +681,6 @@ def walled_garden_hosts(tenant, portal_host=None):
         provider = str(tenant.get("payment_provider") or tenant.get("extra", {}).get("payment_provider") or "").strip().lower()
     else:
         provider = str(getattr(tenant, "extra", None) and (getattr(tenant, "extra") or {}).get("payment_provider") or "").strip().lower()
-
-    # If no explicit provider, infer from configured keys
-    if not provider:
-        has_paystack = False
-        if isinstance(tenant, dict):
-            has_paystack = bool(tenant.get("paystack_secret_key"))
-        else:
-            has_paystack = bool(getattr(tenant, "paystack_secret_key", ""))
-        if has_paystack:
-            provider = "paystack"
-
     # Always include these
     hosts = [portal_host] if portal_host else []
     # Some hosted portals redirect through a subdomain/CDN hostname during
@@ -708,12 +696,6 @@ def walled_garden_hosts(tenant, portal_host=None):
     hosts.append("challenges.cloudflare.com")
 
     gateway_hosts = {
-        "paystack": [
-            "checkout.paystack.com",
-            "api.paystack.co",
-            "*.paystack.co",
-            "*.paystack.com",
-        ],
         "pesapal": [
             "*.pesapal.com",
         ],

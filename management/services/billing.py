@@ -6,8 +6,6 @@ import logging
 import os
 import socket
 import ssl
-import uuid
-import base64
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import parse_qsl, urlparse, urlsplit, urlunsplit
@@ -28,139 +26,6 @@ logger = logging.getLogger(__name__)
 
 
 from core.services.shared import *
-
-def get_platform_paystack_secret():
-    secret = os.getenv("PAYSTACK_SECRET_KEY")
-    if secret and "replace_with" not in secret and not secret.strip().endswith("_secret_key"):
-        return secret.strip()
-    raise PaymentProviderError(
-        "Payment is temporarily unavailable. Please contact support.",
-        "PAYSTACK_SECRET_KEY is not configured",
-        503,
-    )
-
-
-def get_paystack_secret(tenant=None):
-    tenant_secret = (tenant or {}).get("paystack_secret_key")
-    if tenant_secret and str(tenant_secret).strip() and "â€¢" not in str(tenant_secret) and "replace_with" not in str(tenant_secret):
-        return str(tenant_secret).strip()
-    return get_platform_paystack_secret()
-
-
-def make_paystack_reference(tenant_id):
-    return f"ps_{tenant_id}_{uuid.uuid4().hex[:24]}"
-
-
-def paystack_amount(amount):
-    return int(round(float(amount or 0) * 100))
-
-
-def paystack_platform_percentage():
-    try:
-        return float(os.getenv("PAYSTACK_PLATFORM_PERCENTAGE", "1"))
-    except ValueError:
-        return 1.0
-
-
-def create_paystack_subaccount(tenant, bank_code, account_number, business_number=None, percentage_charge=None):
-    secret = get_platform_paystack_secret()
-    payload = {
-        "business_name": tenant.get("business_name") or tenant.get("email") or "Internet tenant",
-        "bank_code": str(bank_code or "").strip(),
-        "account_number": str(account_number or "").strip(),
-        "percentage_charge": paystack_platform_percentage() if percentage_charge is None else float(percentage_charge),
-        "description": f"ISP tenant settlement account for {tenant.get('business_name') or tenant.get('id')}",
-        "primary_contact_name": tenant.get("owner_name") or tenant.get("business_name") or "",
-        "primary_contact_email": tenant.get("email") or "",
-        "primary_contact_phone": tenant.get("phone") or "",
-    }
-    if business_number:
-        payload["metadata"] = {"business_number": business_number}
-
-    if not payload["bank_code"] or not payload["account_number"]:
-        raise PaymentProviderError("Bank code and account number are required to create a settlement account.", "Missing bank_code or account_number", 400)
-
-    response = requests.post(
-        "https://api.paystack.co/subaccount",
-        headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
-        json=payload,
-        timeout=30,
-    )
-    try:
-        response.raise_for_status()
-    except requests.HTTPError as exc:
-        raise PaymentProviderError(
-            "Could not create the tenant settlement account. Please verify the bank details.",
-            f"Paystack subaccount creation failed {response.status_code}: {response.text[:500]}",
-            502 if response.status_code not in {401, 403} else 503,
-        ) from exc
-    data = response.json()
-    if not data.get("status"):
-        raise PaymentProviderError("Could not create the tenant settlement account. Please verify the bank details.", data.get("message") or "Paystack rejected subaccount creation", 502)
-    return data.get("data") or {}
-
-
-def initiate_paystack_payment(tenant, payment_id, amount, email=None, phone=None, description=None, metadata=None):
-    secret = get_platform_paystack_secret()
-    subaccount_code = str((tenant or {}).get("paystack_subaccount_code") or "").strip()
-    if not subaccount_code:
-        raise PaymentProviderError(
-            "Payment is not ready for this business. Please contact support.",
-            "Tenant has no Paystack subaccount code",
-            503,
-        )
-    reference = make_paystack_reference(tenant.get("id"))
-    base_url = get_public_base_url()
-    if not base_url:
-        raise RuntimeError("PUBLIC_APP_URL or PAYSTACK_CALLBACK_BASE_URL is required for Paystack checkout")
-
-    customer_email = str(email or "").strip()
-    if not customer_email:
-        digits = "".join(ch for ch in str(phone or "") if ch.isdigit()) or "customer"
-        customer_email = f"{digits}@example.com"
-
-    payload = {
-        "amount": paystack_amount(amount),
-        "email": customer_email,
-        "currency": tenant.get("paystack_currency") or os.getenv("PAYSTACK_CURRENCY", "KES"),
-        "reference": reference,
-        "callback_url": f"{base_url}/api/paystack/callback",
-        "metadata": {
-            "tenant_id": tenant.get("id"),
-            "payment_id": payment_id,
-            "phone": phone,
-            **(metadata or {}),
-        },
-    }
-    if description:
-        payload["metadata"]["description"] = description
-
-    payload["subaccount"] = subaccount_code
-    payload["bearer"] = tenant.get("paystack_bearer") or "subaccount"
-
-    response = requests.post(
-        "https://api.paystack.co/transaction/initialize",
-        headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
-        json=payload,
-        timeout=30,
-    )
-    try:
-        response.raise_for_status()
-    except requests.HTTPError as exc:
-        detail = response.text[:500]
-        public_message = "Payment gateway rejected the request. Please contact support."
-        status_code = 502
-        if response.status_code in {401, 403}:
-            public_message = "Payment is temporarily unavailable. Please contact support."
-            status_code = 503
-        raise PaymentProviderError(public_message, f"Paystack initialize failed {response.status_code}: {detail}", status_code) from exc
-    data = response.json()
-    if not data.get("status"):
-        raise PaymentProviderError("Payment gateway rejected the request. Please contact support.", data.get("message") or "Paystack rejected the transaction")
-    result = data.get("data") or {}
-    result.update({"reference": reference, "customer_email": customer_email, "currency": payload["currency"]})
-    return result
-
 
 def initiate_daraja_stk(tenant, payment_id, amount, phone, payment_method="daraja_paybill", description=None):
     """Start a Daraja STK push for a tenant Paybill or Buy Goods account."""
@@ -186,7 +51,9 @@ def initiate_daraja_stk(tenant, payment_id, amount, phone, payment_method="daraj
         raise PaymentProviderError("Daraja did not return an access token.", "Missing Daraja access token", 502)
     timestamp = datetime.now(timezone.utc).astimezone().strftime("%Y%m%d%H%M%S")
     password = base64.b64encode(f"{shortcode}{passkey}{timestamp}".encode()).decode()
-    callback = f"{get_public_base_url()}/api/daraja/callback"
+    tenant_id = tenant.get("id")
+    callback_token = make_daraja_callback_token(tenant_id, payment_id)
+    callback = f"{get_public_base_url()}/api/daraja/callback/{tenant_id}/{payment_id}/{callback_token}"
     payload = {"BusinessShortCode": shortcode, "Password": password, "Timestamp": timestamp, "TransactionType": transaction_type, "Amount": max(1, int(round(float(amount or 0)))), "PartyA": normalize_phone(phone), "PartyB": shortcode, "PhoneNumber": normalize_phone(phone), "CallBackURL": callback, "AccountReference": str(payment_id), "TransactionDesc": description or "Internet package"}
     response = requests.post(f"{base}/mpesa/stkpush/v1/processrequest", headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"}, json=payload, timeout=30)
     response.raise_for_status()
@@ -196,26 +63,6 @@ def initiate_daraja_stk(tenant, payment_id, amount, phone, payment_method="daraj
     return result
 
 
-def verify_paystack_transaction(tenant, reference):
-    secret = get_platform_paystack_secret()
-    response = requests.get(
-        f"https://api.paystack.co/transaction/verify/{reference}",
-        headers={"Authorization": f"Bearer {secret}"},
-        timeout=30,
-    )
-    response.raise_for_status()
-    data = response.json()
-    if not data.get("status"):
-        raise RuntimeError(data.get("message") or "Paystack verification failed")
-    return data.get("data") or {}
-
-
-def verify_paystack_signature(raw_body, signature, secret):
-    if not signature or not secret:
-        return False
-    digest = hmac.new(str(secret).encode(), raw_body, hashlib.sha512).hexdigest()
-    return hmac.compare_digest(digest, str(signature))
-
 
 # ---------------------------------------------------------------------------
 # Daraja (Safaricom M-Pesa) — for tenants who have applied for / been
@@ -224,9 +71,8 @@ def verify_paystack_signature(raw_body, signature, secret):
 #
 # A tenant is considered "Daraja-enabled" once they have all four
 # credentials configured (consumer key/secret, shortcode, passkey) AND have
-# explicitly selected mpesa as their payment_provider — mirroring how a
-# Paystack subaccount_code gates that provider. There's no separate
-# approval queue in this codebase yet; this is the natural equivalent.
+# explicitly selected mpesa as their payment_provider. There is no separate
+# approval queue in this codebase yet.
 # ---------------------------------------------------------------------------
 
 def _clean_daraja_config(source):
@@ -452,11 +298,7 @@ def daraja_timestamp_and_password(shortcode, passkey):
 
 
 def make_daraja_callback_token(tenant_id, payment_id):
-    """Daraja has no request-signing mechanism like Paystack's webhook
-    signature, so the callback URL itself carries an unguessable,
-    per-payment token (HMAC over tenant_id+payment_id with SECRET_KEY) —
-    anyone hitting the callback endpoint without the right token can't
-    complete an arbitrary payment."""
+    """Daraja callbacks carry an unguessable per-payment HMAC token."""
     digest = hmac.new(settings.SECRET_KEY.encode(), f"{tenant_id}:{payment_id}".encode(), hashlib.sha256).hexdigest()
     return digest[:32]
 
@@ -491,7 +333,7 @@ def initiate_daraja_payment(tenant, payment_id, amount, phone, description=None,
     base_url = get_public_base_url()
     if not base_url:
         logger.error("Daraja callback base URL missing for tenant=%s payment=%s", tenant_id, payment_id)
-        raise RuntimeError("PUBLIC_APP_URL or PAYSTACK_CALLBACK_BASE_URL is required for the Daraja callback URL")
+        raise RuntimeError("PUBLIC_APP_URL or DARAJA_CALLBACK_BASE_URL is required for the Daraja callback URL")
 
     token = get_daraja_access_token(tenant, payment_method)
     business_shortcode = creds["shortcode"]
@@ -652,7 +494,7 @@ def initiate_daraja_b2c(tenant, payment_id, amount, phone, remarks=None):
 
     base_url = get_public_base_url()
     if not base_url:
-        raise RuntimeError("PUBLIC_APP_URL or PAYSTACK_CALLBACK_BASE_URL is required for Daraja B2C callbacks")
+        raise RuntimeError("PUBLIC_APP_URL or DARAJA_CALLBACK_BASE_URL is required for Daraja B2C callbacks")
 
     token = get_daraja_access_token(tenant)
     payload = {

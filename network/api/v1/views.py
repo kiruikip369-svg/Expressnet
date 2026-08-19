@@ -38,7 +38,6 @@ from billing_api.services import (
     create_hotspot_profile,
     create_ppp_profile,
     configure_router_port,
-    create_paystack_subaccount,
     selected_daraja_method,
     initiate_daraja_payment,
     platform_daraja_config,
@@ -59,7 +58,6 @@ from billing_api.services import (
     hotspot_login_redirect_html,
     hotspot_redirect_html,
     routeros_hotspot_fetch_script,
-    initiate_paystack_payment,
     initiate_daraja_stk,
     iso_now,
     walled_garden_hosts,
@@ -84,8 +82,6 @@ from billing_api.services import (
     tenant_token,
     upsert_customer_access,
     utcnow,
-    verify_paystack_signature,
-    verify_paystack_transaction,
     write_audit_log,
 )
 
@@ -95,7 +91,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_SITE = {
     "brand_name": "Expressnet",
     "headline": "Internet billing built for hotspot businesses",
-    "subheadline": "Sell packages, collect Paystack payments, and activate MikroTik users automatically.",
+    "subheadline": "Sell packages, collect M-Pesa payments, and activate MikroTik users automatically.",
     "about": "We help hotspot operators manage customers, packages, payments, and access control from one secure platform.",
     "phone": "+254 701396967/+254 729 281669",
     "email": "expressnet.support@gmail.com",
@@ -105,7 +101,7 @@ DEFAULT_SITE = {
     "cta_url": "/register",
 }
 MASKED = "••••••••"
-SENSITIVE_FIELDS = {"password", "mikrotik_pass", "paystack_secret_key"}
+SENSITIVE_FIELDS = {"password", "mikrotik_pass", }
 
 
 def body(request):
@@ -460,10 +456,8 @@ def public_base_url(request):
 
     candidates = [
         os.getenv("PUBLIC_APP_URL"),
-        os.getenv("PAYSTACK_CALLBACK_BASE_URL"),
         getattr(settings, "PUBLIC_APP_URL", ""),
-        getattr(settings, "PAYSTACK_CALLBACK_BASE_URL", ""),
-    ]
+        ]
     if request_url and "localhost" not in request_url and "127.0.0.1" not in request_url:
         candidates.insert(0, request_url)
     if not settings.DEBUG:
@@ -494,32 +488,7 @@ def tenant_theme_payload(tenant):
         "daraja_till_number": tenant.get("daraja_till_number") or "",
         "daraja_shortcode_type": tenant.get("daraja_shortcode_type") or "CustomerBuyGoodsOnline",
         "daraja_environment": tenant.get("daraja_environment") or "production",
-        "paystack_subaccount_code": tenant.get("paystack_subaccount_code") or "",
-        "paystack_subaccount_status": tenant.get("paystack_subaccount_status") or "not_created",
-        "paystack_platform_percentage": tenant.get("paystack_platform_percentage") or os.getenv("PAYSTACK_PLATFORM_PERCENTAGE", "1"),
     }
-
-
-def create_or_update_tenant_subaccount(tenant_id, tenant_data, data):
-    bank_code = str(data.get("bank_code") or tenant_data.get("bank_code") or "").strip()
-    account_number = str(data.get("bank_account_number") or tenant_data.get("bank_account_number") or "").strip()
-    if not bank_code or not account_number:
-        return {"paystack_subaccount_status": "missing_bank_details"}
-
-    subaccount = create_paystack_subaccount(
-        {"id": tenant_id, **tenant_data, **data},
-        bank_code,
-        account_number,
-        business_number=data.get("business_number") or tenant_data.get("business_number"),
-        percentage_charge=data.get("paystack_platform_percentage") or tenant_data.get("paystack_platform_percentage"),
-    )
-    return {
-        "paystack_subaccount_code": subaccount.get("subaccount_code"),
-        "paystack_subaccount_id": subaccount.get("id"),
-        "paystack_subaccount_status": "active",
-        "paystack_subaccount_created_at": iso_now(),
-    }
-
 
 
 
@@ -856,22 +825,6 @@ def _update_linked_router(tenant_id, tenant_data, **updates):
     return existing[key]
 
 
-def find_payment_by_paystack_reference(reference, tenant_id=None, payment_id=None):
-    if not reference and not payment_id:
-        return None, None, None
-    tenant_ids = [tenant_id] if tenant_id else [tenant["id"] for tenant in list_children("tenants")]
-    for current_tenant_id in tenant_ids:
-        if not current_tenant_id:
-            continue
-        if payment_id:
-            payment = ref(f"tenants/{current_tenant_id}/payments/{payment_id}").get()
-            if payment:
-                return current_tenant_id, payment_id, payment
-        for item in list_children(f"tenants/{current_tenant_id}/payments"):
-            if item.get("paystack_reference") == reference:
-                return current_tenant_id, item["id"], item
-    return None, None, None
-
 
 def _refresh_captive_daraja_payment(tenant_id, tenant, payment_id, payment):
     if not payment_id or not payment:
@@ -943,14 +896,11 @@ def captive_portal_page(request, tenant_id):
     if tenant.get("status") == "suspended":
         return _html_page("Portal unavailable", "<main><div class='alert'>This provider is not accepting payments.</div></main>", 403)
 
-    reference = request.GET.get("reference") or request.GET.get("trxref")
     payment_id = request.GET.get("payment_id") or request.GET.get("paymentId")
     payment_notice = ""
-    if reference or payment_id:
+    if payment_id:
         if payment_id:
             payment = ref(f"tenants/{tenant_id}/payments/{payment_id}").get()
-        else:
-            _, _, payment = find_payment_by_paystack_reference(reference, tenant_id=tenant_id)
         payment = _refresh_captive_daraja_payment(tenant_id, {"id": tenant_id, **tenant}, payment_id, payment)
         if payment and payment.get("status") == "success":
             router_ip = _router_ip_from_captive_data(request.GET, tenant, payment)
@@ -1377,6 +1327,7 @@ def _public_pay_impl(request, tenant_id):
         return ok({"message": "TV MAC access is only available for hotspot packages"}, 400)
     amount_payable = float(pkg.get("amount_payable") or pkg.get("price") or 0)
     customer = None
+    username = ""
     mac_address = router_client_mac if service_type == "hotspot" else ""
     if service_type == "pppoe":
         username = str(data.get("username") or "").strip()
@@ -1394,6 +1345,8 @@ def _public_pay_impl(request, tenant_id):
         mac_address = normalize_mac(data.get("mac_address"))
         if not mac_address:
             return ok({"message": "Enter a valid TV MAC address"}, 400)
+    access_username = mac_address if service_type == "tv" else ((customer or {}).get("username") or username or "".join(ch for ch in str(phone or "") if ch.isdigit()))
+    pending_access_password = str((customer or {}).get("password") or secrets.token_hex(3).upper())
     daraja_method = selected_daraja_method(tenant, data.get("payment_method"))
     daraja_config = platform_daraja_config(tenant, daraja_method)
     daraja_source = daraja_config.get("daraja_credential_source") or "platform"
@@ -1412,7 +1365,8 @@ def _public_pay_impl(request, tenant_id):
             "paid_at": None,
             "initiated_at": iso_now(),
             "service_type": service_type,
-            "username": (customer or {}).get("username") or (username if service_type == "pppoe" else None),
+            "username": access_username,
+            "pending_access_password": pending_access_password,
             "mac_address": mac_address,
             "router_ip": router_ip,
             "router_client_ip": router_client_ip,
@@ -1440,7 +1394,8 @@ def _public_pay_impl(request, tenant_id):
                 "package_id": data["package_id"],
                 "package_name": pkg.get("name"),
                 "service_type": service_type,
-                "username": (customer or {}).get("username") or (username if service_type == "pppoe" else None),
+                "username": access_username,
+                "pending_access_password": pending_access_password,
                 "mac_address": mac_address,
                 "router_ip": router_ip,
                 "router_client_ip": router_client_ip,
@@ -1499,7 +1454,7 @@ def public_redeem(request, tenant_id):
         return ok({"message": "Payment reference is required"}, 400)
     payment = None
     for item in list_children(f"tenants/{tenant_id}/payments"):
-        candidates = [item.get("payment_code"), item.get("daraja_receipt_number"), item.get("mpesa_receipt_number"), item.get("paystack_reference")]
+        candidates = [item.get("payment_code"), item.get("daraja_receipt_number"), item.get("mpesa_receipt_number"), None]
         if any(str(candidate or "").upper() == str(receipt_code).strip().upper() for candidate in candidates):
             payment = item
             break

@@ -11,7 +11,7 @@ const publicApi = axios.create({
 const defaultSite = {
   brand_name: 'Expressnetbilling',
   headline: 'Internet billing built for hotspot businesses',
-  subheadline: 'Sell packages, collect Paystack payments, and activate MikroTik users automatically.',
+  subheadline: 'Sell packages, collect M-Pesa payments, and activate MikroTik users automatically.',
   about: 'We help hotspot operators manage customers, packages, payments, and access control from one secure platform.',
   phone: '+254 700 000 000',
   email: 'support@example.com',
@@ -92,7 +92,7 @@ export default function Home() {
   const heroSlides = [
     {
       heading: site?.headline || 'Internet billing built for hotspot businesses',
-      subtext: site?.subheadline || 'Sell packages, collect Paystack payments, and activate MikroTik users automatically.',
+      subtext: site?.subheadline || 'Sell packages, collect M-Pesa payments, and activate MikroTik users automatically.',
     },
     {
       heading: 'Automate Your Hotspot, Grow Your Revenue',
@@ -124,8 +124,8 @@ export default function Home() {
       icon: Zap,
     },
     {
-      title: 'Paystack Payments',
-      desc: 'Accept secure payments via Paystack — mobile money, cards, and bank transfers — all seamlessly integrated.',
+      title: 'M-Pesa payments',
+      desc: 'Accept secure payments via M-Pesa — mobile money, cards, and bank transfers — all seamlessly integrated.',
       icon: CreditCard,
     },
     {
@@ -446,7 +446,7 @@ export default function Home() {
                   {
                     step: '03',
                     title: 'Start Earning',
-                    desc: 'Create data packages, share your payment link, and watch your revenue grow. Payments are collected automatically via Paystack.',
+                    desc: 'Create data packages, share your payment link, and watch your revenue grow. Payments are collected automatically via M-Pesa.',
                   },
                 ].map((item, idx) => (
                   <RevealOnScroll key={idx} delay={idx * 200 + 200}>
@@ -552,7 +552,7 @@ export default function Home() {
                       <div className="space-y-4 mb-10">
                         {[
                           'Automated MikroTik user activation',
-                          'Secure Paystack payment collection',
+                          'Secure M-Pesa payment collection',
                           'Real-time analytics dashboard',
                           'Multi-location support',
                         ].map((item, idx) => (

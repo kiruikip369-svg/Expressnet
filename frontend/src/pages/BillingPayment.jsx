@@ -108,7 +108,6 @@ export default function BillingPayment() {
             <select className="form-input" value={form.method} onChange={(event) => setForm((current) => ({ ...current, method: event.target.value }))}>
               <option value="manual">Manual</option>
               <option value="mpesa">M-Pesa</option>
-              <option value="paystack">Paystack</option>
               <option value="bank">Bank</option>
             </select>
           </label>

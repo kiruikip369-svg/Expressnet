@@ -36,7 +36,5 @@ urlpatterns = [
     path("tickets", views.tickets),
     path("tickets/add", views.tickets),
     path("tickets/<str:ticket_id>", views.tickets),
-    path("paystack/webhook", views.paystack_webhook),
-    path("paystack/callback", views.paystack_callback),
     path("daraja/callback/<str:tenant_id>/<str:payment_id>/<str:token>", views.daraja_callback),
 ]

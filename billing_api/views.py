@@ -29,8 +29,6 @@ from management.api.v1.views import (
     customers,
     dashboard_stats,
     daraja_callback,
-    paystack_callback,
-    paystack_webhook,
     payment_mark_paid,
     payments,
     profile,

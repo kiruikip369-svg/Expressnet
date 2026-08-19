@@ -4,15 +4,15 @@ import toast from 'react-hot-toast';
 
 const initialExpenses = [
   { id: 'EXP-001', type: 'SMS', amount: 50, method: 'Mpesa', date: '2026-06-08T06:52:00' },
-  { id: 'EXP-002', type: 'SYSTEM_PAYMENT', amount: 500, method: 'Paystack', date: '2026-06-04T20:00:00' },
-  { id: 'EXP-003', type: 'SYSTEM_PAYMENT', amount: 500, method: 'Paystack', date: '2026-05-04T22:35:00' },
-  { id: 'EXP-004', type: 'SYSTEM_PAYMENT', amount: 500, method: 'Paystack', date: '2026-04-04T11:22:00' },
-  { id: 'EXP-005', type: 'SYSTEM_PAYMENT', amount: 500, method: 'Paystack', date: '2026-03-03T18:36:00' },
-  { id: 'EXP-006', type: 'SYSTEM_PAYMENT', amount: 503, method: 'Paystack', date: '2026-02-03T13:40:00' },
-  { id: 'EXP-007', type: 'SYSTEM_PAYMENT', amount: 500, method: 'Paystack', date: '2026-01-04T05:30:00' },
+  { id: 'EXP-002', type: 'SYSTEM_PAYMENT', amount: 500, method: 'Mpesa', date: '2026-06-04T20:00:00' },
+  { id: 'EXP-003', type: 'SYSTEM_PAYMENT', amount: 500, method: 'Mpesa', date: '2026-05-04T22:35:00' },
+  { id: 'EXP-004', type: 'SYSTEM_PAYMENT', amount: 500, method: 'Mpesa', date: '2026-04-04T11:22:00' },
+  { id: 'EXP-005', type: 'SYSTEM_PAYMENT', amount: 500, method: 'Mpesa', date: '2026-03-03T18:36:00' },
+  { id: 'EXP-006', type: 'SYSTEM_PAYMENT', amount: 503, method: 'Mpesa', date: '2026-02-03T13:40:00' },
+  { id: 'EXP-007', type: 'SYSTEM_PAYMENT', amount: 500, method: 'Mpesa', date: '2026-01-04T05:30:00' },
 ];
 
-const blankExpense = { id: '', type: 'SYSTEM_PAYMENT', amount: 0, method: 'Paystack', date: '' };
+const blankExpense = { id: '', type: 'SYSTEM_PAYMENT', amount: 0, method: 'Mpesa', date: '' };
 
 function toDate(value) {
   const date = value ? new Date(value) : null;
@@ -161,7 +161,7 @@ export default function Expenses() {
               <label className="text-xs font-semibold text-slate-600">Date<input className="form-input" type="datetime-local" value={draft.date} onChange={(event) => setDraft((current) => ({ ...current, date: event.target.value }))} required /></label>
               <label className="text-xs font-semibold text-slate-600">Type<input className="form-input" value={draft.type} onChange={(event) => setDraft((current) => ({ ...current, type: event.target.value }))} required /></label>
               <label className="text-xs font-semibold text-slate-600">Amount<input className="form-input" type="number" value={draft.amount} onChange={(event) => setDraft((current) => ({ ...current, amount: event.target.value }))} required /></label>
-              <label className="text-xs font-semibold text-slate-600">Method<select className="form-input" value={draft.method} onChange={(event) => setDraft((current) => ({ ...current, method: event.target.value }))}><option>Paystack</option><option>Mpesa</option><option>Cash</option><option>Bank</option></select></label>
+              <label className="text-xs font-semibold text-slate-600">Method<select className="form-input" value={draft.method} onChange={(event) => setDraft((current) => ({ ...current, method: event.target.value }))}><option>Mpesa</option><option>Cash</option><option>Bank</option></select></label>
             </div>
             <div className="mt-5 flex justify-end gap-2">
               <button type="button" className="btn-secondary" onClick={() => setModalOpen(false)}>Cancel</button>

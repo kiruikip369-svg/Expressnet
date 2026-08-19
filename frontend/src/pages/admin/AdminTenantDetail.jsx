@@ -13,9 +13,6 @@ const editableFields = [
   'mikrotik_host',
   'mikrotik_user',
   'mikrotik_port',
-  'paystack_subaccount_code',
-  'paystack_bearer',
-  'paystack_currency',
   'status',
 ];
 
@@ -27,9 +24,6 @@ const labels = {
   mikrotik_host: 'MikroTik host',
   mikrotik_user: 'MikroTik user',
   mikrotik_port: 'MikroTik port',
-  paystack_subaccount_code: 'Paystack subaccount code',
-  paystack_bearer: 'Paystack bearer',
-  paystack_currency: 'Paystack currency',
   status: 'Status',
 };
 
@@ -62,7 +56,6 @@ export default function AdminTenantDetail() {
   const [form, setForm] = useState({});
   const [secrets, setSecrets] = useState({
     mikrotik_pass: '',
-    paystack_secret_key: '',
   });
   const [tab, setTab] = useState('customers');
   const [tabRows, setTabRows] = useState([]);
@@ -133,7 +126,7 @@ export default function AdminTenantDetail() {
         mikrotik_port: Number(form.mikrotik_port || 8728),
       });
       toast.success('Tenant updated');
-      setSecrets({ mikrotik_pass: '', paystack_secret_key: '' });
+      setSecrets({ mikrotik_pass: '' });
       await loadTenant();
     } catch (error) {
       toast.error(error.response?.data?.error || 'Failed to update tenant');
@@ -194,7 +187,6 @@ export default function AdminTenantDetail() {
       { key: 'amount', label: 'Amount', render: (row) => `KES ${row.amount || 0}` },
       { key: 'payment_code', label: 'Reference' },
       { key: 'provider', label: 'Provider' },
-      { key: 'paystack_channel', label: 'Channel' },
       { key: 'paid_at', label: 'Paid At' },
       { key: 'status', label: 'Status', render: (row) => <StatusBadge status={row.status} /> },
     ],
@@ -236,11 +228,6 @@ export default function AdminTenantDetail() {
                   <option value="suspended">suspended</option>
                   <option value="inactive">inactive</option>
                 </select>
-              ) : field === 'paystack_bearer' ? (
-                <select id={field} name={field} className="form-input" value={form[field]} onChange={update}>
-                  <option value="subaccount">subaccount</option>
-                  <option value="account">account</option>
-                </select>
               ) : (
                 <input id={field} name={field} className="form-input" value={form[field]} onChange={update} />
               )}
@@ -254,7 +241,6 @@ export default function AdminTenantDetail() {
 
           {[
             ['mikrotik_pass', 'MikroTik password'],
-            ['paystack_secret_key', 'Paystack secret key'],
           ].map(([field, label]) => (
             <div key={field}>
               <label className="form-label" htmlFor={field}>{label}</label>
@@ -271,8 +257,6 @@ export default function AdminTenantDetail() {
           ))}
 
           <div>
-            <label className="form-label">Paystack webhook URL</label>
-            <input className="form-input" value="/api/paystack/webhook" disabled />
           </div>
         </div>
 
@@ -306,7 +290,7 @@ export default function AdminTenantDetail() {
             <button className="mt-4 rounded-md bg-[#e94560] px-4 py-2 text-xs font-bold text-white" type="button" onClick={saveSubscription}>Save subscription</button>
             <form className="mt-6 grid gap-3 md:grid-cols-4" onSubmit={recordPayment}>
               <input className="form-input" type="number" value={subPayment.amount} onChange={(e) => setSubPayment((c) => ({ ...c, amount: e.target.value }))} placeholder="Amount" />
-              <select className="form-input" value={subPayment.method} onChange={(e) => setSubPayment((c) => ({ ...c, method: e.target.value }))}><option>manual</option><option>mpesa</option><option>paystack</option></select>
+              <select className="form-input" value={subPayment.method} onChange={(e) => setSubPayment((c) => ({ ...c, method: e.target.value }))}><option>manual</option><option>mpesa</option></select>
               <input className="form-input" value={subPayment.reference} onChange={(e) => setSubPayment((c) => ({ ...c, reference: e.target.value }))} placeholder="Reference" />
               <button className="rounded-md bg-[#16213e] px-4 py-2 text-xs font-bold text-white">Record payment</button>
             </form>

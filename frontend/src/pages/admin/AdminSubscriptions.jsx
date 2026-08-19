@@ -138,7 +138,7 @@ export default function AdminSubscriptions() {
             <h2 className="text-lg font-bold text-slate-900">Record Payment - {paymentTarget.tenant_name}</h2>
             <div className="mt-4 space-y-3">
               <input className="form-input" type="number" value={payment.amount} onChange={(e) => setPayment((c) => ({ ...c, amount: e.target.value }))} placeholder="Amount" />
-              <select className="form-input" value={payment.method} onChange={(e) => setPayment((c) => ({ ...c, method: e.target.value }))}><option>manual</option><option>mpesa</option><option>paystack</option></select>
+              <select className="form-input" value={payment.method} onChange={(e) => setPayment((c) => ({ ...c, method: e.target.value }))}><option>manual</option><option>mpesa</option></select>
               <input className="form-input" value={payment.reference} onChange={(e) => setPayment((c) => ({ ...c, reference: e.target.value }))} placeholder="Reference" />
               <textarea className="form-input min-h-20" value={payment.notes} onChange={(e) => setPayment((c) => ({ ...c, notes: e.target.value }))} placeholder="Notes" />
             </div>

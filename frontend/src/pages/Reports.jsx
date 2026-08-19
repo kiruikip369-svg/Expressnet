@@ -178,7 +178,7 @@ export default function Reports({ type = 'finance' }) {
   const rows = useMemo(() => {
     const base = tab === 'checked' ? successfulPayments : payments.filter((payment) => payment.status !== 'success');
     const needle = query.toLowerCase();
-    return base.filter((payment) => `${payment.customer_name || ''} ${payment.phone || ''} ${payment.payment_code || ''} ${payment.paystack_reference || ''}`.toLowerCase().includes(needle));
+    return base.filter((payment) => `${payment.customer_name || ''} ${payment.phone || ''} ${payment.payment_code || ''}`.toLowerCase().includes(needle));
   }, [payments, query, successfulPayments, tab]);
 
   const totals = useMemo(() => {
@@ -322,7 +322,7 @@ export default function Reports({ type = 'finance' }) {
                   <td className="px-5 py-4"><input type="checkbox" className="h-4 w-4 rounded border-slate-300" /></td>
                   <td className="px-5 py-4 font-bold" style={{ color: 'var(--app-accent)' }}>{payment.customer_name || payment.access_username || '-'}</td>
                   <td className="px-5 py-4">{payment.phone || '-'}</td>
-                  <td className="px-5 py-4">{payment.payment_code || payment.paystack_reference || '-'}</td>
+                  <td className="px-5 py-4">{payment.payment_code || '-'}</td>
                   <td className="px-5 py-4">{formatKES(payment.amount)}</td>
                   <td className="px-5 py-4"><span className="rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] text-emerald-700">{payment.status === 'success' ? 'Yes' : 'No'}</span></td>
                   <td className="px-5 py-4">{formatDate(payment.paid_at || payment.created_at)}</td>

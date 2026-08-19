@@ -37,7 +37,6 @@ from billing_api.services import (
     create_hotspot_profile,
     create_ppp_profile,
     configure_router_port,
-    create_paystack_subaccount,
     selected_daraja_method,
     initiate_daraja_payment,
     initiate_daraja_b2c,
@@ -59,7 +58,6 @@ from billing_api.services import (
     hotspot_login_redirect_html,
     hotspot_redirect_html,
     routeros_hotspot_fetch_script,
-    initiate_paystack_payment,
     initiate_daraja_stk,
     iso_now,
     walled_garden_hosts,
@@ -84,8 +82,6 @@ from billing_api.services import (
     tenant_token,
     upsert_customer_access,
     utcnow,
-    verify_paystack_signature,
-    verify_paystack_transaction,
     write_audit_log,
 )
 from network.api.v1.views import (
@@ -114,7 +110,7 @@ DEFAULT_SITE = {
     "cta_url": "/register",
 }
 MASKED = "••••••••"
-SENSITIVE_FIELDS = {"password", "mikrotik_pass", "paystack_secret_key"}
+SENSITIVE_FIELDS = {"password", "mikrotik_pass", }
 
 
 def _customer_username_seed(name, phone):
@@ -507,10 +503,8 @@ def public_base_url(request):
 
     candidates = [
         os.getenv("PUBLIC_APP_URL"),
-        os.getenv("PAYSTACK_CALLBACK_BASE_URL"),
         getattr(settings, "PUBLIC_APP_URL", ""),
-        getattr(settings, "PAYSTACK_CALLBACK_BASE_URL", ""),
-    ]
+        ]
     if request_url and "localhost" not in request_url and "127.0.0.1" not in request_url:
         candidates.insert(0, request_url)
     if not settings.DEBUG:
@@ -545,28 +539,6 @@ def tenant_theme_payload(tenant):
         "settlement_status": tenant.get("settlement_status") or ("ready" if tenant_payout_details(tenant).get("payout_phone") else "missing_payout_details"),
         "settlement_pending_amount": float(tenant.get("settlement_pending_amount") or 0),
     }
-
-
-def create_or_update_tenant_subaccount(tenant_id, tenant_data, data):
-    bank_code = str(data.get("bank_code") or tenant_data.get("bank_code") or "").strip()
-    account_number = str(data.get("bank_account_number") or tenant_data.get("bank_account_number") or "").strip()
-    if not bank_code or not account_number:
-        return {"paystack_subaccount_status": "missing_bank_details"}
-
-    subaccount = create_paystack_subaccount(
-        {"id": tenant_id, **tenant_data, **data},
-        bank_code,
-        account_number,
-        business_number=data.get("business_number") or tenant_data.get("business_number"),
-        percentage_charge=data.get("paystack_platform_percentage") or tenant_data.get("paystack_platform_percentage"),
-    )
-    return {
-        "paystack_subaccount_code": subaccount.get("subaccount_code"),
-        "paystack_subaccount_id": subaccount.get("id"),
-        "paystack_subaccount_status": "active",
-        "paystack_subaccount_created_at": iso_now(),
-    }
-
 
 
 
@@ -639,6 +611,7 @@ def _public_pay_impl(request, tenant_id):
     router_client_ip = str(data.get("ip") or data.get("client_ip") or "").strip()
     router_ip = str(data.get("router_ip") or "").strip()
     router_mac = str(data.get("mac") or data.get("router_mac") or "").strip()
+    router_client_mac = normalize_mac(router_mac)
     link_login = str(data.get("link_login") or data.get("link-login") or "").strip()
     dst = str(data.get("dst") or data.get("link-orig") or "").strip()
     service_type = str(data.get("service_type") or "hotspot").strip().lower()
@@ -651,7 +624,8 @@ def _public_pay_impl(request, tenant_id):
         return ok({"message": "TV MAC access is only available for hotspot packages"}, 400)
     amount_payable = float(pkg.get("amount_payable") or pkg.get("price") or 0)
     customer = None
-    mac_address = normalize_mac(router_mac) if service_type == "hotspot" else ""
+    username = ""
+    mac_address = router_client_mac if service_type == "hotspot" else ""
     if service_type == "pppoe":
         username = str(data.get("username") or "").strip()
         if username:
@@ -668,6 +642,8 @@ def _public_pay_impl(request, tenant_id):
         mac_address = normalize_mac(data.get("mac_address"))
         if not mac_address:
             return ok({"message": "Enter a valid TV MAC address"}, 400)
+    access_username = mac_address if service_type == "tv" else ((customer or {}).get("username") or username or to_access_username(phone))
+    pending_access_password = str((customer or {}).get("password") or secrets.token_hex(3).upper())
     daraja_method = selected_daraja_method(tenant, data.get("payment_method"))
     daraja_config = platform_daraja_config(tenant, daraja_method)
     daraja_source = daraja_config.get("daraja_credential_source") or "platform"
@@ -686,10 +662,12 @@ def _public_pay_impl(request, tenant_id):
             "paid_at": None,
             "initiated_at": iso_now(),
             "service_type": service_type,
-            "username": (customer or {}).get("username") or (username if service_type == "pppoe" else None),
+            "username": access_username,
+            "pending_access_password": pending_access_password,
             "mac_address": mac_address,
             "router_ip": router_ip,
             "router_client_ip": router_client_ip,
+            "router_client_mac": router_client_mac,
             "router_mac": router_mac,
             "link_login": link_login,
             "dst": dst,
@@ -713,10 +691,12 @@ def _public_pay_impl(request, tenant_id):
                 "package_id": data["package_id"],
                 "package_name": pkg.get("name"),
                 "service_type": service_type,
-                "username": (customer or {}).get("username") or (username if service_type == "pppoe" else None),
+                "username": access_username,
+                "pending_access_password": pending_access_password,
                 "mac_address": mac_address,
                 "router_ip": router_ip,
                 "router_client_ip": router_client_ip,
+                "router_client_mac": router_client_mac,
                 "router_mac": router_mac,
                 "link_login": link_login,
                 "dst": dst,
@@ -769,31 +749,14 @@ def public_pay(request, tenant_id):
 @csrf_exempt
 @api_view(["GET"])
 def public_verify(request, tenant_id):
-    reference = request.GET.get("reference") or request.GET.get("trxref")
     requested_payment_id = request.GET.get("payment_id") or request.GET.get("paymentId")
-    if requested_payment_id:
-        payment_id = str(requested_payment_id)
-        payment = ref(f"tenants/{tenant_id}/payments/{payment_id}").get()
-        found_tenant_id = str(tenant_id) if payment else None
-    elif reference:
-        found_tenant_id, payment_id, payment = find_payment_by_paystack_reference(reference, tenant_id=tenant_id)
-    else:
-        return ok({"message": "Payment reference is required"}, 400)
-    if found_tenant_id != str(tenant_id) or not payment:
+    if not requested_payment_id:
+        return ok({"message": "Payment ID is required"}, 400)
+    payment_id = str(requested_payment_id)
+    payment = ref(f"tenants/{tenant_id}/payments/{payment_id}").get()
+    if not payment:
         return ok({"message": "Payment not found"}, 404)
-    if payment.get("status") != "success" and reference:
-        tenant = {"id": tenant_id, **(ref(f"tenants/{tenant_id}").get() or {})}
-        try:
-            verified = verify_paystack_transaction(tenant, reference)
-            if verified.get("status") == "success":
-                if not complete_paystack_payment(verified):
-                    return ok({"success": False, "status": "failed", "message": "The paid amount did not match the package amount."}, 400)
-                payment = ref(f"tenants/{tenant_id}/payments/{payment_id}").get() or payment
-            else:
-                return ok({"success": False, "status": "failed", "message": verified.get("gateway_response") or "Payment was not successful"}, 400)
-        except Exception:
-            return ok({"success": False, "status": payment.get("status") or "pending", "message": "Payment verification is still pending. Please contact your ISP if this continues."}, 202)
-    elif payment.get("status") != "success":
+    if payment.get("status") != "success":
         checkout_request_id = payment.get("daraja_checkout_request_id") or payment.get("checkout_request_id")
         if checkout_request_id:
             tenant = {"id": tenant_id, **(ref(f"tenants/{tenant_id}").get() or {})}
@@ -1605,7 +1568,7 @@ def payment_mark_paid(request, payment_id):
     payment = ref(f"tenants/{request.tenant['id']}/payments/{payment_id}").get()
     if not payment:
         return ok({"message": "Payment not found"}, 404)
-    payment_code = payment.get("payment_code") or payment.get("paystack_reference") or f"CASH-{secrets.token_hex(4).upper()}"
+    payment_code = payment.get("payment_code") or f"CASH-{secrets.token_hex(4).upper()}"
     updates = {
         "status": "success",
         "provider": payment.get("provider") or "cash",
@@ -2423,7 +2386,7 @@ def activate_paid_access(tenant, payment_id, payment, phone, payment_code):
     router_client_ip = str(payment.get("router_client_ip") or payment.get("ip") or "").strip()
     mac_address = normalize_mac(payment.get("mac_address") or (router_client_mac if service_type == "hotspot" else "") or (customer or {}).get("mac_address"))
     username = mac_address if service_type == "tv" else (payment.get("username") or (customer or {}).get("username") or to_access_username(phone))
-    password = str((customer or {}).get("password") or payment_code) if service_type == "pppoe" else str(payment_code)
+    password = str(payment.get("pending_access_password") or payment.get("access_password") or (customer or {}).get("password") or payment_code)
     customer_name = _payment_customer_name({**(customer or {}), **payment}, phone, username)
     if customer:
         updates = {"name": customer_name, "phone": phone, "username": username, "password": password, "package": package_for_access, "service_type": service_type, "status": "active", "expiry_date": expiry.isoformat(), "last_payment_id": payment_id, "last_payment_code": payment_code, "auto_reconnect": True, "updated_at": iso_now()}
@@ -2537,133 +2500,6 @@ def activate_paid_access(tenant, payment_id, payment, phone, payment_code):
     except Exception as exc:
         ref(f"tenants/{tenant_id}/payments/{payment_id}").update({"whatsapp_status": "failed", "whatsapp_detail": str(exc)})
     return access
-
-
-def find_payment_by_paystack_reference(reference, tenant_id=None, payment_id=None):
-    tenant_ids = [tenant_id] if tenant_id else [tenant["id"] for tenant in list_children("tenants")]
-    for current_tenant_id in tenant_ids:
-        if not current_tenant_id:
-            continue
-        if payment_id:
-            payment = ref(f"tenants/{current_tenant_id}/payments/{payment_id}").get()
-            if payment:
-                return current_tenant_id, payment_id, payment
-        for item in list_children(f"tenants/{current_tenant_id}/payments"):
-            if item.get("paystack_reference") == reference:
-                return current_tenant_id, item["id"], item
-    return None, None, None
-
-
-def complete_paystack_payment(event_data):
-    reference = event_data.get("reference")
-    metadata = event_data.get("metadata") or {}
-    if not isinstance(metadata, dict):
-        metadata = {}
-    tenant_id, payment_id, payment = find_payment_by_paystack_reference(reference, metadata.get("tenant_id"), metadata.get("payment_id"))
-    if not tenant_id or not payment_id:
-        return False
-    if payment.get("status") == "success":
-        return True
-
-    expected_amount = round(float(payment.get("amount") or 0), 2)
-    paid_amount = round(float(event_data.get("amount") or 0) / 100, 2)
-    if expected_amount and paid_amount != expected_amount:
-        ref(f"tenants/{tenant_id}/payments/{payment_id}").update({
-            "status": "failed",
-            "failed_at": iso_now(),
-            "callback_result_desc": "Paid amount does not match the package amount",
-        })
-        return False
-
-    customer = event_data.get("customer") or {}
-    authorization = event_data.get("authorization") or {}
-    payment_code = reference or event_data.get("id")
-    phone = metadata.get("phone") or payment.get("phone")
-    update = {
-        "provider": "paystack",
-        "amount": paid_amount,
-        "currency": event_data.get("currency") or payment.get("currency"),
-        "payment_code": payment_code,
-        "paystack_reference": reference,
-        "paystack_transaction_id": event_data.get("id"),
-        "paystack_channel": event_data.get("channel"),
-        "paystack_paid_at": event_data.get("paid_at") or event_data.get("paidAt"),
-        "paystack_customer_email": customer.get("email") or payment.get("paystack_customer_email"),
-        "paystack_authorization_code": authorization.get("authorization_code"),
-        "phone": phone,
-        "status": "success",
-        "paid_at": iso_now(),
-        "callback_result_code": "success",
-        "callback_result_desc": event_data.get("gateway_response") or "Paystack charge successful",
-    }
-    ref(f"tenants/{tenant_id}/payments/{payment_id}").update(update)
-    tenant_data = ref(f"tenants/{tenant_id}").get() or {}
-    activate_paid_access({"id": tenant_id, **tenant_data}, payment_id, {**payment, **metadata}, phone, payment_code)
-    return True
-
-
-def paystack_secrets_to_try():
-    seen = set()
-    for secret in [os.getenv("PAYSTACK_SECRET_KEY")]:
-        if secret and "replace_with" not in secret and not secret.strip().endswith("_secret_key") and secret not in seen:
-            seen.add(secret)
-            yield secret
-
-
-@csrf_exempt
-@api_view(["POST"])
-def paystack_webhook(request):
-    signature = request.headers.get("x-paystack-signature") or request.headers.get("X-Paystack-Signature")
-    if not any(verify_paystack_signature(request.body, signature, secret) for secret in paystack_secrets_to_try()):
-        return ok({"message": "Invalid Paystack signature"}, 401)
-    event = body(request)
-    if event.get("event") == "charge.success":
-        event_data = event.get("data") or {}
-        reference = event_data.get("reference")
-        tenant_id, payment_id, payment = find_payment_by_paystack_reference(reference, (event_data.get("metadata") or {}).get("tenant_id"), (event_data.get("metadata") or {}).get("payment_id"))
-        if payment and payment.get("status") == "success":
-            return ok({"success": True})
-        if reference:
-            tenant = {"id": tenant_id, **(ref(f"tenants/{tenant_id}").get() or {})} if tenant_id else {}
-            try:
-                verified = verify_paystack_transaction(tenant, reference)
-                complete_paystack_payment(verified)
-            except Exception:
-                return ok({"success": False, "message": "Payment verification will be retried"}, 202)
-    return ok({"success": True})
-
-
-@csrf_exempt
-@api_view(["GET"])
-def paystack_callback(request):
-    reference = request.GET.get("reference") or request.GET.get("trxref")
-    if not reference:
-        return ok({"message": "Missing Paystack reference"}, 400)
-    tenant_id, payment_id, payment = find_payment_by_paystack_reference(reference)
-    if not tenant_id:
-        return ok({"message": "Payment not found"}, 404)
-    tenant = {"id": tenant_id, **(ref(f"tenants/{tenant_id}").get() or {})}
-    try:
-        verified = verify_paystack_transaction(tenant, reference)
-    except Exception:
-        return ok({"success": False, "message": "Payment verification is temporarily unavailable. Please refresh shortly."}, 202)
-    if verified.get("status") == "success":
-        if not complete_paystack_payment(verified):
-            return ok({"success": False, "message": "The paid amount did not match the package amount."}, 400)
-        if "text/html" in request.headers.get("accept", ""):
-            payment = ref(f"tenants/{tenant_id}/payments/{payment_id}").get() or payment or {}
-            query = {
-                "reference": reference,
-                "router_ip": payment.get("router_ip") or "",
-                "ip": payment.get("router_ip") or "",
-                "mac": payment.get("router_mac") or "",
-                "link_login": payment.get("link_login") or "",
-                "dst": payment.get("dst") or "",
-            }
-            return redirect(f"/api/captive/{tenant_id}?{urlencode({key: value for key, value in query.items() if value})}")
-        return ok({"success": True, "message": "Payment verified. You can return to the customer portal.", "paymentId": payment_id})
-    ref(f"tenants/{tenant_id}/payments/{payment_id}").update({"status": "failed", "callback_result_desc": verified.get("gateway_response") or "Paystack verification did not succeed", "failed_at": iso_now()})
-    return ok({"success": False, "message": "Payment was not successful"}, 400)
 
 
 def complete_daraja_payment(tenant_id, payment_id, callback_metadata, amount, receipt, paid_at, phone):

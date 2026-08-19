@@ -38,7 +38,6 @@ from billing_api.services import (
     create_hotspot_profile,
     create_ppp_profile,
     configure_router_port,
-    create_paystack_subaccount,
     selected_daraja_method,
     initiate_daraja_payment,
     make_daraja_callback_token,
@@ -56,7 +55,6 @@ from billing_api.services import (
     hotspot_login_redirect_html,
     hotspot_redirect_html,
     routeros_hotspot_fetch_script,
-    initiate_paystack_payment,
     initiate_daraja_stk,
     iso_now,
     walled_garden_hosts,
@@ -81,8 +79,6 @@ from billing_api.services import (
     tenant_token,
     upsert_customer_access,
     utcnow,
-    verify_paystack_signature,
-    verify_paystack_transaction,
     write_audit_log,
 )
 
@@ -92,7 +88,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_SITE = {
     "brand_name": "Expressnet",
     "headline": "Internet billing built for hotspot businesses",
-    "subheadline": "Sell packages, collect Paystack payments, and activate MikroTik users automatically.",
+    "subheadline": "Sell packages, collect M-Pesa payments, and activate MikroTik users automatically.",
     "about": "We help hotspot operators manage customers, packages, payments, and access control from one secure platform.",
     "phone": "+254 701396967/+254 729 281669",
     "email": "expressnet.support@gmail.com",
@@ -102,7 +98,7 @@ DEFAULT_SITE = {
     "cta_url": "/register",
 }
 MASKED = "••••••••"
-SENSITIVE_FIELDS = {"password", "mikrotik_pass", "paystack_secret_key"}
+SENSITIVE_FIELDS = {"password", "mikrotik_pass", }
 
 
 def body(request):
@@ -584,10 +580,8 @@ def public_base_url(request):
 
     candidates = [
         os.getenv("PUBLIC_APP_URL"),
-        os.getenv("PAYSTACK_CALLBACK_BASE_URL"),
         getattr(settings, "PUBLIC_APP_URL", ""),
-        getattr(settings, "PAYSTACK_CALLBACK_BASE_URL", ""),
-    ]
+        ]
     if request_url and "localhost" not in request_url and "127.0.0.1" not in request_url:
         candidates.insert(0, request_url)
     if not settings.DEBUG:
@@ -618,32 +612,7 @@ def tenant_theme_payload(tenant):
         "daraja_till_number": tenant.get("daraja_till_number") or "",
         "daraja_shortcode_type": tenant.get("daraja_shortcode_type") or "CustomerBuyGoodsOnline",
         "daraja_environment": tenant.get("daraja_environment") or "production",
-        "paystack_subaccount_code": tenant.get("paystack_subaccount_code") or "",
-        "paystack_subaccount_status": tenant.get("paystack_subaccount_status") or "not_created",
-        "paystack_platform_percentage": tenant.get("paystack_platform_percentage") or os.getenv("PAYSTACK_PLATFORM_PERCENTAGE", "1"),
     }
-
-
-def create_or_update_tenant_subaccount(tenant_id, tenant_data, data):
-    bank_code = str(data.get("bank_code") or tenant_data.get("bank_code") or "").strip()
-    account_number = str(data.get("bank_account_number") or tenant_data.get("bank_account_number") or "").strip()
-    if not bank_code or not account_number:
-        return {"paystack_subaccount_status": "missing_bank_details"}
-
-    subaccount = create_paystack_subaccount(
-        {"id": tenant_id, **tenant_data, **data},
-        bank_code,
-        account_number,
-        business_number=data.get("business_number") or tenant_data.get("business_number"),
-        percentage_charge=data.get("paystack_platform_percentage") or tenant_data.get("paystack_platform_percentage"),
-    )
-    return {
-        "paystack_subaccount_code": subaccount.get("subaccount_code"),
-        "paystack_subaccount_id": subaccount.get("id"),
-        "paystack_subaccount_status": "active",
-        "paystack_subaccount_created_at": iso_now(),
-    }
-
 
 
 
@@ -695,12 +664,6 @@ def auth_register(request):
             "mikrotik_user": "",
             "mikrotik_pass": "",
             "mikrotik_port": 8728,
-            "paystack_secret_key": "",
-            "paystack_subaccount_code": "",
-            "paystack_bearer": "subaccount",
-            "paystack_currency": os.getenv("PAYSTACK_CURRENCY", "KES"),
-            "paystack_platform_percentage": os.getenv("PAYSTACK_PLATFORM_PERCENTAGE", "1"),
-            "paystack_subaccount_status": "not_created",
             "sms_balance": 10,
             "sms_sent_count": 0,
             "theme_color": data.get("theme_color") or "#fa8200",
@@ -710,18 +673,11 @@ def auth_register(request):
         }
     )
     tenant_data = ref(f"tenants/{tenant_ref.key}").get() or {}
-    subaccount_status = {"paystack_subaccount_status": "missing_bank_details"}
-    if tenant_data.get("bank_code") and tenant_data.get("bank_account_number"):
-        try:
-            subaccount_status = create_or_update_tenant_subaccount(tenant_ref.key, tenant_data, data)
-        except PaymentProviderError as exc:
-            subaccount_status = {"paystack_subaccount_status": "failed", "paystack_subaccount_error": exc.detail}
-        ref(f"tenants/{tenant_ref.key}").update(subaccount_status)
-    notify_admins_tenant_signup(tenant_ref.key, {**tenant_data, **subaccount_status})
+    notify_admins_tenant_signup(tenant_ref.key, tenant_data)
     tenant_instance = Tenant.objects.filter(pk=tenant_ref.key).first()
     if tenant_instance:
         ensure_subscription(tenant_instance, data.get("plan") or "basic")
-    return ok({"success": True, "message": "Business registered successfully. Your account is active.", "tenantId": tenant_ref.key, **subaccount_status})
+    return ok({"success": True, "message": "Business registered successfully. Your account is active.", "tenantId": tenant_ref.key})
 
 
 @csrf_exempt
@@ -940,8 +896,7 @@ def admin_tenants(request, tenant_id=None, child=None):
             return ok({"error": f"Missing fields: {', '.join(missing)}"}, 400)
         if find_child_by_field("tenants", "email", data["email"]):
             return ok({"error": "Email already registered"}, 409)
-        optional_payment_fields = ["paystack_secret_key", "paystack_subaccount_code", "paystack_bearer", "paystack_currency"]
-        new_ref = ref("tenants").push({**{field: data.get(field) for field in required if field != "password"}, **{field: data.get(field, "") for field in optional_payment_fields}, "paystack_bearer": data.get("paystack_bearer") or "subaccount", "paystack_currency": data.get("paystack_currency") or os.getenv("PAYSTACK_CURRENCY", "KES"), "email": data["email"].lower().strip(), "password": hash_password(data["password"]), "mikrotik_port": int(data.get("mikrotik_port") or 8728), "status": "active", "created_by": f"admin:{request.admin['adminId']}", "created_at": iso_now()})
+        new_ref = ref("tenants").push({**{field: data.get(field) for field in required if field != "password"}, "email": data["email"].lower().strip(), "password": hash_password(data["password"]), "mikrotik_port": int(data.get("mikrotik_port") or 8728), "status": "active", "created_by": f"admin:{request.admin['adminId']}", "created_at": iso_now()})
         tenant_instance = Tenant.objects.get(pk=new_ref.key)
         ensure_subscription(tenant_instance, data.get("plan") or "basic")
         write_audit_log(request.admin["adminId"], request.admin["email"], "CREATE_TENANT", new_ref.key, "tenant", request, {"business_name": data["business_name"], "email": data["email"].lower().strip()})
@@ -951,12 +906,12 @@ def admin_tenants(request, tenant_id=None, child=None):
         existing_tenant = ref(f"tenants/{tenant_id}").get() or {}
         if "password" in data:
             return ok({"error": "Cannot update sensitive fields via this route: password"}, 400)
-        allowed = ["business_name", "owner_name", "email", "phone", "mikrotik_host", "mikrotik_user", "mikrotik_pass", "mikrotik_port", "paystack_secret_key", "paystack_subaccount_code", "paystack_bearer", "paystack_currency", "status"]
+        allowed = ["business_name", "owner_name", "email", "phone", "mikrotik_host", "mikrotik_user", "mikrotik_pass", "mikrotik_port", "status"]
         updates = {}
         for field in allowed:
             if field in data:
                 value = data[field]
-                if field in {"mikrotik_pass", "paystack_secret_key"} and (not str(value).strip() or value == MASKED):
+                if field in {"mikrotik_pass", } and (not str(value).strip() or value == MASKED):
                     continue
                 updates[field] = value
         if "email" in updates:
