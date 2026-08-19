@@ -956,7 +956,6 @@ def captive_portal_page(request, tenant_id):
                 <input type="hidden" name="payment_method" value="{html.escape(selected_payment_method)}">
                 {hidden}
                 {('<input name="username" required placeholder="PPPoE username">' if pkg.get('service_type') == 'pppoe' else '')}
-                <input name="customer_name" placeholder="Full name" autocomplete="name">
                 <input name="phone" inputmode="tel" required placeholder="M-Pesa/phone number" autocomplete="tel">
                 <div class="modal-actions">
                   <a class="secondary close-link" href="#">Cancel</a>
@@ -1051,7 +1050,6 @@ def captive_portal_page(request, tenant_id):
             <input type="hidden" name="service_type" id="pay-service-type" value="hotspot">
             <input type="hidden" name="payment_method" value="{html.escape(selected_payment_method)}">
             <span id="pay-hidden-fields"></span>
-            <input name="customer_name" placeholder="Full name" autocomplete="name">
             <input name="phone" inputmode="tel" required placeholder="M-Pesa/phone number" autocomplete="tel">
             <div class="modal-actions">
               <button class="secondary" type="button" id="pay-cancel">Cancel</button>
@@ -1285,7 +1283,6 @@ def _public_pay_impl(request, tenant_id):
         return ok({"message": "Package not found"}, 404)
     tenant = {"id": tenant_id, **tenant_data}
     phone = normalize_phone(data["phone"])
-    customer_name = str(data.get("customer_name") or data.get("name") or "").strip()
     router_ip = _router_ip_from_captive_data(data, tenant)
     router_mac = str(data.get("mac") or data.get("router_mac") or "").strip()
     link_login = str(data.get("link_login") or data.get("link-login") or "").strip()
@@ -1321,7 +1318,7 @@ def _public_pay_impl(request, tenant_id):
     payment_ref = ref(f"tenants/{tenant_id}/payments").push(
         {
             "customer_id": customer.get("id") if customer else None,
-            "customer_name": customer.get("name") if customer else customer_name,
+            "customer_name": customer.get("name") if customer else None,
             "package_id": data["package_id"],
             "package_name": pkg.get("name"),
             "amount": amount_payable,
@@ -1356,7 +1353,6 @@ def _public_pay_impl(request, tenant_id):
             metadata={
                 "package_id": data["package_id"],
                 "package_name": pkg.get("name"),
-                "customer_name": customer.get("name") if customer else customer_name,
                 "service_type": service_type,
                 "username": (customer or {}).get("username") or (username if service_type == "pppoe" else None),
                 "mac_address": mac_address,

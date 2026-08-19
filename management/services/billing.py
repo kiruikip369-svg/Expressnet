@@ -592,6 +592,49 @@ def initiate_daraja_payment(tenant, payment_id, amount, phone, description=None,
     }
 
 
+def query_daraja_stk_payment(tenant, checkout_request_id, payment_method="daraja_paybill"):
+    payment_method = selected_daraja_method(tenant, payment_method)
+    tenant = platform_daraja_config(tenant, payment_method)
+    creds = get_daraja_credentials(tenant, payment_method)
+    token = get_daraja_access_token(tenant, payment_method)
+    timestamp, password = daraja_timestamp_and_password(creds["shortcode"], creds["passkey"])
+    payload = {
+        "BusinessShortCode": creds["shortcode"],
+        "Password": password,
+        "Timestamp": timestamp,
+        "CheckoutRequestID": checkout_request_id,
+    }
+    response = requests.post(
+        f"{daraja_base_url(tenant)}/mpesa/stkpushquery/v1/query",
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        json=payload,
+        timeout=30,
+    )
+    try:
+        response.raise_for_status()
+    except requests.HTTPError as exc:
+        logger.warning(
+            "Daraja STK query failed for tenant=%s checkout=%s status=%s response=%s",
+            (tenant or {}).get("id"),
+            checkout_request_id,
+            response.status_code,
+            response.text[:500],
+        )
+        raise PaymentProviderError(
+            "Payment verification is temporarily unavailable. Please wait a moment.",
+            f"Daraja STK query failed {response.status_code}: {response.text[:500]}",
+            503,
+        ) from exc
+    try:
+        return response.json()
+    except ValueError as exc:
+        raise PaymentProviderError(
+            "Payment verification is temporarily unavailable. Please wait a moment.",
+            f"Daraja STK query returned invalid JSON: {response.text[:500]}",
+            503,
+        ) from exc
+
+
 def initiate_daraja_b2c(tenant, payment_id, amount, phone, remarks=None):
     tenant = platform_daraja_config(tenant)
     shortcode = str(tenant.get("daraja_b2c_shortcode") or os.getenv("DARAJA_B2C_SHORTCODE") or tenant.get("daraja_shortcode") or "").strip()

@@ -42,6 +42,7 @@ from billing_api.services import (
     initiate_daraja_payment,
     initiate_daraja_b2c,
     platform_daraja_config,
+    query_daraja_stk_payment,
     tenant_payout_details,
     make_daraja_callback_token,
     verify_daraja_callback_token,
@@ -635,7 +636,6 @@ def _public_pay_impl(request, tenant_id):
         return ok({"message": "Package not found"}, 404)
     tenant = {"id": tenant_id, **tenant_data}
     phone = normalize_phone(data["phone"])
-    customer_name = str(data.get("customer_name") or data.get("name") or "").strip()
     router_ip = str(data.get("ip") or data.get("router_ip") or "").strip()
     router_mac = str(data.get("mac") or data.get("router_mac") or "").strip()
     link_login = str(data.get("link_login") or data.get("link-login") or "").strip()
@@ -671,7 +671,7 @@ def _public_pay_impl(request, tenant_id):
     payment_ref = ref(f"tenants/{tenant_id}/payments").push(
         {
             "customer_id": customer.get("id") if customer else None,
-            "customer_name": customer.get("name") if customer else customer_name,
+            "customer_name": customer.get("name") if customer else None,
             "package_id": data["package_id"],
             "package_name": pkg.get("name"),
             "amount": amount_payable,
@@ -706,7 +706,6 @@ def _public_pay_impl(request, tenant_id):
             metadata={
                 "package_id": data["package_id"],
                 "package_name": pkg.get("name"),
-                "customer_name": customer.get("name") if customer else customer_name,
                 "service_type": service_type,
                 "username": (customer or {}).get("username") or (username if service_type == "pppoe" else None),
                 "mac_address": mac_address,
@@ -788,7 +787,38 @@ def public_verify(request, tenant_id):
         except Exception:
             return ok({"success": False, "status": payment.get("status") or "pending", "message": "Payment verification is still pending. Please contact your ISP if this continues."}, 202)
     elif payment.get("status") != "success":
-        return ok({"success": False, "status": payment.get("status") or "pending", "message": "Waiting for M-Pesa confirmation."}, 202)
+        checkout_request_id = payment.get("daraja_checkout_request_id") or payment.get("checkout_request_id")
+        if checkout_request_id:
+            tenant = {"id": tenant_id, **(ref(f"tenants/{tenant_id}").get() or {})}
+            try:
+                result = query_daraja_stk_payment(tenant, checkout_request_id, payment.get("payment_method"))
+                result_code = str(result.get("ResultCode") if result.get("ResultCode") is not None else "")
+                if result_code == "0":
+                    receipt = payment.get("daraja_receipt_number") or payment.get("payment_code") or checkout_request_id
+                    complete_daraja_payment(
+                        tenant_id,
+                        payment_id,
+                        {},
+                        payment.get("amount") or payment.get("amount_payable"),
+                        receipt,
+                        iso_now(),
+                        payment.get("phone"),
+                    )
+                    payment = ref(f"tenants/{tenant_id}/payments/{payment_id}").get() or payment
+                elif result_code:
+                    ref(f"tenants/{tenant_id}/payments/{payment_id}").update({
+                        "status": "failed",
+                        "failed_at": iso_now(),
+                        "callback_result_code": result_code,
+                        "callback_result_desc": result.get("ResultDesc") or "M-Pesa payment was not successful",
+                    })
+                    return ok({"success": False, "status": "failed", "message": result.get("ResultDesc") or "M-Pesa payment was not successful"}, 400)
+            except PaymentProviderError as exc:
+                return ok({"success": False, "status": payment.get("status") or "pending", "message": exc.public_message}, 202)
+            except Exception:
+                logger.exception("Daraja STK verification failed tenant=%s payment=%s checkout=%s", tenant_id, payment_id, checkout_request_id)
+        if payment.get("status") != "success":
+            return ok({"success": False, "status": payment.get("status") or "pending", "message": "Waiting for M-Pesa confirmation."}, 202)
     return ok(
         {
             "success": payment.get("status") == "success",
@@ -1286,6 +1316,21 @@ def staff_profile(request):
     my_requisitions = [item for item in requisitions.values() if str(item.get("requested_by") or "") == str(member["id"])]
     complete_statuses = {"complete", "completed"}
     completed = sum(1 for task in tasks if str(task.get("status") or "").lower() in complete_statuses)
+    if payment.get("status") == "success" and not payment.get("access_username"):
+        tenant = {"id": tenant_id, **(ref(f"tenants/{tenant_id}").get() or {})}
+        try:
+            activate_paid_access(
+                tenant,
+                payment_id,
+                payment,
+                payment.get("phone"),
+                payment.get("payment_code") or payment.get("daraja_receipt_number") or payment.get("daraja_checkout_request_id") or payment_id,
+            )
+            payment = ref(f"tenants/{tenant_id}/payments/{payment_id}").get() or payment
+        except Exception:
+            logger.exception("Paid payment activation retry failed tenant=%s payment=%s", tenant_id, payment_id)
+            return ok({"success": False, "status": "activation_failed", "message": "Payment confirmed, but internet activation is still pending. Please wait a moment."}, 202)
+
     return ok(
         {
             "staff": member,
@@ -2281,14 +2326,7 @@ def to_access_username(phone):
 
 
 def _payment_customer_name(payment, phone, username):
-    name = str(
-        payment.get("customer_name")
-        or payment.get("name")
-        or payment.get("full_name")
-        or payment.get("payer_name")
-        or ""
-    ).strip()
-    return name or str(phone or username or "Customer").strip()
+    return str(phone or username or "Customer").strip()
 
 
 def _upsert_sql_customer(tenant_id, data):
@@ -2618,6 +2656,9 @@ def complete_daraja_payment(tenant_id, payment_id, callback_metadata, amount, re
         logger.warning("Daraja callback payment not found tenant=%s payment=%s receipt=%s", tenant_id, payment_id, receipt)
         return False
     if payment.get("status") == "success":
+        if not payment.get("access_username"):
+            tenant_data = ref(f"tenants/{tenant_id}").get() or {}
+            activate_paid_access({"id": tenant_id, **tenant_data}, payment_id, {**payment, **callback_metadata}, phone or payment.get("phone"), receipt or payment.get("payment_code") or payment_id)
         return True
 
     expected_amount = round(float(payment.get("amount") or 0), 2)

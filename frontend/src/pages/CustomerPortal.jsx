@@ -56,7 +56,6 @@ export default function CustomerPortal() {
   const [tenant, setTenant] = useState(null);
   const [packages, setPackages] = useState([]);
   const [phone, setPhone] = useState('');
-  const [customerName, setCustomerName] = useState('');
   const [serviceType, setServiceType] = useState(pathServiceType() || 'hotspot');
   const [pppoeUsername, setPppoeUsername] = useState('');
   const [macAddress, setMacAddress] = useState('');
@@ -198,7 +197,6 @@ export default function CustomerPortal() {
     setSelectedPackage(pkg);
     setServiceType(type);
     setPhone('');
-    setCustomerName('');
     setPppoeUsername('');
     setMacAddress('');
   };
@@ -207,7 +205,6 @@ export default function CustomerPortal() {
     if (!paying) {
       setSelectedPackage(null);
       setPhone('');
-      setCustomerName('');
       setPppoeUsername('');
       setMacAddress('');
     }
@@ -252,7 +249,6 @@ export default function CustomerPortal() {
       const { data } = await publicApi.post(`/public/${tenantId}/pay`, {
         package_id: selectedPackage.id,
         phone,
-        customer_name: customerName,
         service_type: serviceType,
         username: pppoeUsername,
         mac_address: macAddress,
@@ -271,7 +267,6 @@ export default function CustomerPortal() {
       }
       setSelectedPackage(null);
       setPhone('');
-      setCustomerName('');
       setPppoeUsername('');
       setMacAddress('');
     } catch (err) {
@@ -536,14 +531,6 @@ export default function CustomerPortal() {
                   </div>
                 </div>
               )}
-              <label className="form-label" htmlFor="customerName">Full name</label>
-              <input
-                id="customerName"
-                className="form-input mb-4"
-                placeholder="Customer name"
-                value={customerName}
-                onChange={(event) => setCustomerName(event.target.value)}
-              />
               <label className="form-label" htmlFor="phone">Phone number</label>
               <div className="relative mt-1">
                 <Phone className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
