@@ -668,6 +668,9 @@ def _public_pay_impl(request, tenant_id):
         if not mac_address:
             return ok({"message": "Enter a valid TV MAC address"}, 400)
     daraja_method = selected_daraja_method(tenant, data.get("payment_method"))
+    daraja_config = platform_daraja_config(tenant, daraja_method)
+    daraja_source = daraja_config.get("daraja_credential_source") or "platform"
+    collection_account = "tenant_daraja" if daraja_source == "tenant" else "platform_daraja"
     payment_ref = ref(f"tenants/{tenant_id}/payments").push(
         {
             "customer_id": customer.get("id") if customer else None,
@@ -691,14 +694,15 @@ def _public_pay_impl(request, tenant_id):
             "source": "customer_portal",
             "provider": "mpesa",
             "payment_method": daraja_method,
-            "collection_account": "platform_daraja",
-            "tenant_settlement_status": "pending_payment",
+            "collection_account": collection_account,
+            "daraja_credential_source": daraja_source,
+            "tenant_settlement_status": "not_required" if collection_account == "tenant_daraja" else "pending_payment",
             "tenant_payout": tenant_payout_details(tenant),
         }
     )
     try:
         checkout = initiate_daraja_payment(
-            platform_daraja_config(tenant),
+            daraja_config,
             payment_ref.key,
             amount_payable,
             phone=phone,
@@ -819,6 +823,20 @@ def public_verify(request, tenant_id):
                 logger.exception("Daraja STK verification failed tenant=%s payment=%s checkout=%s", tenant_id, payment_id, checkout_request_id)
         if payment.get("status") != "success":
             return ok({"success": False, "status": payment.get("status") or "pending", "message": "Waiting for M-Pesa confirmation."}, 202)
+    if payment.get("status") == "success" and not payment.get("access_username"):
+        tenant = {"id": tenant_id, **(ref(f"tenants/{tenant_id}").get() or {})}
+        try:
+            activate_paid_access(
+                tenant,
+                payment_id,
+                payment,
+                payment.get("phone"),
+                payment.get("payment_code") or payment.get("daraja_receipt_number") or payment.get("daraja_checkout_request_id") or payment_id,
+            )
+            payment = ref(f"tenants/{tenant_id}/payments/{payment_id}").get() or payment
+        except Exception:
+            logger.exception("Paid payment activation retry failed tenant=%s payment=%s", tenant_id, payment_id)
+            return ok({"success": False, "status": "activation_failed", "message": "Payment confirmed, but internet activation is still pending. Please wait a moment."}, 202)
     return ok(
         {
             "success": payment.get("status") == "success",
@@ -1316,21 +1334,6 @@ def staff_profile(request):
     my_requisitions = [item for item in requisitions.values() if str(item.get("requested_by") or "") == str(member["id"])]
     complete_statuses = {"complete", "completed"}
     completed = sum(1 for task in tasks if str(task.get("status") or "").lower() in complete_statuses)
-    if payment.get("status") == "success" and not payment.get("access_username"):
-        tenant = {"id": tenant_id, **(ref(f"tenants/{tenant_id}").get() or {})}
-        try:
-            activate_paid_access(
-                tenant,
-                payment_id,
-                payment,
-                payment.get("phone"),
-                payment.get("payment_code") or payment.get("daraja_receipt_number") or payment.get("daraja_checkout_request_id") or payment_id,
-            )
-            payment = ref(f"tenants/{tenant_id}/payments/{payment_id}").get() or payment
-        except Exception:
-            logger.exception("Paid payment activation retry failed tenant=%s payment=%s", tenant_id, payment_id)
-            return ok({"success": False, "status": "activation_failed", "message": "Payment confirmed, but internet activation is still pending. Please wait a moment."}, 202)
-
     return ok(
         {
             "staff": member,
@@ -1541,6 +1544,9 @@ def payments(request):
         return ok({"message": "Customer phone is required"}, 400)
     phone = normalize_phone(data["phone"])
     daraja_method = selected_daraja_method(request.tenant, data.get("payment_method"))
+    daraja_config = platform_daraja_config(request.tenant, daraja_method)
+    daraja_source = daraja_config.get("daraja_credential_source") or "platform"
+    collection_account = "tenant_daraja" if daraja_source == "tenant" else "platform_daraja"
     payment_ref = ref(f"tenants/{request.tenant['id']}/payments").push(
         {
             "customer_id": data.get("customer_id"),
@@ -1555,14 +1561,15 @@ def payments(request):
             "initiated_at": iso_now(),
             "provider": "mpesa",
             "payment_method": daraja_method,
-            "collection_account": "platform_daraja",
-            "tenant_settlement_status": "pending_payment",
+            "collection_account": collection_account,
+            "daraja_credential_source": daraja_source,
+            "tenant_settlement_status": "not_required" if collection_account == "tenant_daraja" else "pending_payment",
             "tenant_payout": tenant_payout_details(request.tenant),
         }
     )
     try:
         checkout = initiate_daraja_payment(
-            platform_daraja_config(request.tenant),
+            daraja_config,
             payment_ref.key,
             data.get("amount"),
             phone=phone,
@@ -2691,9 +2698,11 @@ def complete_daraja_payment(tenant_id, payment_id, callback_metadata, amount, re
         "callback_result_code": "success",
         "callback_result_desc": "M-Pesa payment successful",
         "collection_account": payment.get("collection_account") or "platform_daraja",
-        "tenant_settlement_status": "queued",
+        "tenant_settlement_status": payment.get("tenant_settlement_status") or "queued",
     }
     tenant_data = ref(f"tenants/{tenant_id}").get() or {}
+    collection_account = str(update.get("collection_account") or "").strip().lower()
+    platform_collected = collection_account != "tenant_daraja"
     payout = tenant_payout_details(tenant_data)
     settlement_amount = paid_amount
     try:
@@ -2704,27 +2713,33 @@ def complete_daraja_payment(tenant_id, payment_id, callback_metadata, amount, re
         platform_fee_fixed = float(os.getenv("PLATFORM_FEE_FIXED", "0") or 0)
     except ValueError:
         platform_fee_fixed = 0
-    platform_fee = round((settlement_amount * platform_fee_percent / 100) + platform_fee_fixed, 2)
-    tenant_net_amount = max(0, round(settlement_amount - platform_fee, 2))
+    platform_fee = round((settlement_amount * platform_fee_percent / 100) + platform_fee_fixed, 2) if platform_collected else 0
+    tenant_net_amount = max(0, round(settlement_amount - platform_fee, 2)) if platform_collected else 0
     update.update({
         "settlement_gross_amount": settlement_amount,
         "settlement_fee_amount": platform_fee,
         "tenant_net_amount": tenant_net_amount,
         "tenant_payout": payout,
-        "tenant_settlement_status": "queued" if payout.get("payout_phone") else "missing_payout_details",
-        "tenant_settlement_queued_at": iso_now(),
+        "tenant_settlement_status": ("queued" if payout.get("payout_phone") else "missing_payout_details") if platform_collected else "not_required",
+        "tenant_settlement_queued_at": iso_now() if platform_collected else "",
     })
     ref(f"tenants/{tenant_id}/payments/{payment_id}").update(update)
+    try:
+        activate_paid_access({"id": tenant_id, **tenant_data}, payment_id, {**payment, **callback_metadata, **update}, phone or payment.get("phone"), receipt)
+    except Exception as exc:
+        logger.exception("Daraja payment activation failed tenant=%s payment=%s receipt=%s", tenant_id, payment_id, receipt)
+        ref(f"tenants/{tenant_id}/payments/{payment_id}").update({"access_status": "activation_failed", "access_error": str(exc)})
+        raise
     current_balance = float(tenant_data.get("settlement_pending_amount") or 0)
     tenant_balance_update = {
-        "settlement_pending_amount": round(current_balance + tenant_net_amount, 2),
+        "settlement_pending_amount": round(current_balance + tenant_net_amount, 2) if platform_collected else current_balance,
         "settlement_status": update["tenant_settlement_status"],
         "settlement_updated_at": iso_now(),
     }
-    if payout.get("payout_phone") and tenant_net_amount > 0:
+    if platform_collected and payout.get("payout_phone") and tenant_net_amount > 0:
         try:
             b2c = initiate_daraja_b2c(
-                platform_daraja_config(tenant_data),
+                platform_daraja_config({"id": tenant_id, **tenant_data}),
                 payment_id,
                 tenant_net_amount,
                 payout.get("payout_phone"),
@@ -2751,9 +2766,15 @@ def complete_daraja_payment(tenant_id, payment_id, callback_metadata, amount, re
                 "tenant_settlement_failed_at": iso_now(),
             })
             tenant_balance_update["settlement_status"] = "request_failed"
+        except Exception as exc:
+            update.update({
+                "tenant_settlement_status": "request_failed",
+                "tenant_settlement_error": str(exc),
+                "tenant_settlement_failed_at": iso_now(),
+            })
+            tenant_balance_update["settlement_status"] = "request_failed"
     ref(f"tenants/{tenant_id}/payments/{payment_id}").update(update)
     ref(f"tenants/{tenant_id}").update(tenant_balance_update)
-    activate_paid_access({"id": tenant_id, **tenant_data}, payment_id, {**payment, **callback_metadata}, phone or payment.get("phone"), receipt)
     logger.info("Daraja payment completed tenant=%s payment=%s receipt=%s phone=%s amount=%s", tenant_id, payment_id, receipt, phone or payment.get("phone"), paid_amount)
     return True
 

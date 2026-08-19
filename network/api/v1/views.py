@@ -1315,6 +1315,9 @@ def _public_pay_impl(request, tenant_id):
         if not mac_address:
             return ok({"message": "Enter a valid TV MAC address"}, 400)
     daraja_method = selected_daraja_method(tenant, data.get("payment_method"))
+    daraja_config = platform_daraja_config(tenant, daraja_method)
+    daraja_source = daraja_config.get("daraja_credential_source") or "platform"
+    collection_account = "tenant_daraja" if daraja_source == "tenant" else "platform_daraja"
     payment_ref = ref(f"tenants/{tenant_id}/payments").push(
         {
             "customer_id": customer.get("id") if customer else None,
@@ -1338,14 +1341,15 @@ def _public_pay_impl(request, tenant_id):
             "source": "customer_portal",
             "provider": "mpesa",
             "payment_method": daraja_method,
-            "collection_account": "platform_daraja",
-            "tenant_settlement_status": "pending_payment",
+            "collection_account": collection_account,
+            "daraja_credential_source": daraja_source,
+            "tenant_settlement_status": "not_required" if collection_account == "tenant_daraja" else "pending_payment",
             "tenant_payout": tenant_payout_details(tenant),
         }
     )
     try:
         checkout = initiate_daraja_payment(
-            platform_daraja_config(tenant),
+            daraja_config,
             payment_ref.key,
             amount_payable,
             phone=phone,
