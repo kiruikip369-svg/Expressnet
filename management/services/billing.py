@@ -295,7 +295,7 @@ def daraja_is_configured(tenant, payment_method=None):
     tenant = tenant or {}
     common = all(str(tenant.get(field) or "").strip() for field in ("daraja_consumer_key", "daraja_consumer_secret", "daraja_passkey"))
     if payment_method == "daraja_buygoods":
-        return common and bool(str(tenant.get("daraja_till_number") or tenant.get("daraja_shortcode") or "").strip())
+        return common and all(str(tenant.get(field) or "").strip() for field in ("daraja_shortcode", "daraja_till_number"))
     return common and bool(str(tenant.get("daraja_shortcode") or "").strip())
 
 
@@ -362,7 +362,8 @@ def get_daraja_credentials(tenant, payment_method="daraja_paybill"):
     shortcode_type_method = "daraja_buygoods" if shortcode_type.lower() == "customerbuygoodsonline" else "daraja_paybill"
     if payment_method not in {"daraja_paybill", "daraja_buygoods"}:
         payment_method = shortcode_type_method
-    business_number = (till_number or shortcode) if payment_method == "daraja_buygoods" else shortcode
+    business_number = shortcode
+    till_required = payment_method == "daraja_buygoods"
     if not all([consumer_key, consumer_secret, business_number, passkey]):
         logger.warning(
             "Daraja credentials incomplete for tenant=%s method=%s missing=%s",
@@ -382,6 +383,13 @@ def get_daraja_credentials(tenant, payment_method="daraja_paybill"):
         raise PaymentProviderError(
             "M-Pesa is not set up for this business yet. Please contact support.",
             "Tenant is missing one or more Daraja credentials",
+            503,
+        )
+    if till_required and not till_number:
+        logger.warning("Daraja Buy Goods till number missing for tenant=%s", tenant.get("id"))
+        raise PaymentProviderError(
+            "M-Pesa Buy Goods is not set up for this business yet. Please contact support.",
+            "Tenant is missing Daraja Buy Goods till number",
             503,
         )
     return {
@@ -486,11 +494,11 @@ def initiate_daraja_payment(tenant, payment_id, amount, phone, description=None,
         raise RuntimeError("PUBLIC_APP_URL or PAYSTACK_CALLBACK_BASE_URL is required for the Daraja callback URL")
 
     token = get_daraja_access_token(tenant, payment_method)
-    business_shortcode = (creds["till_number"] or creds["shortcode"]) if payment_method == "daraja_buygoods" else creds["shortcode"]
+    business_shortcode = creds["shortcode"]
     timestamp, password = daraja_timestamp_and_password(business_shortcode, creds["passkey"])
     callback_token = make_daraja_callback_token(tenant_id, payment_id)
 
-    party_b = (creds["till_number"] or business_shortcode) if payment_method == "daraja_buygoods" else business_shortcode
+    party_b = creds["till_number"] if payment_method == "daraja_buygoods" else business_shortcode
     transaction_type = "CustomerBuyGoodsOnline" if payment_method == "daraja_buygoods" else "CustomerPayBillOnline"
     logger.info(
         "Daraja STK config tenant=%s payment=%s environment=%s method=%s shortcode=%s transaction_type=%s callback_base_set=%s",
