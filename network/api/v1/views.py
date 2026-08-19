@@ -1,5 +1,6 @@
 import json
 import html
+import hashlib
 import logging
 import os
 import re
@@ -2644,7 +2645,21 @@ def _config_value(tenant, env_names, tenant_keys=(), default=""):
     return value if value else default
 
 
-def _wireguard_server_config(tenant):
+def _default_wireguard_endpoint(base_url=""):
+    configured = os.getenv("PUBLIC_BASE_URL") or os.getenv("APP_BASE_URL") or base_url
+    host = urlparse(str(configured or "")).netloc.split("@")[-1].split(":")[0]
+    return host or ""
+
+
+def _default_wireguard_router_tunnel_ip(tenant):
+    seed = str((tenant or {}).get("id") or "expressnet")
+    digest = hashlib.sha256(seed.encode("utf-8")).digest()
+    third_octet = 10 + (digest[0] % 220)
+    fourth_octet = 2 + (digest[1] % 240)
+    return f"10.9.{third_octet}.{fourth_octet}/16"
+
+
+def _wireguard_server_config(tenant, base_url=""):
     public_key = _config_value(
         tenant,
         ("WG_SERVER_PUBLIC_KEY", "WIREGUARD_SERVER_PUBLIC_KEY", "VPN_SERVER_PUBLIC_KEY"),
@@ -2654,17 +2669,19 @@ def _wireguard_server_config(tenant):
         tenant,
         ("WG_SERVER_ENDPOINT", "WG_SERVER_PUBLIC_IP", "WIREGUARD_SERVER_ENDPOINT", "WIREGUARD_ENDPOINT", "VPN_SERVER_ENDPOINT"),
         ("wg_server_endpoint", "wg_server_public_ip", "wireguard_server_endpoint", "vpn_server_endpoint"),
+        _default_wireguard_endpoint(base_url),
     )
     port = _config_value(
         tenant,
         ("WG_SERVER_PORT", "WIREGUARD_SERVER_PORT", "WIREGUARD_PORT", "VPN_SERVER_PORT"),
         ("wg_server_port", "wireguard_server_port", "vpn_server_port"),
-        "443",
+        "51820",
     )
     tunnel_ip = _config_value(
         tenant,
         ("WG_SERVER_TUNNEL_IP", "WIREGUARD_SERVER_TUNNEL_IP", "VPN_SERVER_TUNNEL_IP"),
         ("wg_server_tunnel_ip", "wireguard_server_tunnel_ip", "vpn_server_tunnel_ip"),
+        "10.9.0.1",
     ).split("/")[0]
     missing = []
     if not public_key:
@@ -2683,8 +2700,8 @@ def _wireguard_server_config(tenant):
     }
 
 
-def _radius_server_config(tenant, wg_config=None):
-    wg_config = wg_config or _wireguard_server_config(tenant)
+def _radius_server_config(tenant, wg_config=None, base_url=""):
+    wg_config = wg_config or _wireguard_server_config(tenant, base_url)
     fallback_ip = _config_value(
         tenant,
         ("RADIUS_FALLBACK_IP",),
@@ -2704,7 +2721,7 @@ def _radius_server_config(tenant, wg_config=None):
     )
     if not server_ip and wg_config.get("ready"):
         server_ip = wg_config.get("tunnel_ip") or ""
-        source_ip = source_ip or str((tenant or {}).get("wg_tunnel_ip") or os.getenv("WG_ROUTER_TUNNEL_IP") or os.getenv("WIREGUARD_ROUTER_TUNNEL_IP") or "10.9.202.70/16").split("/", 1)[0]
+        source_ip = source_ip or str((tenant or {}).get("wg_tunnel_ip") or os.getenv("WG_ROUTER_TUNNEL_IP") or os.getenv("WIREGUARD_ROUTER_TUNNEL_IP") or _default_wireguard_router_tunnel_ip(tenant)).split("/", 1)[0]
     auth_port = _config_value(tenant, ("RADIUS_AUTH_PORT",), ("radius_auth_port",), "1812")
     acct_port = _config_value(tenant, ("RADIUS_ACCT_PORT",), ("radius_acct_port",), "1813")
     return {
@@ -2761,7 +2778,7 @@ def router_provision_command(request):
     script_url = f"{public_base_url(request)}/api/router/provision/{token}"
     callback_url = f"{public_base_url(request)}/api/router/provision/{token}/complete"
     script_host = urlparse(script_url).netloc.split("@")[-1].split(":")[0]
-    wg_config = _wireguard_server_config(request.tenant)
+    wg_config = _wireguard_server_config(request.tenant, public_base_url(request))
     # NOTE: the imported .rsc script (router_provision_script) already performs
     # the full device/interface/profile snapshot AND calls the /complete
     # callback internally. Do not duplicate that work here — doing so doubles
@@ -3016,15 +3033,15 @@ def router_provision_script(request, token):
     migration_customer_script = _migration_export_provisioning_script(tenant)
     snapshot_script = _router_snapshot_fetch_script(snapshot_url)
 
-    wg_config = _wireguard_server_config(tenant)
-    radius_config = _radius_server_config(tenant, wg_config)
+    wg_config = _wireguard_server_config(tenant, app_base_url)
+    radius_config = _radius_server_config(tenant, wg_config, app_base_url)
     vpn_peer_enabled = bool(wg_config["ready"])
     radius_enabled_for_router = bool(radius_config["ready"])
     wg_server_public_key = wg_config["public_key"]
     wg_server_endpoint = wg_config["endpoint"]
     wg_server_port = wg_config["port"]
     wg_server_tunnel_ip = wg_config["tunnel_ip"]
-    wg_router_tunnel_ip = str(tenant.get("wg_tunnel_ip") or os.getenv("WG_ROUTER_TUNNEL_IP") or os.getenv("WIREGUARD_ROUTER_TUNNEL_IP") or "10.9.202.70/16").strip()
+    wg_router_tunnel_ip = str(tenant.get("wg_tunnel_ip") or os.getenv("WG_ROUTER_TUNNEL_IP") or os.getenv("WIREGUARD_ROUTER_TUNNEL_IP") or _default_wireguard_router_tunnel_ip(tenant)).strip()
     wg_router_api_ip = wg_router_tunnel_ip.split("/", 1)[0]
     wg_router_private_key = str(tenant.get("wg_private_key") or "").strip()
     callback_url = f"{callback_base_url}?vpn={'1' if vpn_peer_enabled else '0'}&vpn_peer={'1' if vpn_peer_enabled else '0'}&radius={'1' if radius_enabled_for_router else '0'}&hotspot=1"
