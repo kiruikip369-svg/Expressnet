@@ -636,7 +636,8 @@ def _public_pay_impl(request, tenant_id):
         return ok({"message": "Package not found"}, 404)
     tenant = {"id": tenant_id, **tenant_data}
     phone = normalize_phone(data["phone"])
-    router_ip = str(data.get("ip") or data.get("router_ip") or "").strip()
+    router_client_ip = str(data.get("ip") or data.get("client_ip") or "").strip()
+    router_ip = str(data.get("router_ip") or "").strip()
     router_mac = str(data.get("mac") or data.get("router_mac") or "").strip()
     link_login = str(data.get("link_login") or data.get("link-login") or "").strip()
     dst = str(data.get("dst") or data.get("link-orig") or "").strip()
@@ -650,7 +651,7 @@ def _public_pay_impl(request, tenant_id):
         return ok({"message": "TV MAC access is only available for hotspot packages"}, 400)
     amount_payable = float(pkg.get("amount_payable") or pkg.get("price") or 0)
     customer = None
-    mac_address = ""
+    mac_address = normalize_mac(router_mac) if service_type == "hotspot" else ""
     if service_type == "pppoe":
         username = str(data.get("username") or "").strip()
         if username:
@@ -688,6 +689,7 @@ def _public_pay_impl(request, tenant_id):
             "username": (customer or {}).get("username") or (username if service_type == "pppoe" else None),
             "mac_address": mac_address,
             "router_ip": router_ip,
+            "router_client_ip": router_client_ip,
             "router_mac": router_mac,
             "link_login": link_login,
             "dst": dst,
@@ -714,6 +716,7 @@ def _public_pay_impl(request, tenant_id):
                 "username": (customer or {}).get("username") or (username if service_type == "pppoe" else None),
                 "mac_address": mac_address,
                 "router_ip": router_ip,
+                "router_client_ip": router_client_ip,
                 "router_mac": router_mac,
                 "link_login": link_login,
                 "dst": dst,
@@ -2416,7 +2419,9 @@ def activate_paid_access(tenant, payment_id, payment, phone, payment_code):
     duration = package_duration_delta(pkg)
     duration_seconds = int(duration.total_seconds())
     expiry = package_expiry_date(utcnow(), pkg)
-    mac_address = normalize_mac(payment.get("mac_address") or (customer or {}).get("mac_address"))
+    router_client_mac = normalize_mac(payment.get("router_client_mac") or payment.get("router_mac"))
+    router_client_ip = str(payment.get("router_client_ip") or payment.get("ip") or "").strip()
+    mac_address = normalize_mac(payment.get("mac_address") or (router_client_mac if service_type == "hotspot" else "") or (customer or {}).get("mac_address"))
     username = mac_address if service_type == "tv" else (payment.get("username") or (customer or {}).get("username") or to_access_username(phone))
     password = str((customer or {}).get("password") or payment_code) if service_type == "pppoe" else str(payment_code)
     customer_name = _payment_customer_name({**(customer or {}), **payment}, phone, username)
@@ -2449,6 +2454,8 @@ def activate_paid_access(tenant, payment_id, payment, phone, payment_code):
                 "last_payment_id": payment_id,
                 "last_payment_code": payment_code,
                 "mac_address": mac_address,
+                "router_client_mac": router_client_mac,
+                "router_client_ip": router_client_ip,
             },
         )
     except Exception as exc:
@@ -2481,6 +2488,8 @@ def activate_paid_access(tenant, payment_id, payment, phone, payment_code):
         "package": package_for_access,
         "service_type": service_type,
         "mac_address": mac_address,
+        "router_client_mac": router_client_mac,
+        "router_client_ip": router_client_ip,
         "duration_seconds": duration_seconds,
         "expires_at": expiry.isoformat(),
         "status": "active",

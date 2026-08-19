@@ -72,7 +72,7 @@ export default function CustomerPortal() {
   const [verifying, setVerifying] = useState(false);
   const [verification, setVerification] = useState(null);
   const [error, setError] = useState('');
-  const [routerContext, setRouterContext] = useState({ ip: '', mac: '', linkLogin: '', dst: '' });
+  const [routerContext, setRouterContext] = useState({ routerIp: '', clientIp: '', mac: '', linkLogin: '', dst: '' });
   const [paymentMethod, setPaymentMethod] = useState('');
   const [pendingPaymentId, setPendingPaymentId] = useState('');
 
@@ -118,11 +118,12 @@ export default function CustomerPortal() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const routerIp = params.get('router_ip') || params.get('ip');
+    const routerIp = params.get('router_ip') || '';
+    const clientIp = params.get('ip') || '';
     const routerMac = params.get('mac');
     const linkLogin = params.get('link_login') || params.get('link-login') || '';
     const dst = params.get('dst') || params.get('link-orig') || '';
-    setRouterContext({ ip: routerIp || '', mac: routerMac || '', linkLogin, dst });
+    setRouterContext({ routerIp, clientIp, mac: routerMac || '', linkLogin, dst });
     const reference = params.get('reference') || params.get('trxref');
     if (!reference) return;
     // Carried through by the router's hotspot login.html redirect (see
@@ -170,7 +171,7 @@ export default function CustomerPortal() {
         if (data.success) {
           setPendingPaymentId('');
           toast.success('Payment verified');
-          submitRouterLogin(routerContext.ip || data.router_ip, data.username, data.password, routerContext.linkLogin || data.link_login, routerContext.dst || data.dst);
+          submitRouterLogin(routerContext.routerIp || data.router_ip, data.username, data.password, routerContext.linkLogin || data.link_login, routerContext.dst || data.dst);
         } else if (attempts >= 18) {
           setPendingPaymentId('');
         }
@@ -191,7 +192,7 @@ export default function CustomerPortal() {
       stopped = true;
       window.clearInterval(timer);
     };
-  }, [pendingPaymentId, routerContext.dst, routerContext.ip, routerContext.linkLogin, tenantId]);
+  }, [pendingPaymentId, routerContext.dst, routerContext.routerIp, routerContext.linkLogin, tenantId]);
 
   const openPayment = (pkg, type = serviceType) => {
     setSelectedPackage(pkg);
@@ -252,9 +253,10 @@ export default function CustomerPortal() {
         service_type: serviceType,
         username: pppoeUsername,
         mac_address: macAddress,
-        ip: routerContext.ip,
+        ip: routerContext.clientIp,
+        client_ip: routerContext.clientIp,
         mac: routerContext.mac,
-        router_ip: routerContext.ip,
+        router_ip: routerContext.routerIp,
         router_mac: routerContext.mac,
         link_login: routerContext.linkLogin,
         dst: routerContext.dst,
@@ -293,7 +295,7 @@ export default function CustomerPortal() {
         dst: routerContext.dst,
       });
       setRecoveredAccess(data);
-      if (data.success && submitRouterLogin(data.router_ip || routerContext.ip, data.username, data.password, data.link_login || routerContext.linkLogin, data.dst || routerContext.dst)) return;
+      if (data.success && submitRouterLogin(data.router_ip || routerContext.routerIp, data.username, data.password, data.link_login || routerContext.linkLogin, data.dst || routerContext.dst)) return;
       toast.success('Access restored');
     } catch (err) {
       toast.error(err.response?.data?.message || 'Could not recover access');
@@ -306,7 +308,7 @@ export default function CustomerPortal() {
     event.preventDefault();
     setRecovering(true);
     try {
-      const { data } = await publicApi.post(`/public/${tenantId}/voucher-login`, { code: voucherCode, router_ip: routerContext.ip, link_login: routerContext.linkLogin, dst: routerContext.dst });
+      const { data } = await publicApi.post(`/public/${tenantId}/voucher-login`, { code: voucherCode, ip: routerContext.clientIp, mac: routerContext.mac, router_ip: routerContext.routerIp, link_login: routerContext.linkLogin, dst: routerContext.dst });
       setVoucherAccess(data);
       if (!submitRouterLogin(data.router_ip, data.username, data.password, data.link_login || routerContext.linkLogin, data.dst || routerContext.dst)) toast.success('Voucher accepted. Connect through the Hotspot login page.');
     } catch (err) { toast.error(err.response?.data?.message || 'Voucher code is wrong or expired'); }
@@ -317,7 +319,7 @@ export default function CustomerPortal() {
     event.preventDefault();
     setRecovering(true);
     try {
-      const { data } = await publicApi.post(`/public/${tenantId}/voucher-login`, { username: accessUsername, password: accessPassword, router_ip: routerContext.ip, link_login: routerContext.linkLogin, dst: routerContext.dst });
+      const { data } = await publicApi.post(`/public/${tenantId}/voucher-login`, { username: accessUsername, password: accessPassword, ip: routerContext.clientIp, mac: routerContext.mac, router_ip: routerContext.routerIp, link_login: routerContext.linkLogin, dst: routerContext.dst });
       setVoucherAccess(data);
       if (!submitRouterLogin(data.router_ip, data.username, data.password, data.link_login || routerContext.linkLogin, data.dst || routerContext.dst)) toast.success('Credentials accepted. Connect through the Hotspot login page.');
     } catch (err) { toast.error(err.response?.data?.message || 'Username or password is wrong'); }

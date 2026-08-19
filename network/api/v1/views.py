@@ -42,6 +42,7 @@ from billing_api.services import (
     selected_daraja_method,
     initiate_daraja_payment,
     platform_daraja_config,
+    query_daraja_stk_payment,
     tenant_payout_details,
     make_daraja_callback_token,
     verify_daraja_callback_token,
@@ -872,6 +873,67 @@ def find_payment_by_paystack_reference(reference, tenant_id=None, payment_id=Non
     return None, None, None
 
 
+def _refresh_captive_daraja_payment(tenant_id, tenant, payment_id, payment):
+    if not payment_id or not payment:
+        return payment
+    if payment.get("status") == "success" and payment.get("access_username"):
+        return payment
+    if payment.get("status") != "success":
+        checkout_request_id = payment.get("daraja_checkout_request_id") or payment.get("checkout_request_id")
+        if not checkout_request_id:
+            return payment
+        try:
+            result = query_daraja_stk_payment(tenant, checkout_request_id, payment.get("payment_method"))
+        except PaymentProviderError as exc:
+            logger.info("Captive Daraja query pending tenant=%s payment=%s detail=%s", tenant_id, payment_id, exc.detail)
+            return payment
+        except Exception as exc:
+            logger.warning("Captive Daraja query failed tenant=%s payment=%s error=%s", tenant_id, payment_id, exc, exc_info=True)
+            return payment
+        result_code = str(result.get("ResultCode") if result.get("ResultCode") is not None else "")
+        if result_code == "0":
+            from management.api.v1.views import complete_daraja_payment
+
+            receipt = payment.get("daraja_receipt_number") or payment.get("payment_code") or checkout_request_id
+            complete_daraja_payment(
+                tenant_id,
+                payment_id,
+                {},
+                payment.get("amount") or payment.get("amount_payable"),
+                receipt,
+                iso_now(),
+                payment.get("phone"),
+            )
+        elif result_code:
+            ref(f"tenants/{tenant_id}/payments/{payment_id}").update({
+                "status": "failed",
+                "failed_at": iso_now(),
+                "callback_result_code": result_code,
+                "callback_result_desc": result.get("ResultDesc") or "M-Pesa payment was not successful",
+            })
+    refreshed = ref(f"tenants/{tenant_id}/payments/{payment_id}").get() or payment
+    if refreshed.get("status") == "success" and not refreshed.get("access_username"):
+        from management.api.v1.views import activate_paid_access
+
+        try:
+            activate_paid_access(
+                tenant,
+                payment_id,
+                refreshed,
+                refreshed.get("phone"),
+                refreshed.get("payment_code") or refreshed.get("daraja_receipt_number") or refreshed.get("daraja_checkout_request_id") or payment_id,
+            )
+        except Exception as exc:
+            logger.warning("Captive paid access activation failed tenant=%s payment=%s error=%s", tenant_id, payment_id, exc, exc_info=True)
+            ref(f"tenants/{tenant_id}/payments/{payment_id}").update({
+                "access_status": "activation_failed",
+                "access_error": str(exc),
+                "updated_at": iso_now(),
+            })
+        refreshed = ref(f"tenants/{tenant_id}/payments/{payment_id}").get() or refreshed
+    return refreshed
+
+
 @csrf_exempt
 @api_view(["GET"])
 def captive_portal_page(request, tenant_id):
@@ -889,32 +951,48 @@ def captive_portal_page(request, tenant_id):
             payment = ref(f"tenants/{tenant_id}/payments/{payment_id}").get()
         else:
             _, _, payment = find_payment_by_paystack_reference(reference, tenant_id=tenant_id)
+        payment = _refresh_captive_daraja_payment(tenant_id, {"id": tenant_id, **tenant}, payment_id, payment)
         if payment and payment.get("status") == "success":
             router_ip = _router_ip_from_captive_data(request.GET, tenant, payment)
             link_login = payment.get("link_login") or request.GET.get("link_login") or request.GET.get("link-login") or ""
             dst = payment.get("dst") or request.GET.get("dst") or request.GET.get("link-orig") or "http://connectivitycheck.gstatic.com/generate_204"
             username = payment.get("access_username") or payment.get("username") or ""
             password = payment.get("access_password") or ""
+            expires_at = payment.get("access_expires_at") or payment.get("expiry_date") or ""
             login_action = link_login or (f"http://{router_ip}/login" if router_ip else "")
             auto_redirect = ""
-            if login_action and username and password:
-                auto_redirect = (
-                    f"<form id='paid-login' method='post' action='{html.escape(str(login_action), quote=True)}'>"
-                    f"<input type='hidden' name='username' value='{html.escape(str(username), quote=True)}'>"
-                    f"<input type='hidden' name='password' value='{html.escape(str(password), quote=True)}'>"
-                    f"<input type='hidden' name='dst' value='{html.escape(str(dst), quote=True)}'>"
-                    "</form><script>setTimeout(function(){document.getElementById('paid-login').submit();}, 800);</script>"
-                )
-            payment_notice = f"""
-              <div class="card">
-                <strong>Payment successful. Internet access is ready.</strong>
-                <p class="muted">Package: {html.escape(str(payment.get('package_name') or ''))}</p>
-                <p>Username: <strong>{html.escape(str(username))}</strong></p>
-                <p>Password: <strong>{html.escape(str(password))}</strong></p>
-                {f"<p><button form='paid-login' type='submit'>Connect now</button></p>" if auto_redirect else ""}
-              </div>
-              {auto_redirect}
-            """
+            if not username or not password:
+                retry_query = dict(request.GET.items())
+                retry_url = f"/api/captive/{html.escape(str(tenant_id))}?{urlencode(retry_query)}" if retry_query else f"/api/captive/{html.escape(str(tenant_id))}"
+                access_error = payment.get("access_error")
+                detail = f"<p class='muted'>{html.escape(str(access_error))}</p>" if access_error else "<p class='muted'>Preparing your internet access now.</p>"
+                payment_notice = f"""
+                  <div class="card">
+                    <strong>Payment successful.</strong>
+                    {detail}
+                  </div>
+                  <script>setTimeout(function(){{window.location.href='{retry_url}';}}, 3000);</script>
+                """
+            else:
+                if login_action:
+                    auto_redirect = (
+                        f"<form id='paid-login' method='post' action='{html.escape(str(login_action), quote=True)}'>"
+                        f"<input type='hidden' name='username' value='{html.escape(str(username), quote=True)}'>"
+                        f"<input type='hidden' name='password' value='{html.escape(str(password), quote=True)}'>"
+                        f"<input type='hidden' name='dst' value='{html.escape(str(dst), quote=True)}'>"
+                        "</form><script>setTimeout(function(){document.getElementById('paid-login').submit();}, 300);</script>"
+                    )
+                payment_notice = f"""
+                  <div class="card">
+                    <strong>Payment successful. Internet access is ready.</strong>
+                    <p class="muted">Package: {html.escape(str(payment.get('package_name') or ''))}</p>
+                    <p>Username: <strong>{html.escape(str(username))}</strong></p>
+                    <p>Password: <strong>{html.escape(str(password))}</strong></p>
+                    <p>Expires: <strong>{html.escape(str(expires_at))}</strong></p>
+                    {f"<p><button form='paid-login' type='submit'>Connect now</button></p>" if auto_redirect else ""}
+                  </div>
+                  {auto_redirect}
+                """
         else:
             retry_query = dict(request.GET.items())
             retry_url = f"/api/captive/{html.escape(str(tenant_id))}?{urlencode(retry_query)}" if retry_query else f"/api/captive/{html.escape(str(tenant_id))}"
@@ -1284,7 +1362,9 @@ def _public_pay_impl(request, tenant_id):
     tenant = {"id": tenant_id, **tenant_data}
     phone = normalize_phone(data["phone"])
     router_ip = _router_ip_from_captive_data(data, tenant)
+    router_client_ip = str(data.get("ip") or data.get("client_ip") or "").strip()
     router_mac = str(data.get("mac") or data.get("router_mac") or "").strip()
+    router_client_mac = normalize_mac(router_mac)
     link_login = str(data.get("link_login") or data.get("link-login") or "").strip()
     dst = str(data.get("dst") or data.get("link-orig") or "").strip()
     service_type = str(data.get("service_type") or "hotspot").strip().lower()
@@ -1297,7 +1377,7 @@ def _public_pay_impl(request, tenant_id):
         return ok({"message": "TV MAC access is only available for hotspot packages"}, 400)
     amount_payable = float(pkg.get("amount_payable") or pkg.get("price") or 0)
     customer = None
-    mac_address = ""
+    mac_address = router_client_mac if service_type == "hotspot" else ""
     if service_type == "pppoe":
         username = str(data.get("username") or "").strip()
         if username:
@@ -1335,6 +1415,8 @@ def _public_pay_impl(request, tenant_id):
             "username": (customer or {}).get("username") or (username if service_type == "pppoe" else None),
             "mac_address": mac_address,
             "router_ip": router_ip,
+            "router_client_ip": router_client_ip,
+            "router_client_mac": router_client_mac,
             "router_mac": router_mac,
             "link_login": link_login,
             "dst": dst,
@@ -1361,6 +1443,8 @@ def _public_pay_impl(request, tenant_id):
                 "username": (customer or {}).get("username") or (username if service_type == "pppoe" else None),
                 "mac_address": mac_address,
                 "router_ip": router_ip,
+                "router_client_ip": router_client_ip,
+                "router_client_mac": router_client_mac,
                 "router_mac": router_mac,
                 "link_login": link_login,
                 "dst": dst,
@@ -1692,7 +1776,7 @@ def public_voucher_login(request, tenant_id):
             router_ip=result.get("router_ip"),
             link_login=result.get("link_login"),
             dst=result.get("dst"),
-            delay_ms=12000 if result.get("router_status") == "queued" else 800,
+            delay_ms=4000 if result.get("router_status") == "queued" else 300,
         )
         if not login_form:
             return _html_page("Voucher accepted", "<main><div class='card'>Voucher accepted. Please open the router login page to connect.</div></main>")
@@ -3464,7 +3548,7 @@ def router_provision_script(request, token):
         {verification_script}
         {provisioning_callback_script}
         :do {{ /system scheduler remove [find name="billing-saas-agent"] }} on-error={{}}
-        /system scheduler add name="billing-saas-agent" interval=10s on-event=":do {{ /file remove [find name=\\"billing-saas-cmd.rsc\\"] }} on-error={{}}; :do {{ /tool fetch url=\\"{agent_poll_url}\\" dst-path=billing-saas-cmd.rsc }} on-error={{ :log warning \\"Billing SaaS agent: command fetch failed\\" }}; :if ([:len [/file find name=\\"billing-saas-cmd.rsc\\"]] > 0) do={{ :do {{ /import billing-saas-cmd.rsc }} on-error={{ :log warning \\"Billing SaaS agent: command import failed\\" }} }};"
+        /system scheduler add name="billing-saas-agent" interval=3s on-event=":do {{ /file remove [find name=\\"billing-saas-cmd.rsc\\"] }} on-error={{}}; :do {{ /tool fetch url=\\"{agent_poll_url}\\" dst-path=billing-saas-cmd.rsc }} on-error={{ :log warning \\"Billing SaaS agent: command fetch failed\\" }}; :if ([:len [/file find name=\\"billing-saas-cmd.rsc\\"]] > 0) do={{ :do {{ /import billing-saas-cmd.rsc }} on-error={{ :log warning \\"Billing SaaS agent: command import failed\\" }} }};"
         :log info "Billing SaaS provisioning complete. No customer ports were moved; assign Hotspot or PPPoE ports from the dashboard.";
         :put "Configuration completed successfully. No customer ports were moved; assign Hotspot or PPPoE ports from the dashboard.";
         """
