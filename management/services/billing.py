@@ -178,8 +178,7 @@ def initiate_daraja_stk(tenant, payment_id, amount, phone, payment_method="daraj
         transaction_type = "CustomerPayBillOnline"
     if not shortcode:
         raise PaymentProviderError("The Daraja shortcode or Buy Goods till number is required.", "Missing Daraja shortcode", 400)
-    environment = str(tenant.get("daraja_environment") or "sandbox").lower()
-    base = "https://api.safaricom.co.ke" if environment == "production" else "https://sandbox.safaricom.co.ke"
+    base = daraja_base_url(tenant)
     token_response = requests.get(f"{base}/oauth/v1/generate?grant_type=client_credentials", auth=(consumer_key, consumer_secret), timeout=30)
     token_response.raise_for_status()
     token = token_response.json().get("access_token")
@@ -230,25 +229,54 @@ def verify_paystack_signature(raw_body, signature, secret):
 # approval queue in this codebase yet; this is the natural equivalent.
 # ---------------------------------------------------------------------------
 
-def platform_daraja_config(tenant=None):
-    tenant = tenant or {}
+def _clean_daraja_config(source):
+    source = source or {}
+    return {
+        "daraja_consumer_key": str(source.get("daraja_consumer_key") or "").strip(),
+        "daraja_consumer_secret": str(source.get("daraja_consumer_secret") or "").strip(),
+        "daraja_shortcode": str(source.get("daraja_shortcode") or "").strip(),
+        "daraja_passkey": str(source.get("daraja_passkey") or "").strip(),
+        "daraja_till_number": str(source.get("daraja_till_number") or "").strip(),
+        "daraja_environment": str(source.get("daraja_environment") or "production").strip(),
+        "daraja_shortcode_type": str(source.get("daraja_shortcode_type") or "CustomerPayBillOnline").strip(),
+    }
+
+
+def _platform_only_daraja_config():
     mpesa_environment = os.getenv("MPESA_ENVIRONMENT")
     use_mpesa_aliases_first = str(mpesa_environment or "").strip().lower() == "sandbox"
-    consumer_key = os.getenv("MPESA_CONSUMER_KEY") if use_mpesa_aliases_first and not tenant.get("daraja_consumer_key") else None
-    consumer_secret = os.getenv("MPESA_CONSUMER_SECRET") if use_mpesa_aliases_first and not tenant.get("daraja_consumer_secret") else None
-    shortcode = (os.getenv("MPESA_SHORTCODE") or os.getenv("MPESA_BUSINESS_SHORTCODE")) if use_mpesa_aliases_first and not tenant.get("daraja_shortcode") else None
-    passkey = os.getenv("MPESA_PASSKEY") if use_mpesa_aliases_first and not tenant.get("daraja_passkey") else None
-    till_number = (os.getenv("MPESA_TILL_NUMBER") or os.getenv("MPESA_BUSINESS_SHORTCODE")) if use_mpesa_aliases_first and not tenant.get("daraja_till_number") else None
-    shortcode_type = os.getenv("MPESA_SHORTCODE_TYPE") if use_mpesa_aliases_first and not tenant.get("daraja_shortcode_type") else None
+    consumer_key = os.getenv("MPESA_CONSUMER_KEY") if use_mpesa_aliases_first else None
+    consumer_secret = os.getenv("MPESA_CONSUMER_SECRET") if use_mpesa_aliases_first else None
+    shortcode = (os.getenv("MPESA_SHORTCODE") or os.getenv("MPESA_BUSINESS_SHORTCODE")) if use_mpesa_aliases_first else None
+    passkey = os.getenv("MPESA_PASSKEY") if use_mpesa_aliases_first else None
+    till_number = (os.getenv("MPESA_TILL_NUMBER") or os.getenv("MPESA_BUSINESS_SHORTCODE")) if use_mpesa_aliases_first else None
+    shortcode_type = os.getenv("MPESA_SHORTCODE_TYPE") if use_mpesa_aliases_first else None
+    return {
+        "daraja_consumer_key": consumer_key or os.getenv("DARAJA_CONSUMER_KEY") or os.getenv("MPESA_CONSUMER_KEY"),
+        "daraja_consumer_secret": consumer_secret or os.getenv("DARAJA_CONSUMER_SECRET") or os.getenv("MPESA_CONSUMER_SECRET"),
+        "daraja_shortcode": shortcode or os.getenv("DARAJA_SHORTCODE") or os.getenv("MPESA_SHORTCODE") or os.getenv("MPESA_BUSINESS_SHORTCODE"),
+        "daraja_passkey": passkey or os.getenv("DARAJA_PASSKEY") or os.getenv("MPESA_PASSKEY"),
+        "daraja_till_number": till_number or os.getenv("DARAJA_TILL_NUMBER") or os.getenv("MPESA_TILL_NUMBER") or os.getenv("MPESA_BUSINESS_SHORTCODE"),
+        "daraja_environment": mpesa_environment or os.getenv("DARAJA_ENVIRONMENT") or "production",
+        "daraja_shortcode_type": shortcode_type or os.getenv("DARAJA_SHORTCODE_TYPE") or os.getenv("MPESA_SHORTCODE_TYPE") or "CustomerPayBillOnline",
+    }
+
+
+def platform_daraja_config(tenant=None, payment_method=None):
+    tenant = tenant or {}
+    method = selected_daraja_method_raw(tenant, payment_method)
+    tenant_config = _clean_daraja_config(tenant)
+    platform_config = _clean_daraja_config(_platform_only_daraja_config())
+    if daraja_is_configured(tenant_config, method):
+        source = "tenant"
+        config = tenant_config
+    else:
+        source = "platform"
+        config = platform_config
     return {
         **tenant,
-        "daraja_consumer_key": tenant.get("daraja_consumer_key") or consumer_key or os.getenv("DARAJA_CONSUMER_KEY") or os.getenv("MPESA_CONSUMER_KEY"),
-        "daraja_consumer_secret": tenant.get("daraja_consumer_secret") or consumer_secret or os.getenv("DARAJA_CONSUMER_SECRET") or os.getenv("MPESA_CONSUMER_SECRET"),
-        "daraja_shortcode": tenant.get("daraja_shortcode") or shortcode or os.getenv("DARAJA_SHORTCODE") or os.getenv("MPESA_SHORTCODE") or os.getenv("MPESA_BUSINESS_SHORTCODE"),
-        "daraja_passkey": tenant.get("daraja_passkey") or passkey or os.getenv("DARAJA_PASSKEY") or os.getenv("MPESA_PASSKEY"),
-        "daraja_till_number": tenant.get("daraja_till_number") or till_number or os.getenv("DARAJA_TILL_NUMBER") or os.getenv("MPESA_TILL_NUMBER") or os.getenv("MPESA_BUSINESS_SHORTCODE"),
-        "daraja_environment": tenant.get("daraja_environment") or mpesa_environment or os.getenv("DARAJA_ENVIRONMENT") or "production",
-        "daraja_shortcode_type": tenant.get("daraja_shortcode_type") or shortcode_type or os.getenv("DARAJA_SHORTCODE_TYPE") or os.getenv("MPESA_SHORTCODE_TYPE") or "CustomerPayBillOnline",
+        **config,
+        "daraja_credential_source": source,
     }
 
 
@@ -275,13 +303,28 @@ def tenant_uses_daraja(tenant):
     return daraja_is_configured(platform_daraja_config(tenant), selected_daraja_method(tenant))
 
 
-def selected_daraja_method(tenant, requested_method=None):
-    tenant = platform_daraja_config(tenant)
+def selected_daraja_method_raw(tenant, requested_method=None):
+    tenant = tenant or {}
     requested = str(requested_method or "").strip().lower()
+    if requested in {"paybill", "mpesa_paybill"}:
+        return "daraja_paybill"
+    if requested in {"buygoods", "buy_goods", "mpesa_buygoods"}:
+        return "daraja_buygoods"
     if requested in {"daraja_paybill", "daraja_buygoods"}:
         return requested
     methods = tenant.get("payment_methods") if isinstance(tenant.get("payment_methods"), list) else []
-    selected = next((str(item).strip().lower() for item in methods if str(item).strip().lower() in {"daraja_paybill", "daraja_buygoods"}), "")
+    selected = ""
+    for item in methods:
+        value = str(item).strip().lower()
+        if value in {"paybill", "mpesa_paybill"}:
+            selected = "daraja_paybill"
+            break
+        if value in {"buygoods", "buy_goods", "mpesa_buygoods"}:
+            selected = "daraja_buygoods"
+            break
+        if value in {"daraja_paybill", "daraja_buygoods"}:
+            selected = value
+            break
     if selected:
         return selected
     shortcode_type = str(tenant.get("daraja_shortcode_type") or "").strip().lower()
@@ -295,13 +338,21 @@ def selected_daraja_method(tenant, requested_method=None):
     return "daraja_paybill"
 
 
-def daraja_base_url(tenant):
+def selected_daraja_method(tenant, requested_method=None):
+    return selected_daraja_method_raw(tenant, requested_method)
+
+
+def daraja_environment_name(tenant):
     environment = str((tenant or {}).get("daraja_environment") or "production").strip().lower()
-    return "https://api.safaricom.co.ke" if environment == "production" else "https://sandbox.safaricom.co.ke"
+    return "sandbox" if environment in {"sandbox", "test", "testing"} else "production"
+
+
+def daraja_base_url(tenant):
+    return "https://api.safaricom.co.ke" if daraja_environment_name(tenant) == "production" else "https://sandbox.safaricom.co.ke"
 
 
 def get_daraja_credentials(tenant, payment_method="daraja_paybill"):
-    tenant = platform_daraja_config(tenant)
+    tenant = platform_daraja_config(tenant, payment_method)
     consumer_key = str(tenant.get("daraja_consumer_key") or "").strip()
     consumer_secret = str(tenant.get("daraja_consumer_secret") or "").strip()
     shortcode = str(tenant.get("daraja_shortcode") or "").strip()
@@ -309,7 +360,7 @@ def get_daraja_credentials(tenant, payment_method="daraja_paybill"):
     till_number = str(tenant.get("daraja_till_number") or "").strip()
     shortcode_type = str(tenant.get("daraja_shortcode_type") or "CustomerPayBillOnline").strip()
     shortcode_type_method = "daraja_buygoods" if shortcode_type.lower() == "customerbuygoodsonline" else "daraja_paybill"
-    if payment_method not in {"daraja_paybill", "daraja_buygoods"} or payment_method != shortcode_type_method:
+    if payment_method not in {"daraja_paybill", "daraja_buygoods"}:
         payment_method = shortcode_type_method
     business_number = (till_number or shortcode) if payment_method == "daraja_buygoods" else shortcode
     if not all([consumer_key, consumer_secret, business_number, passkey]):
@@ -417,11 +468,12 @@ def daraja_phone_format(phone):
 
 
 def initiate_daraja_payment(tenant, payment_id, amount, phone, description=None, metadata=None, payment_method="daraja_paybill"):
-    tenant = platform_daraja_config(tenant)
     payment_method = selected_daraja_method(tenant, payment_method)
+    tenant = platform_daraja_config(tenant, payment_method)
     creds = get_daraja_credentials(tenant, payment_method)
     shortcode_type = str(creds.get("shortcode_type") or "CustomerPayBillOnline").strip()
-    payment_method = "daraja_buygoods" if shortcode_type.lower() == "customerbuygoodsonline" else "daraja_paybill"
+    if payment_method not in {"daraja_paybill", "daraja_buygoods"}:
+        payment_method = "daraja_buygoods" if shortcode_type.lower() == "customerbuygoodsonline" else "daraja_paybill"
     tenant_id = (tenant or {}).get("id")
     formatted_phone = daraja_phone_format(phone)
     if not formatted_phone or not formatted_phone.startswith("254") or len(formatted_phone) != 12:

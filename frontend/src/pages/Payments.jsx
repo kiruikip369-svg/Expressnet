@@ -74,6 +74,11 @@ export default function Payments() {
   const [savingMethods, setSavingMethods] = useState(false);
   const [methodsOpen, setMethodsOpen] = useState(false);
   const [settlementStatus, setSettlementStatus] = useState('not_created');
+  const onlineMethod = (method) => {
+    if (method === 'paybill') return 'daraja_paybill';
+    if (method === 'buygoods') return 'daraja_buygoods';
+    return method;
+  };
 
   async function loadPayments() {
     setLoading(true);
@@ -104,18 +109,22 @@ export default function Payments() {
       tillNumber: data.daraja_till_number || '',
       environment: data.daraja_environment || 'production',
       });
-      const method = (data.payment_methods || [])[0];
+      const method = onlineMethod((data.payment_methods || [])[0]);
       setSelectedMethod(['daraja_paybill', 'daraja_buygoods'].includes(method) ? method : 'daraja_paybill');
       setSettlementStatus(data.settlement_status || 'missing_payout_details');
     }).catch(() => {});
   }, []);
 
-  const selectMethod = (method) => { setSelectedMethod(method); setPaymentSettings((current) => ({ ...current, methods: [method] })); };
+  const selectMethod = (method) => {
+    const normalized = onlineMethod(method);
+    setSelectedMethod(normalized);
+    setPaymentSettings((current) => ({ ...current, methods: [normalized] }));
+  };
   const savePaymentMethods = async () => {
     setSavingMethods(true);
     try {
       const { data } = await api.patch('/settings/business', {
-        payment_methods: paymentSettings.methods,
+        payment_methods: paymentSettings.methods.map(onlineMethod),
         business_number: paymentSettings.businessNumber,
         payout_phone: paymentSettings.payoutPhone,
         bank_code: paymentSettings.bankCode,
@@ -127,7 +136,7 @@ export default function Payments() {
         daraja_passkey: paymentSettings.passkey,
         daraja_till_number: paymentSettings.tillNumber,
         daraja_environment: paymentSettings.environment,
-        daraja_shortcode_type: selectedMethod === 'daraja_buygoods' ? 'CustomerBuyGoodsOnline' : 'CustomerPayBillOnline',
+        daraja_shortcode_type: onlineMethod(selectedMethod) === 'daraja_buygoods' ? 'CustomerBuyGoodsOnline' : 'CustomerPayBillOnline',
         payment_provider: 'mpesa',
       });
       setSettlementStatus(data.config?.settlement_status || 'ready');

@@ -1992,7 +1992,16 @@ def settings_business(request):
                 updates[field] = bool(data[field])
             elif field == "payment_methods":
                 requested = data[field] if isinstance(data[field], list) else [data[field]]
-                updates[field] = [str(item).strip().lower() for item in requested if str(item).strip().lower() in {"daraja_paybill", "daraja_buygoods"}] or ["daraja_paybill"]
+                normalized_methods = []
+                for item in requested:
+                    value = str(item).strip().lower()
+                    if value in {"paybill", "mpesa_paybill"}:
+                        value = "daraja_paybill"
+                    elif value in {"buygoods", "buy_goods", "mpesa_buygoods"}:
+                        value = "daraja_buygoods"
+                    if value in {"daraja_paybill", "daraja_buygoods"}:
+                        normalized_methods.append(value)
+                updates[field] = normalized_methods or ["daraja_paybill"]
             elif field == "payment_provider":
                 updates[field] = "mpesa"
             elif field == "daraja_shortcode_type":

@@ -2209,7 +2209,7 @@ def _customer_secret_script(customer):
     if service_type not in {"pppoe", "hotspot"}:
         service_type = "hotspot"
     username = _rsc_escape(customer.get("username") or "")
-    password = _rsc_escape(customer.get("password") or "")
+    password = _rsc_escape(customer.get("password") or customer.get("radius_secret") or "")
     profile = _rsc_escape(customer.get("package") or customer.get("package_name") or "default")
     client_ip = _rsc_escape(customer.get("router_client_ip") or customer.get("client_ip") or customer.get("ip") or "")
     client_mac = _rsc_escape(normalize_mac(customer.get("router_client_mac") or customer.get("mac_address") or customer.get("mac") or ""))
@@ -3029,11 +3029,11 @@ def router_provision_script(request, token):
     package_by_name = {str(pkg.get("name") or ""): pkg for pkg in tenant_packages}
     tenant_customers = [
         {
-            **customer,
-            "speed": (package_by_name.get(str(customer.get("package") or "")) or {}).get("speed"),
+            **customer.as_dict(),
+            "speed": (package_by_name.get(str(customer.package or "")) or {}).get("speed"),
         }
-        for customer in list_children(f"tenants/{tenant_id}/customers")
-        if customer.get("username") and str(customer.get("service_type") or "hotspot").lower() in {"pppoe", "hotspot"}
+        for customer in Customer.objects.filter(tenant_id=tenant_id)
+        if customer.username and str(customer.service_type or "hotspot").lower() in {"pppoe", "hotspot"}
     ]
     customer_secret_script = "".join(_customer_secret_script(customer) for customer in tenant_customers)
     migration_customer_script = _migration_export_provisioning_script(tenant)
