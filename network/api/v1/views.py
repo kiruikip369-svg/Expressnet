@@ -2084,6 +2084,9 @@ def router_ports(request):
     wan_interface = str(request.tenant.get("mikrotik_wan_interface") or "ether1").strip()
     if interface_name == wan_interface or interface_name.lower() == "ether1":
         return ok({"message": f"{interface_name} looks like the WAN/uplink port. Choose a customer LAN port instead."}, 400)
+    if service_type in {"pppoe", "both"} and interface_name.lower().startswith(("wlan", "wifi", "wireless")):
+        service_type = "hotspot"
+        profile_name = "Expressnet-profile"
     if service_type == "both" or (_router_is_agent_linked(request.tenant) and not has_mikrotik_credentials(request.tenant)):
         return _queue_router_port_command(request, interface_name, service_type, profile_name)
     try:
@@ -2114,17 +2117,20 @@ def router_ports(request):
 def _queue_router_port_command(request, interface_name, service_type, profile_name):
     if service_type not in {"pppoe", "hotspot", "both"}:
         return ok({"message": "Port service must be PPPoE, Hotspot, or both"}, 400)
+    if service_type in {"pppoe", "both"} and str(interface_name or "").lower().startswith(("wlan", "wifi", "wireless")):
+        service_type = "hotspot"
+        profile_name = "Expressnet-profile"
 
     tenant_id = request.tenant["id"]
     portal_url = captive_portal_url({"id": tenant_id, **request.tenant}, public_base_url(request).rstrip("/")) if service_type in {"hotspot", "both"} else None
     bridge_name = mikrotik_managed_bridge_name(request.tenant)
     if service_type == "both":
         script = (
-            _build_port_command_script(interface_name, "pppoe", profile_name, None, bridge_name)
-            + _build_port_command_script(interface_name, "hotspot", "Expressnet-profile", portal_url, bridge_name)
+            _build_port_command_script(interface_name, "pppoe", profile_name, None, bridge_name, {"id": tenant_id, **request.tenant})
+            + _build_port_command_script(interface_name, "hotspot", "Expressnet-profile", portal_url, bridge_name, {"id": tenant_id, **request.tenant})
         )
     else:
-        script = _build_port_command_script(interface_name, service_type, profile_name, portal_url, bridge_name)
+        script = _build_port_command_script(interface_name, service_type, profile_name, portal_url, bridge_name, {"id": tenant_id, **request.tenant})
 
     commands = [c for c in (request.tenant.get("pending_router_commands") or []) if c.get("status") == "pending"][-19:]
     commands.append({
@@ -3374,6 +3380,9 @@ def router_provision_script(request, token):
         :do {{ /ip pool add name={hotspot_pool_name} ranges={_rsc_escape(dhcp_pool)} comment="IP Pool created by Expressnet" }} on-error={{ /ip pool set [find name={hotspot_pool_name}] ranges={_rsc_escape(dhcp_pool)} comment="IP Pool created by Expressnet" }}
         :do {{ /ip dhcp-server add name=Expressnet-dhcp interface=$billingBridge address-pool={hotspot_pool_name} disabled=no lease-time=4h }} on-error={{ /ip dhcp-server set [find name=Expressnet-dhcp] interface=$billingBridge address-pool={hotspot_pool_name} disabled=no lease-time=4h }}
         :do {{ /ip dhcp-server network add address={_rsc_escape(lan_network)} gateway={_rsc_escape(lan_gateway)} dns-server={_rsc_escape(lan_gateway)} }} on-error={{ /ip dhcp-server network set [find address={_rsc_escape(lan_network)}] gateway={_rsc_escape(lan_gateway)} dns-server={_rsc_escape(lan_gateway)} }}
+        :do {{ /interface bridge filter remove [find comment~"billing-saas pppoe-only wlan"] }} on-error={{}}
+        :do {{ /interface bridge filter remove [find comment~"billing-saas pppoe-only wifi"] }} on-error={{}}
+        :do {{ /interface bridge filter remove [find comment~"billing-saas pppoe-only wireless"] }} on-error={{}}
         :log info "Billing SaaS: configuring only Expressnet-managed firewall and NAT rules";
         /ip service enable api;
         :do {{ /ip service set api disabled=no }} on-error={{}}
@@ -3477,11 +3486,7 @@ def router_agent_poll(request, token):
     })
 
     all_commands = tenant.get("pending_router_commands") or []
-    commands = [
-        c
-        for c in all_commands
-        if c.get("status") == "pending" or (c.get("status") == "delivered" and int(c.get("delivery_attempts") or 0) < 5)
-    ]
+    commands = [c for c in all_commands if c.get("status") == "pending"]
     base_url = public_base_url(request).rstrip("/")
     if not commands:
         return HttpResponse(':log info "Billing SaaS agent: no pending commands";\n', content_type="text/plain")

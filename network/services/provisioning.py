@@ -1047,6 +1047,8 @@ def configure_router_port(tenant, interface_name, service_type, profile_name="de
     service_type = str(service_type or "").lower().strip()
     if service_type not in {"pppoe", "hotspot"}:
         raise ValueError("Port service must be either pppoe or hotspot")
+    if service_type == "pppoe" and str(interface_name or "").lower().startswith(("wlan", "wifi", "wireless")):
+        service_type = "hotspot"
 
     api = router_connect(tenant)
     try:
@@ -1242,6 +1244,11 @@ def _rsc_escape(value):
 
 
 def _build_port_command_script(interface_name, service_type, profile_name, portal_url, bridge_name=None, tenant=None):
+    interface_lower = str(interface_name or "").lower()
+    service_type = str(service_type or "").lower().strip()
+    if service_type == "pppoe" and interface_lower.startswith(("wlan", "wifi", "wireless")):
+        service_type = "hotspot"
+        portal_url = portal_url or captive_portal_url(tenant)
     bridge_name = bridge_name or mikrotik_managed_bridge_name()
     portal_comment = portal_url or ""
     portal_host = urlparse(portal_url or "").netloc.split("@")[-1].split(":")[0]
@@ -1325,8 +1332,8 @@ def _build_port_command_script(interface_name, service_type, profile_name, porta
 
     # --- Hotspot server creation ---
     hotspot_server_block = (
-        f'  {hotspot_setup}'
         f'  :do {{ /interface bridge filter remove [find comment="billing-saas pppoe-only {interface_name}"] }} on-error={{}}; '
+        f'  {hotspot_setup}'
         f'  :do {{ /interface wireless security-profiles add name="billing-saas-open" mode=none authentication-types="" wpa-pre-shared-key="" wpa2-pre-shared-key="" supplicant-identity="billing-saas" }} on-error={{ /interface wireless security-profiles set [find name="billing-saas-open"] mode=none authentication-types="" wpa-pre-shared-key="" wpa2-pre-shared-key="" supplicant-identity="billing-saas" }}; '
         f'  :do {{ /interface wireless set [find name="{interface_name}"] security-profile="billing-saas-open" disabled=no }} on-error={{}}; '
         f'  :local billingHs [/ip hotspot find interface="{bridge_name}"]; '
