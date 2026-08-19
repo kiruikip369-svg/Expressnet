@@ -1226,7 +1226,7 @@ def captive_hotspot_file(request, tenant_id, page):
 def captive_portal_pay(request, tenant_id):
     data = body(request)
     try:
-        response = _public_pay_impl(request, tenant_id)
+        response = _public_pay_impl(getattr(request, "_request", request), tenant_id)
     except Exception as exc:
         logger.exception("Captive portal payment failed before provider response tenant=%s error=%s", tenant_id, exc)
         return _html_page(
