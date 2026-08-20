@@ -53,7 +53,7 @@ const sections = [
       { to: '/vouchers', label: 'Vouchers', icon: WalletCards },
       { to: '/equipment', label: 'Tools & Equipments', icon: Wrench },
       { to: '/requisitions', label: 'Requisitions', icon: ClipboardList },
-      { to: '/reports/management', label: 'Management Report', icon: FileBarChart },
+      // { to: '/reports/management', label: 'Management Report', icon: FileBarChart },
     ],
   },
   {
@@ -91,7 +91,7 @@ const sections = [
     links: [
       { to: '/mikrotik', label: 'Mikrotik', icon: Gauge },
       { to: '/mikrotik/link', label: 'TR-069', icon: Gauge },
-      { to: '/reports/network', label: 'Network Report', icon: RadioTower },
+      // { to: '/reports/network', label: 'Network Report', icon: RadioTower },
     ],
   },
   {

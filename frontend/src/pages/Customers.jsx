@@ -1,5 +1,5 @@
-import { CreditCard, Database, Download, Pause, Pencil, PlugZap, Plus, RefreshCw, Router, Search, Trash2, Users, Wifi } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { ChevronDown, CreditCard, Database, Download, Pause, Pencil, PlugZap, Plus, RefreshCw, Router, Search, Trash2, Users, Wifi } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import api from '../api/axios';
 import Modal from '../components/Modal';
@@ -65,6 +65,8 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
   const [form, setForm] = useState(initialForm);
   const [errors, setErrors] = useState({});
   const [editingId, setEditingId] = useState(null);
+  const [openActionsId, setOpenActionsId] = useState(null);
+  const actionsRef = useRef(null);
   const isHotspotOnlyPage = serviceLocked === 'hotspot';
   const hideManualAccessActions = serviceLocked === 'pppoe' || serviceLocked === 'hotspot';
   const activeFormService = serviceLocked || form.service_type || 'pppoe';
@@ -176,6 +178,27 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
     setForm((current) => ({ ...current, service_type: serviceLocked || initialForm.service_type }));
   }, [initialFilter, serviceLocked]);
 
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (actionsRef.current && !actionsRef.current.contains(event.target)) {
+        setOpenActionsId(null);
+      }
+    }
+    function handleKeyDown(event) {
+      if (event.key === 'Escape') setOpenActionsId(null);
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, []);
+
+  const toggleActions = (id) => {
+    setOpenActionsId((current) => (current === id ? null : id));
+  };
+
   const update = (event) => {
     const { name, type, checked, value } = event.target;
     setForm((current) => ({
@@ -272,6 +295,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
   };
 
   const editCustomer = (customer) => {
+    setOpenActionsId(null);
     setEditingId(customer.id);
     setForm({
       name: customer.name || '',
@@ -298,6 +322,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
   };
 
   const renewCustomer = async (customer) => {
+    setOpenActionsId(null);
     const packageName = window.prompt('Renew with package name', customer.package || packages[0]?.name || '');
     if (!packageName) return;
     const selected = packages.find((pkg) => pkg.name === packageName);
@@ -337,6 +362,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
   };
 
   const deleteCustomer = async (customer) => {
+    setOpenActionsId(null);
     if (!window.confirm(`Delete ${customer.name}?`)) return;
 
     setDeletingId(customer.id);
@@ -352,6 +378,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
   };
 
   const startPayment = async (customer) => {
+    setOpenActionsId(null);
     const selectedPackage = packageMap[customer.package];
     setPayingId(customer.id);
     try {
@@ -375,6 +402,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
   };
 
   const provisionCustomer = async (customer) => {
+    setOpenActionsId(null);
     setProvisioningId(customer.id);
     try {
       await api.post(`/customers/${customer.id}/provision`);
@@ -398,7 +426,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
               : 'Manage PPPoE, Hotspot, and Static users from one page, with active and inactive filters.'}
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <button type="button" className="btn-secondary" onClick={exportCsv}>
             <Download size={15} />
             Export CSV
@@ -411,14 +439,14 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
       </div>
 
       <section className="border-b border-slate-200">
-        <div className="flex flex-wrap gap-4">
+        <div className="flex flex-wrap gap-3 sm:gap-4 overflow-x-auto">
           {userFilterTabs.map(([key, label, count, Icon]) => {
             const active = statusFilter === key;
             return (
               <button
                 key={key}
                 type="button"
-                className={`flex h-10 items-center gap-2 border-b-2 px-0 text-xs font-normal transition ${
+                className={`flex h-10 shrink-0 items-center gap-2 border-b-2 px-0 text-xs font-normal transition ${
                   active ? 'border-[var(--app-accent)] text-[var(--app-accent)]' : 'border-transparent text-slate-500 hover:text-slate-900'
                 }`}
                 onClick={() => setStatusFilter(key)}
@@ -451,7 +479,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
       </section>
 
       <div className="table-shell overflow-x-auto">
-        <table className={`${isHotspotOnlyPage ? 'min-w-[920px]' : 'min-w-[1120px]'} divide-y divide-slate-200`}>
+        <table className={`${isHotspotOnlyPage ? 'min-w-[820px]' : 'min-w-[1020px]'} w-full divide-y divide-slate-200`}>
           <thead className="table-head">
             <tr>
               <th className="px-3 py-2">Name</th>
@@ -463,7 +491,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
               <th className="px-3 py-2">MikroTik</th>
               <th className="px-3 py-2">Expiry</th>
               <th className="px-3 py-2">Status</th>
-              <th className="sticky right-0 border-l border-slate-200 bg-slate-50 px-3 py-2">Actions</th>
+              <th className="sticky right-0 border-l border-slate-200 bg-slate-50 px-3 py-2 text-right">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
@@ -487,32 +515,82 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
                 </td>
                 <td className={`table-cell px-3 ${expiryClass(customer.expiry_date)}`}>{formatDate(customer.expiry_date)}</td>
                 <td className="table-cell px-3"><StatusBadge status={customer.status} /></td>
-                <td className="table-cell sticky right-0 border-l border-slate-200 bg-white px-3">
-                  <div className="flex flex-nowrap gap-2">
-                    {!hideManualAccessActions && (
-                      <button type="button" className="btn-secondary" onClick={() => provisionCustomer(customer)} disabled={provisioningId === customer.id}>
-                        <Router size={16} />
-                        {provisioningId === customer.id ? 'Provisioning...' : 'Provision'}
-                      </button>
+                <td className="table-cell sticky right-0 border-l border-slate-200 bg-white px-3 text-right">
+                  <div
+                    className="relative inline-block text-left"
+                    ref={openActionsId === customer.id ? actionsRef : null}
+                  >
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => toggleActions(customer.id)}
+                      aria-haspopup="true"
+                      aria-expanded={openActionsId === customer.id}
+                    >
+                      Actions
+                      <ChevronDown size={16} className={`transition-transform ${openActionsId === customer.id ? 'rotate-180' : ''}`} />
+                    </button>
+
+                    {openActionsId === customer.id && (
+                      <div
+                        className="absolute right-0 z-20 mt-1 w-44 origin-top-right rounded-md border border-slate-200 bg-white py-1 shadow-lg"
+                        role="menu"
+                      >
+                        {!hideManualAccessActions && (
+                          <button
+                            type="button"
+                            role="menuitem"
+                            className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                            onClick={() => provisionCustomer(customer)}
+                            disabled={provisioningId === customer.id}
+                          >
+                            <Router size={15} />
+                            {provisioningId === customer.id ? 'Provisioning...' : 'Provision'}
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          role="menuitem"
+                          className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                          onClick={() => startPayment(customer)}
+                          disabled={payingId === customer.id}
+                        >
+                          <CreditCard size={15} />
+                          {payingId === customer.id ? 'Sending...' : 'Pay'}
+                        </button>
+                        {!hideManualAccessActions && serviceTypeOf(customer) !== 'pppoe' && (
+                          <button
+                            type="button"
+                            role="menuitem"
+                            className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-slate-700 hover:bg-slate-50"
+                            onClick={() => renewCustomer(customer)}
+                          >
+                            <RefreshCw size={15} />
+                            Renew
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          role="menuitem"
+                          className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-slate-700 hover:bg-slate-50"
+                          onClick={() => editCustomer(customer)}
+                        >
+                          <Pencil size={15} />
+                          Edit
+                        </button>
+                        <div className="my-1 border-t border-slate-100" />
+                        <button
+                          type="button"
+                          role="menuitem"
+                          className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-red-600 hover:bg-red-50 disabled:opacity-50"
+                          onClick={() => deleteCustomer(customer)}
+                          disabled={deletingId === customer.id}
+                        >
+                          <Trash2 size={15} />
+                          {deletingId === customer.id ? 'Deleting...' : 'Delete'}
+                        </button>
+                      </div>
                     )}
-                    <button type="button" className="btn-secondary" onClick={() => startPayment(customer)} disabled={payingId === customer.id}>
-                      <CreditCard size={16} />
-                      {payingId === customer.id ? 'Sending...' : 'Pay'}
-                    </button>
-                    {!hideManualAccessActions && serviceTypeOf(customer) !== 'pppoe' && (
-                      <button type="button" className="btn-secondary" onClick={() => renewCustomer(customer)}>
-                        <RefreshCw size={16} />
-                        Renew
-                      </button>
-                    )}
-                    <button type="button" className="btn-secondary" onClick={() => editCustomer(customer)}>
-                      <Pencil size={16} />
-                      Edit
-                    </button>
-                    <button type="button" className="btn-danger" onClick={() => deleteCustomer(customer)} disabled={deletingId === customer.id}>
-                      <Trash2 size={16} />
-                      {deletingId === customer.id ? 'Deleting...' : 'Delete'}
-                    </button>
                   </div>
                 </td>
               </tr>
