@@ -161,10 +161,18 @@ function MetricTile({ icon: Icon, title, value, helper, percent }) {
   );
 }
 
-function TrafficChart({ rx, tx }) {
-  const max = Math.max(Number(rx || 0), Number(tx || 0), 1);
-  const upload = [0.1, 0.15, 0.12, 0.18, 0.16, 0.2, 0.17].map((v, i) => `${i * 40},${104 - (v * tx / max * 70)}`);
-  const download = [0.2, 0.18, 0.22, 0.19, 0.24, 0.21, 0.25].map((v, i) => `${i * 40},${104 - (v * rx / max * 70)}`);
+function TrafficChart({ series }) {
+  const rows = series.length ? series : [{ rx: 0, tx: 0, sampledAt: Date.now() }];
+  const max = Math.max(...rows.map((item) => Math.max(Number(item.rx || 0), Number(item.tx || 0))), 1);
+  const width = 280;
+  const step = rows.length <= 1 ? 0 : width / (rows.length - 1);
+  const y = (value) => 104 - (Number(value || 0) / max) * 84;
+  const upload = rows.map((item, index) => `${index * step},${y(item.tx)}`);
+  const download = rows.map((item, index) => `${index * step},${y(item.rx)}`);
+  const firstTime = rows[0]?.sampledAt ? new Date(rows[0].sampledAt) : null;
+  const lastTime = rows[rows.length - 1]?.sampledAt ? new Date(rows[rows.length - 1].sampledAt) : null;
+  const formatTime = (date) => (date && !Number.isNaN(date.valueOf()) ? date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--');
+
   return (
     <div className="theme-card-muted rounded-md border p-3">
       <div className="flex items-center justify-between gap-3">
@@ -179,11 +187,8 @@ function TrafficChart({ rx, tx }) {
         {[0, 1, 2, 3, 4].map((i) => <line key={`v-${i}`} y1="16" y2="108" x1={i * 70} x2={i * 70} stroke={GRID_LINE} opacity="0.6" />)}
         <polyline points={upload.join(' ')} fill="none" stroke="var(--app-accent)" strokeWidth="2" />
         <polyline points={download.join(' ')} fill="none" stroke="var(--app-accent-soft)" strokeWidth="2" />
-        <text x="0" y="122" fontSize="10" fill={AXIS_TEXT}>00:00</text>
-        <text x="74" y="122" fontSize="10" fill={AXIS_TEXT}>06:00</text>
-        <text x="142" y="122" fontSize="10" fill={AXIS_TEXT}>12:00</text>
-        <text x="210" y="122" fontSize="10" fill={AXIS_TEXT}>18:00</text>
-        <text x="252" y="122" fontSize="10" fill={AXIS_TEXT}>24:00</text>
+        <text x="0" y="122" fontSize="10" fill={AXIS_TEXT}>{formatTime(firstTime)}</text>
+        <text x="224" y="122" fontSize="10" fill={AXIS_TEXT}>{formatTime(lastTime)}</text>
       </svg>
     </div>
   );
@@ -221,6 +226,7 @@ export default function Dashboard() {
   const [dashboard, setDashboard] = useState(null);
   const [routerResources, setRouterResources] = useState(null);
   const [payments, setPayments] = useState([]);
+  const [trafficSeries, setTrafficSeries] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [darkMode, setDarkMode] = useState(() => readDarkMode());
@@ -296,6 +302,18 @@ export default function Dashboard() {
   const rx = Number(router.network_rx_bps || 0);
   const tx = Number(router.network_tx_bps || 0);
   const activeSessionCount = Number(router.active_sessions?.total || 0);
+  const connectedUsers = Math.max(activeUsers, activeSessionCount);
+
+  useEffect(() => {
+    if (!dashboard && !routerResources) return;
+    const sampledAtValue = router.sampled_at || new Date().toISOString();
+    setTrafficSeries((previous) => {
+      const sampleKey = String(sampledAtValue);
+      const last = previous[previous.length - 1];
+      if (last?.sampledAt === sampleKey && last.rx === rx && last.tx === tx) return previous;
+      return [...previous, { rx, tx, sampledAt: sampleKey }].slice(-24);
+    });
+  }, [dashboard, routerResources, router.sampled_at, rx, tx]);
   const packageRows = [
     { label: 'PPPoE', value: pppoeUsers },
     { label: 'Hotspot', value: hotspotUsers },
@@ -339,7 +357,7 @@ export default function Dashboard() {
 
       <section className={`grid gap-4 ${canViewEarnings ? 'xl:grid-cols-4' : 'xl:grid-cols-3'}`}>
         <KpiCard icon={Users} title="Total Users" value={totalUsers.toLocaleString('en-KE')} pills={[`PPPoE: ${pppoeUsers}`, `Hotspot: ${hotspotUsers}`, `Static: ${staticUsers}`]} action="View users" to="/customers" />
-        <KpiCard icon={Activity} title="Connected Users" value={activeUsers.toLocaleString('en-KE')} helper="Currently online" action="Live sessions" to="/mikrotik">
+        <KpiCard icon={Activity} title="Connected Users" value={connectedUsers.toLocaleString('en-KE')} helper="Currently online" action="Live sessions" to="/mikrotik">
           <Sparkline />
         </KpiCard>
         {canViewEarnings && <KpiCard icon={Wallet} title="Daily Earnings" value={formatKES(summary.daraja_revenue_today ?? summary.revenue_today)} helper="Successful Daraja payments today" action="View payments" to="/payments" />}
@@ -364,7 +382,7 @@ export default function Dashboard() {
               <MetricTile icon={Cpu} title="CPU Status" value={`${cpu}%`} helper={router.board_name || '--'} />
               <MetricTile icon={Gauge} title="Uptime" value={router.uptime || '0s'} helper={router.sample_source || '--'} />
             </div>
-            <TrafficChart rx={rx} tx={tx} />
+            <TrafficChart series={trafficSeries} />
           </div>
         </Card>
 

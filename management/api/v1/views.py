@@ -1777,6 +1777,48 @@ def dashboard_stats(request):
         c for c in hotspot_customers
         if str(c.get("status") or "").lower() == "active"
     ]
+    def snapshot_active_sessions(router_snapshot):
+        migration = ((router_snapshot or {}).get("migration_export") or {})
+        ppp_rows = migration.get("ppp_active_sessions") or []
+        hotspot_rows = migration.get("hotspot_active_sessions") or []
+
+        def numeric_bytes(item):
+            total = 0
+            for key in ("bytes_in", "bytes_out", "bytes-in", "bytes-out", "input_octets", "output_octets"):
+                try:
+                    total += int(float((item or {}).get(key) or 0))
+                except (TypeError, ValueError):
+                    pass
+            return total
+
+        items = [
+            {
+                "username": item.get("name") or item.get("user") or "-",
+                "service_type": "pppoe",
+                "address": item.get("address") or item.get("caller_id") or "",
+                "mac_address": item.get("caller_id") or "",
+                "uptime": item.get("uptime") or "",
+                "data_used": numeric_bytes(item),
+                "server": item.get("service") or "",
+            }
+            for item in ppp_rows
+            if isinstance(item, dict)
+        ] + [
+            {
+                "username": item.get("user") or item.get("name") or item.get("mac_address") or "-",
+                "service_type": "hotspot",
+                "address": item.get("address") or "",
+                "mac_address": item.get("mac_address") or "",
+                "uptime": item.get("uptime") or "",
+                "data_used": numeric_bytes(item),
+                "server": item.get("server") or "",
+            }
+            for item in hotspot_rows
+            if isinstance(item, dict)
+        ]
+        items = sorted(items, key=lambda item: item["data_used"], reverse=True)
+        return {"pppoe": len(ppp_rows), "hotspot": len(hotspot_rows), "total": len(items), "items": items}
+
     snapshot = request.tenant.get("mikrotik_router_snapshot") or {}
     router_sample_source = "provisioning_snapshot"
     try:
@@ -1786,8 +1828,10 @@ def dashboard_stats(request):
     except Exception as exc:
         logger.warning("Dashboard live MikroTik sample failed tenant=%s error=%s", tenant_id, exc)
     device = snapshot.get("device") or {}
-    cpu_load = device.get("cpu_load") if router_sample_source == "routeros_api" else None
-    router_status = "suspended" if request.tenant.get("mikrotik_router_suspended") else "online" if router_sample_source == "routeros_api" or request.tenant.get("mikrotik_last_seen_at") else "offline"
+    cpu_load = device.get("cpu_load")
+    last_seen = parse_date(request.tenant.get("mikrotik_last_seen_at"))
+    agent_online = bool(last_seen and utcnow() - last_seen <= timedelta(minutes=3))
+    router_status = "suspended" if request.tenant.get("mikrotik_router_suspended") else "online" if router_sample_source == "routeros_api" or agent_online else "offline"
     active_ratio = (len([c for c in customers_data if c.get("status") == "active"]) / len(customers_data) * 100) if customers_data else 0
     traffic = snapshot.get("traffic") or {}
     traffic_bps = int(traffic.get("rx_bps") or 0) + int(traffic.get("tx_bps") or 0)
@@ -1800,9 +1844,9 @@ def dashboard_stats(request):
         strongest_signal = max(signal_values)
         internet_strength_percent = max(0, min(100, round((strongest_signal + 90) / 40 * 100)))
     else:
-        internet_strength_percent = 100 if router_sample_source == "routeros_api" else 0
-    traffic_percent = round(min((traffic_bps / 1_000_000), 100), 1) if router_sample_source == "routeros_api" and traffic_bps else 0
-    active_sessions = snapshot.get("active_sessions") if router_sample_source == "routeros_api" else {}
+        internet_strength_percent = 0
+    traffic_percent = round(min((traffic_bps / 1_000_000), 100), 1) if traffic_bps and router_status == "online" else 0
+    active_sessions = snapshot.get("active_sessions") if isinstance(snapshot.get("active_sessions"), dict) else snapshot_active_sessions(snapshot)
     active_session_items = active_sessions.get("items") if isinstance(active_sessions, dict) else []
     active_session_usernames = {
         str(item.get("username") or "").strip().lower()
@@ -1870,9 +1914,9 @@ def dashboard_stats(request):
                 "cpu_load_percent": cpu_load,
                 "internet_strength_percent": internet_strength_percent,
                 "traffic_percent": traffic_percent,
-                "network_traffic_bps": traffic_bps if router_sample_source == "routeros_api" else 0,
-                "network_rx_bps": traffic.get("rx_bps") if router_sample_source == "routeros_api" else 0,
-                "network_tx_bps": traffic.get("tx_bps") if router_sample_source == "routeros_api" else 0,
+                "network_traffic_bps": traffic_bps if router_status == "online" else 0,
+                "network_rx_bps": traffic.get("rx_bps") if router_status == "online" else 0,
+                "network_tx_bps": traffic.get("tx_bps") if router_status == "online" else 0,
                 "active_sessions": active_sessions,
                 "top_active_sessions": top_active_sessions,
                 "sample_source": router_sample_source,

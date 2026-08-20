@@ -2897,6 +2897,48 @@ def router_reboot(request):
 @api_view(["GET"])
 @tenant_required
 def router_resources(request):
+    def snapshot_active_sessions(status):
+        migration = ((status or {}).get("migration_export") or {})
+        ppp_rows = migration.get("ppp_active_sessions") or []
+        hotspot_rows = migration.get("hotspot_active_sessions") or []
+
+        def numeric_bytes(item):
+            total = 0
+            for key in ("bytes_in", "bytes_out", "bytes-in", "bytes-out", "input_octets", "output_octets"):
+                try:
+                    total += int(float((item or {}).get(key) or 0))
+                except (TypeError, ValueError):
+                    pass
+            return total
+
+        items = [
+            {
+                "username": item.get("name") or item.get("user") or "-",
+                "service_type": "pppoe",
+                "address": item.get("address") or item.get("caller_id") or "",
+                "mac_address": item.get("caller_id") or "",
+                "uptime": item.get("uptime") or "",
+                "data_used": numeric_bytes(item),
+                "server": item.get("service") or "",
+            }
+            for item in ppp_rows
+            if isinstance(item, dict)
+        ] + [
+            {
+                "username": item.get("user") or item.get("name") or item.get("mac_address") or "-",
+                "service_type": "hotspot",
+                "address": item.get("address") or "",
+                "mac_address": item.get("mac_address") or "",
+                "uptime": item.get("uptime") or "",
+                "data_used": numeric_bytes(item),
+                "server": item.get("server") or "",
+            }
+            for item in hotspot_rows
+            if isinstance(item, dict)
+        ]
+        items = sorted(items, key=lambda item: item["data_used"], reverse=True)
+        return {"pppoe": len(ppp_rows), "hotspot": len(hotspot_rows), "total": len(items), "items": items}
+
     def resource_payload(status, source="routeros_api", message="Live MikroTik resource sample."):
         device = status.get("device", {})
         total = float(device.get("total_memory") or 0)
@@ -2916,8 +2958,8 @@ def router_resources(request):
             except (TypeError, ValueError):
                 pass
         strongest_signal = max(numeric_signals) if numeric_signals else None
-        internet_strength = max(0, min(100, round((strongest_signal + 90) / 40 * 100))) if strongest_signal is not None else (100 if source == "routeros_api" else 0)
-        active_sessions = status.get("active_sessions") or {}
+        internet_strength = max(0, min(100, round((strongest_signal + 90) / 40 * 100))) if strongest_signal is not None else 0
+        active_sessions = status.get("active_sessions") if isinstance(status.get("active_sessions"), dict) else snapshot_active_sessions(status)
         active_session_items = active_sessions.get("items") if isinstance(active_sessions, dict) else []
         return {
             "cpu_load_percent": device.get("cpu_load"),
@@ -2952,6 +2994,12 @@ def router_resources(request):
             "sampled_at": iso_now(),
             "message": message,
         }
+
+    if not has_mikrotik_credentials(request.tenant):
+        snapshot = request.tenant.get("mikrotik_router_snapshot") or {}
+        if _router_is_agent_linked(request.tenant) and snapshot:
+            return ok(resource_payload(snapshot, "agent_report", "Showing the latest resource snapshot reported by the linked MikroTik agent."))
+        return ok({"message": "Live MikroTik resources require reachable RouterOS API credentials or a linked router agent."}, 503)
 
     try:
         status = router_interface_status(request.tenant)
