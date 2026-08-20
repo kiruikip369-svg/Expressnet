@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
-import { BookOpen, PackagePlus, PlugZap, RefreshCw, Router, Search, Sparkles, Wifi } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { BookOpen, ChevronDown, ChevronLeft, ChevronRight, Edit2, PackagePlus, PlugZap, RefreshCw, Router, Search, Sparkles, Trash2, Wifi } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../api/axios';
 import Modal from '../components/Modal';
@@ -39,6 +40,182 @@ function packageType(pkg) {
 
 function amountPayable(pkg) {
   return Number(pkg?.amount_payable ?? pkg?.price ?? 0);
+}
+
+const MENU_WIDTH = 176; // w-44
+const MENU_MARGIN = 6;
+
+function ActionsMenu({ pkg, onSync, onEdit, onDelete, syncing, deleting }) {
+  const [open, setOpen] = useState(false);
+  const [coords, setCoords] = useState({ top: 0, left: 0, openUp: false });
+  const triggerRef = useRef(null);
+  const menuRef = useRef(null);
+
+  const computeCoords = () => {
+    const btn = triggerRef.current;
+    if (!btn) return;
+    const rect = btn.getBoundingClientRect();
+    const menuHeight = 132; // approx height for 3 items
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const openUp = spaceBelow < menuHeight + MENU_MARGIN;
+
+    setCoords({
+      top: openUp ? rect.top - MENU_MARGIN : rect.bottom + MENU_MARGIN,
+      left: Math.min(rect.right - MENU_WIDTH, window.innerWidth - MENU_WIDTH - 8),
+      openUp,
+    });
+  };
+
+  const toggleOpen = () => {
+    if (!open) computeCoords();
+    setOpen((current) => !current);
+  };
+
+  useEffect(() => {
+    if (!open) return;
+
+    function handleClickOutside(event) {
+      if (
+        menuRef.current && !menuRef.current.contains(event.target) &&
+        triggerRef.current && !triggerRef.current.contains(event.target)
+      ) {
+        setOpen(false);
+      }
+    }
+    function handleReposition() {
+      computeCoords();
+    }
+
+    document.addEventListener('mousedown', handleClickOutside);
+    window.addEventListener('scroll', handleReposition, true);
+    window.addEventListener('resize', handleReposition);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      window.removeEventListener('scroll', handleReposition, true);
+      window.removeEventListener('resize', handleReposition);
+    };
+  }, [open]);
+
+  const handleAction = (action) => {
+    setOpen(false);
+    action();
+  };
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+        onClick={toggleOpen}
+        aria-label="Actions"
+      >
+        <ChevronDown size={16} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+
+      {open && createPortal(
+        <div
+          ref={menuRef}
+          className="fixed z-[9999] w-44 rounded-md border border-slate-200 bg-white py-1 shadow-lg"
+          style={{
+            top: coords.openUp ? undefined : coords.top,
+            bottom: coords.openUp ? window.innerHeight - coords.top : undefined,
+            left: coords.left,
+          }}
+        >
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+            onClick={() => handleAction(() => onSync(pkg))}
+            disabled={syncing}
+          >
+            <RefreshCw size={15} className={syncing ? 'animate-spin' : ''} />
+            {syncing ? 'Syncing...' : 'Sync Router'}
+          </button>
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
+            onClick={() => handleAction(() => onEdit(pkg))}
+          >
+            <Edit2 size={15} />
+            Edit
+          </button>
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 disabled:opacity-50"
+            onClick={() => handleAction(() => onDelete(pkg))}
+            disabled={deleting}
+          >
+            <Trash2 size={15} />
+            {deleting ? 'Deleting...' : 'Delete'}
+          </button>
+        </div>,
+        document.body
+      )}
+    </>
+  );
+}
+
+function ScrollableActionBar({ children }) {
+  const scrollRef = useRef(null);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(false);
+
+  const updateScrollState = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    setCanScrollLeft(el.scrollLeft > 4);
+    setCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 4);
+  };
+
+  useEffect(() => {
+    updateScrollState();
+    const el = scrollRef.current;
+    if (!el) return;
+    el.addEventListener('scroll', updateScrollState);
+    window.addEventListener('resize', updateScrollState);
+    return () => {
+      el.removeEventListener('scroll', updateScrollState);
+      window.removeEventListener('resize', updateScrollState);
+    };
+  }, []);
+
+  const scrollBy = (amount) => {
+    scrollRef.current?.scrollBy({ left: amount, behavior: 'smooth' });
+  };
+
+  return (
+    <div className="relative flex items-center">
+      {canScrollLeft && (
+        <button
+          type="button"
+          className="absolute left-0 z-10 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 shadow-sm sm:hidden"
+          onClick={() => scrollBy(-140)}
+          aria-label="Scroll left"
+        >
+          <ChevronLeft size={16} />
+        </button>
+      )}
+
+      <div
+        ref={scrollRef}
+        className="flex flex-nowrap items-center gap-1.5 overflow-x-auto scroll-smooth px-1 pb-1 sm:gap-2 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]"
+      >
+        {children}
+      </div>
+
+      {canScrollRight && (
+        <button
+          type="button"
+          className="absolute right-0 z-10 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 shadow-sm sm:hidden"
+          onClick={() => scrollBy(140)}
+          aria-label="Scroll right"
+        >
+          <ChevronRight size={16} />
+        </button>
+      )}
+    </div>
+  );
 }
 
 export default function Packages() {
@@ -267,36 +444,53 @@ export default function Packages() {
 
   return (
     <div className="space-y-4">
-      <section className="surface-card">
-        <div className="flex flex-col gap-4 p-4 lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <h1 className="page-title">Packages</h1>
-            <p className="page-subtitle">Manage internet packages for your clients, pricing, speeds, schedules, and MikroTik profiles.</p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <button type="button" className="btn-secondary" onClick={applyQuickTemplate}>
-              <Sparkles size={17} />
-              Quick Templates
-            </button>
-            <button type="button" className="btn-secondary" onClick={() => toast('Use speed formats like 5M/5M, 10M/10M, or 512K/512K.')}>
-              <BookOpen size={17} />
-              Package Guide
-            </button>
-            <button type="button" className="btn-secondary" onClick={syncAllPackages} disabled={syncingAll || packages.length === 0}>
-              <RefreshCw size={17} className={syncingAll ? 'animate-spin' : ''} />
-              {syncingAll ? 'Syncing...' : 'Sync All'}
-            </button>
-            <button type="button" className="btn-primary" onClick={openAddModal}>
-              <PackagePlus size={17} />
-              Create Package
-            </button>
-          </div>
-        </div>
-      </section>
+      <div>
+        <h1 className="page-title">Packages</h1>
+      </div>
+
+      <ScrollableActionBar>
+        <button
+          type="button"
+          className="btn-secondary shrink-0 whitespace-nowrap px-2 py-1.5 text-[11px] leading-tight sm:px-3 sm:py-2 sm:text-sm"
+          onClick={applyQuickTemplate}
+        >
+          <Sparkles size={14} className="shrink-0 sm:hidden" />
+          <Sparkles size={17} className="hidden shrink-0 sm:inline" />
+          Quick Templates
+        </button>
+        <button
+          type="button"
+          className="btn-secondary shrink-0 whitespace-nowrap px-2 py-1.5 text-[11px] leading-tight sm:px-3 sm:py-2 sm:text-sm"
+          onClick={() => toast('Use speed formats like 5M/5M, 10M/10M, or 512K/512K.')}
+        >
+          <BookOpen size={14} className="shrink-0 sm:hidden" />
+          <BookOpen size={17} className="hidden shrink-0 sm:inline" />
+          Package Guide
+        </button>
+        <button
+          type="button"
+          className="btn-secondary shrink-0 whitespace-nowrap px-2 py-1.5 text-[11px] leading-tight sm:px-3 sm:py-2 sm:text-sm"
+          onClick={syncAllPackages}
+          disabled={syncingAll || packages.length === 0}
+        >
+          <RefreshCw size={14} className={`shrink-0 sm:hidden ${syncingAll ? 'animate-spin' : ''}`} />
+          <RefreshCw size={17} className={`hidden shrink-0 sm:inline ${syncingAll ? 'animate-spin' : ''}`} />
+          {syncingAll ? 'Syncing...' : 'Sync All'}
+        </button>
+        <button
+          type="button"
+          className="btn-primary shrink-0 whitespace-nowrap px-2 py-1.5 text-[11px] leading-tight sm:px-3 sm:py-2 sm:text-sm"
+          onClick={openAddModal}
+        >
+          <PackagePlus size={14} className="shrink-0 sm:hidden" />
+          <PackagePlus size={17} className="hidden shrink-0 sm:inline" />
+          Create Package
+        </button>
+      </ScrollableActionBar>
 
       <section className="space-y-3">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-nowrap items-center gap-3 overflow-x-auto sm:gap-4">
             {[
               ['all', 'All'],
               ['hotspot', 'Hotspot'],
@@ -306,13 +500,15 @@ export default function Packages() {
               <button
                 key={key}
                 type="button"
-                className={`inline-flex h-9 items-center gap-2 rounded-md border px-3 text-sm font-medium ${
-                  filter === key ? 'border-app-navy bg-app-navy text-white' : 'border-slate-200 bg-white text-app-navy'
+                className={`shrink-0 whitespace-nowrap border-b-2 pb-1 text-xs font-medium transition-colors sm:text-sm ${
+                  filter === key
+                    ? 'border-app-navy text-app-navy'
+                    : 'border-transparent text-slate-500 hover:text-app-navy'
                 }`}
                 onClick={() => setFilter(key)}
               >
                 {label}
-                <span className={`rounded px-1.5 text-xs ${filter === key ? 'bg-white text-app-navy' : 'bg-app-navy text-white'}`}>{counts[key]}</span>
+                <span className="ml-1 text-[10px] text-slate-400 sm:text-xs">({counts[key]})</span>
               </button>
             ))}
           </div>
@@ -333,7 +529,7 @@ export default function Packages() {
                 <th className="px-4 py-3">Amount Payable</th>
                 <th className="px-4 py-3">Active</th>
                 <th className="px-4 py-3">Router</th>
-                <th className="px-4 py-3">Actions</th>
+                <th className="px-4 py-3 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -365,19 +561,15 @@ export default function Packages() {
                       {pkg.ppp_profile_status || 'pending'}
                     </span>
                   </td>
-                  <td className="table-cell">
-                    <div className="flex flex-wrap gap-2">
-                      <button type="button" className="btn-secondary" onClick={() => syncPackage(pkg)} disabled={syncingId === pkg.id}>
-                        <RefreshCw size={15} className={syncingId === pkg.id ? 'animate-spin' : ''} />
-                        {syncingId === pkg.id ? 'Syncing...' : 'Sync Router'}
-                      </button>
-                      <button type="button" className="btn-secondary" onClick={() => openEditModal(pkg)}>
-                        Edit
-                      </button>
-                      <button type="button" className="btn-danger" onClick={() => deletePackage(pkg)} disabled={deletingId === pkg.id}>
-                        {deletingId === pkg.id ? 'Deleting...' : 'Delete'}
-                      </button>
-                    </div>
+                  <td className="table-cell text-right">
+                    <ActionsMenu
+                      pkg={pkg}
+                      onSync={syncPackage}
+                      onEdit={openEditModal}
+                      onDelete={deletePackage}
+                      syncing={syncingId === pkg.id}
+                      deleting={deletingId === pkg.id}
+                    />
                   </td>
                 </tr>
               ))}

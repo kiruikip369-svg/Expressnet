@@ -224,20 +224,16 @@ export default function IspOperations() {
 
   return (
     <div className="space-y-6">
-      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-          <div>
-            <h1 className="text-lg font-semibold text-slate-800">Tasks</h1>
-            <p className="text-sm text-slate-500">Assign field work, follow-ups, customer support, and marketing tasks.</p>
-          </div>
-          {canCreate && (
+      <div className='absolute  right-[30px] sm:right-[60px] top-[60px]'>
+        {canCreate && (
             <button type="button" className="btn-primary" onClick={openCreateForm}>
               <Plus size={16} />
               New task
             </button>
           )}
-        </div>
-      </section>
+      </div>
+        
+     
 
       {showForm && (
         <Modal title={editingId ? 'Edit Task' : 'Create Task'} onClose={() => setShowForm(false)}>
@@ -335,7 +331,7 @@ export default function IspOperations() {
         </Modal>
       )}
 
-      <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
+      <section className="rounded-xl border border-slate-200 bg-white shadow-md">
         <div className="border-b border-slate-100 p-4">
           <label className="relative block max-w-sm">
             <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
