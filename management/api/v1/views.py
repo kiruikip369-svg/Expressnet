@@ -703,7 +703,7 @@ def _public_pay_impl(request, tenant_id):
             },
             payment_method=daraja_method,
         )
-        payment_ref.update({"daraja_checkout_request_id": checkout.get("checkout_request_id"), "daraja_merchant_request_id": checkout.get("merchant_request_id"), "checkout_requested_at": iso_now()})
+        payment_ref.update({"daraja_checkout_request_id": checkout.get("checkout_request_id"), "daraja_merchant_request_id": checkout.get("merchant_request_id"), "daraja_callback_url": checkout.get("callback_url"), "checkout_requested_at": iso_now()})
         return ok({
             "success": True,
             "message": checkout.get("customer_message") or "Check your phone and enter your M-Pesa PIN to complete payment.",
@@ -2638,6 +2638,12 @@ def daraja_callback(request, tenant_id, payment_id, token):
     stk_callback = (((event or {}).get("Body") or {}).get("stkCallback")) or {}
     result_code = stk_callback.get("ResultCode")
     result_desc = stk_callback.get("ResultDesc") or ""
+    ref(f"tenants/{tenant_id}/payments/{payment_id}").update({
+        "daraja_callback_received_at": iso_now(),
+        "daraja_callback_result_code": result_code,
+        "daraja_callback_result_desc": result_desc,
+        "daraja_callback_payload": event,
+    })
 
     if str(result_code) != "0":
         logger.warning(

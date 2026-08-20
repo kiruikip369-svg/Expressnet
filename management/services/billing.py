@@ -53,6 +53,7 @@ def initiate_daraja_stk(tenant, payment_id, amount, phone, payment_method="daraj
     password = base64.b64encode(f"{shortcode}{passkey}{timestamp}".encode()).decode()
     tenant_id = tenant.get("id")
     callback_token = make_daraja_callback_token(tenant_id, payment_id)
+    callback_url = f"{base_url}/api/daraja/callback/{tenant_id}/{payment_id}/{callback_token}"
     callback = f"{get_public_base_url()}/api/daraja/callback/{tenant_id}/{payment_id}/{callback_token}"
     payload = {"BusinessShortCode": shortcode, "Password": password, "Timestamp": timestamp, "TransactionType": transaction_type, "Amount": max(1, int(round(float(amount or 0)))), "PartyA": normalize_phone(phone), "PartyB": shortcode, "PhoneNumber": normalize_phone(phone), "CallBackURL": callback, "AccountReference": str(payment_id), "TransactionDesc": description or "Internet package"}
     response = requests.post(f"{base}/mpesa/stkpush/v1/processrequest", headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"}, json=payload, timeout=30)
@@ -361,7 +362,7 @@ def initiate_daraja_payment(tenant, payment_id, amount, phone, description=None,
         "PartyA": formatted_phone,
         "PartyB": party_b,
         "PhoneNumber": formatted_phone,
-        "CallBackURL": f"{base_url}/api/daraja/callback/{tenant_id}/{payment_id}/{callback_token}",
+        "CallBackURL": callback_url,
         "AccountReference": str((tenant or {}).get("business_name") or tenant_id)[:12],
         "TransactionDesc": (description or "Internet package")[:13],
     }
@@ -419,18 +420,20 @@ def initiate_daraja_payment(tenant, payment_id, amount, phone, description=None,
             502,
         )
     logger.info(
-        "Daraja STK push started for tenant=%s payment=%s method=%s checkout=%s merchant=%s",
+        "Daraja STK push started for tenant=%s payment=%s method=%s checkout=%s merchant=%s callback_url=%s",
         tenant_id,
         payment_id,
         payment_method,
         data.get("CheckoutRequestID"),
         data.get("MerchantRequestID"),
+        callback_url,
     )
     return {
         "checkout_request_id": data.get("CheckoutRequestID"),
         "merchant_request_id": data.get("MerchantRequestID"),
         "phone": formatted_phone,
         "customer_message": data.get("CustomerMessage"),
+        "callback_url": callback_url,
     }
 
 

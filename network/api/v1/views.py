@@ -1406,7 +1406,7 @@ def _public_pay_impl(request, tenant_id):
             },
             payment_method=daraja_method,
         )
-        payment_ref.update({"daraja_checkout_request_id": checkout.get("checkout_request_id"), "daraja_merchant_request_id": checkout.get("merchant_request_id"), "checkout_requested_at": iso_now()})
+        payment_ref.update({"daraja_checkout_request_id": checkout.get("checkout_request_id"), "daraja_merchant_request_id": checkout.get("merchant_request_id"), "daraja_callback_url": checkout.get("callback_url"), "checkout_requested_at": iso_now()})
         return ok({
             "success": True,
             "message": checkout.get("customer_message") or "Check your phone and enter your M-Pesa PIN to complete payment.",
