@@ -53,9 +53,11 @@ def initiate_daraja_stk(tenant, payment_id, amount, phone, payment_method="daraj
     password = base64.b64encode(f"{shortcode}{passkey}{timestamp}".encode()).decode()
     tenant_id = tenant.get("id")
     callback_token = make_daraja_callback_token(tenant_id, payment_id)
+    base_url = get_public_base_url()
+    if not base_url:
+        raise RuntimeError("PUBLIC_APP_URL or DARAJA_CALLBACK_BASE_URL is required for the Daraja callback URL")
     callback_url = f"{base_url}/api/daraja/callback/{tenant_id}/{payment_id}/{callback_token}"
-    callback = f"{get_public_base_url()}/api/daraja/callback/{tenant_id}/{payment_id}/{callback_token}"
-    payload = {"BusinessShortCode": shortcode, "Password": password, "Timestamp": timestamp, "TransactionType": transaction_type, "Amount": max(1, int(round(float(amount or 0)))), "PartyA": normalize_phone(phone), "PartyB": shortcode, "PhoneNumber": normalize_phone(phone), "CallBackURL": callback, "AccountReference": str(payment_id), "TransactionDesc": description or "Internet package"}
+    payload = {"BusinessShortCode": shortcode, "Password": password, "Timestamp": timestamp, "TransactionType": transaction_type, "Amount": max(1, int(round(float(amount or 0)))), "PartyA": normalize_phone(phone), "PartyB": shortcode, "PhoneNumber": normalize_phone(phone), "CallBackURL": callback_url, "AccountReference": str(payment_id), "TransactionDesc": description or "Internet package"}
     response = requests.post(f"{base}/mpesa/stkpush/v1/processrequest", headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"}, json=payload, timeout=30)
     response.raise_for_status()
     result = response.json()
@@ -340,6 +342,7 @@ def initiate_daraja_payment(tenant, payment_id, amount, phone, description=None,
     business_shortcode = creds["shortcode"]
     timestamp, password = daraja_timestamp_and_password(business_shortcode, creds["passkey"])
     callback_token = make_daraja_callback_token(tenant_id, payment_id)
+    callback_url = f"{base_url}/api/daraja/callback/{tenant_id}/{payment_id}/{callback_token}"
 
     party_b = creds["till_number"] if payment_method == "daraja_buygoods" else business_shortcode
     transaction_type = "CustomerBuyGoodsOnline" if payment_method == "daraja_buygoods" else "CustomerPayBillOnline"
