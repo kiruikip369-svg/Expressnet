@@ -614,6 +614,13 @@ def _html_page(title, body, status=200):
     .muted{{color:#cbd5e1;font-size:13px}} .price{{font-weight:800;color:#fff}}
     .section-title{{margin:22px 0 12px;font-size:20px;font-weight:750;color:#fff}}
     .alert{{background:#2b1806;border:1px solid #9a5b16;color:#fed7aa;border-radius:8px;padding:12px;margin:12px 0}}
+    .connect-card{{text-align:center}}
+    .spinner{{width:48px;height:48px;margin:0 auto 14px;border:4px solid rgba(255,255,255,.16);border-top-color:var(--portal-accent,#2600d8);border-radius:999px;animation:spin .8s linear infinite}}
+    .access-grid{{display:grid;gap:8px;margin-top:14px;text-align:left}}
+    .access-row{{display:flex;align-items:center;justify-content:space-between;gap:12px;border:1px solid rgba(255,255,255,.1);border-radius:8px;background:rgba(0,0,0,.22);padding:10px 12px}}
+    .access-row span{{color:#cbd5e1;font-size:12px;font-weight:700}}
+    .access-row strong{{overflow-wrap:anywhere;text-align:right;font-size:13px}}
+    @keyframes spin{{to{{transform:rotate(360deg)}}}}
     .buy-btn{{width:auto;min-width:84px;padding-left:22px;padding-right:22px}}
     .pay-modal{{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.72);padding:18px;z-index:20}}
     .pay-modal:target{{display:flex}}
@@ -910,43 +917,43 @@ def captive_portal_page(request, tenant_id):
             password = payment.get("access_password") or ""
             expires_at = payment.get("access_expires_at") or payment.get("expiry_date") or ""
             login_action = link_login or (f"http://{router_ip}/login" if router_ip else "")
-            auto_redirect = ""
             if not username or not password:
                 retry_query = dict(request.GET.items())
                 retry_url = f"/api/captive/{html.escape(str(tenant_id))}?{urlencode(retry_query)}" if retry_query else f"/api/captive/{html.escape(str(tenant_id))}"
                 access_error = payment.get("access_error")
                 detail = f"<p class='muted'>{html.escape(str(access_error))}</p>" if access_error else "<p class='muted'>Preparing your internet access now.</p>"
                 payment_notice = f"""
-                  <div class="card">
+                  <div class="card connect-card">
+                    <div class="spinner" aria-hidden="true"></div>
                     <strong>Payment successful.</strong>
                     {detail}
                   </div>
                   <script>setTimeout(function(){{window.location.href='{retry_url}';}}, 3000);</script>
                 """
             else:
-                if login_action:
-                    auto_redirect = (
-                        f"<form id='paid-login' method='post' action='{html.escape(str(login_action), quote=True)}'>"
-                        f"<input type='hidden' name='username' value='{html.escape(str(username), quote=True)}'>"
-                        f"<input type='hidden' name='password' value='{html.escape(str(password), quote=True)}'>"
-                        f"<input type='hidden' name='dst' value='{html.escape(str(dst), quote=True)}'>"
-                        "</form><script>setTimeout(function(){document.getElementById('paid-login').submit();}, 300);</script>"
-                    )
-                payment_notice = f"""
-                  <div class="card">
-                    <strong>Payment successful. Internet access is ready.</strong>
-                    <p class="muted">Package: {html.escape(str(payment.get('package_name') or ''))}</p>
-                    <p>Username: <strong>{html.escape(str(username))}</strong></p>
-                    <p>Password: <strong>{html.escape(str(password))}</strong></p>
-                    <p>Expires: <strong>{html.escape(str(expires_at))}</strong></p>
-                    {f"<p><button form='paid-login' type='submit'>Connect now</button></p>" if auto_redirect else ""}
-                  </div>
-                  {auto_redirect}
-                """
+                payment_notice = _paid_access_html(
+                    "Payment successful. Internet access is ready.",
+                    {
+                        "package_name": payment.get("package_name"),
+                        "username": username,
+                        "password": password,
+                        "expires_at": expires_at,
+                        "dst": dst,
+                    },
+                    login_action,
+                    auto_submit=True,
+                ).replace("<main>", "").replace("</main>", "")
         else:
             retry_query = dict(request.GET.items())
             retry_url = f"/api/captive/{html.escape(str(tenant_id))}?{urlencode(retry_query)}" if retry_query else f"/api/captive/{html.escape(str(tenant_id))}"
-            payment_notice = f"<div class='alert'>Payment is not confirmed yet. If you have paid, this page will keep checking.</div><script>setTimeout(function(){{window.location.href='{retry_url}';}}, 5000);</script>"
+            payment_notice = f"""
+              <div class="card connect-card">
+                <div class="spinner" aria-hidden="true"></div>
+                <strong>Waiting for M-Pesa confirmation.</strong>
+                <p class="muted">If you have paid, keep this page open. We will show your username, password, and expiry time once confirmation arrives.</p>
+              </div>
+              <script>setTimeout(function(){{window.location.href='{retry_url}';}}, 5000);</script>
+            """
 
     packages = sorted(_captive_packages(tenant_id), key=lambda item: float(item.get("price") or 0))
     hidden = "".join(
@@ -1289,10 +1296,56 @@ def captive_portal_pay(request, tenant_id):
         refresh_url = f"/api/captive/{html.escape(str(tenant_id))}?{urlencode({key: value for key, value in query.items() if value})}"
         return _html_page(
             "Confirm payment",
-            f"<main><div class='card'><strong>{html.escape(str(payload.get('message') or 'Check your phone and enter your M-Pesa PIN to complete payment.'))}</strong><p class='muted'>After payment is confirmed, this page will connect your device automatically.</p><p><a href='{refresh_url}'>I have paid</a></p></div><script>setTimeout(function(){{window.location.href='{refresh_url}';}}, 8000);</script></main>",
+            f"""
+            <main>
+              <div class="card connect-card">
+                <div class="spinner" aria-hidden="true"></div>
+                <strong>{html.escape(str(payload.get('message') or 'Check your phone and enter your M-Pesa PIN to complete payment.'))}</strong>
+                <p class="muted">Waiting for payment confirmation. Once it succeeds, your username, password, and expiry time will appear here before we connect you.</p>
+                <p><a class="buy-btn" href="{refresh_url}">I have paid</a></p>
+              </div>
+              <script>setTimeout(function(){{window.location.href='{refresh_url}';}}, 8000);</script>
+            </main>
+            """,
             201,
         )
     return _html_page("Payment unavailable", "<main><div class='alert'>Payment checkout was not returned. Please try again.</div></main>", 502)
+
+
+def _paid_access_html(title, payload, login_action="", auto_submit=True):
+    username = html.escape(str(payload.get("username") or ""), quote=True)
+    password = html.escape(str(payload.get("password") or ""), quote=True)
+    package_name = html.escape(str(payload.get("package_name") or ""), quote=True)
+    expires_at = html.escape(str(payload.get("expires_at") or payload.get("expiry_date") or ""), quote=True)
+    dst = html.escape(str(payload.get("dst") or "http://connectivitycheck.gstatic.com/generate_204"), quote=True)
+    form = ""
+    if login_action and payload.get("username") and payload.get("password"):
+        form = (
+            f"<form id='paid-login' method='post' action='{html.escape(str(login_action), quote=True)}'>"
+            f"<input type='hidden' name='username' value='{username}'>"
+            f"<input type='hidden' name='password' value='{password}'>"
+            f"<input type='hidden' name='dst' value='{dst}'>"
+            "</form>"
+            f"<button form='paid-login' type='submit'>Connect now</button>"
+            + ("<script>setTimeout(function(){var f=document.getElementById('paid-login'); if(f) f.submit();}, 1200);</script>" if auto_submit else "")
+        )
+    return f"""
+      <main>
+        <div class="card connect-card">
+          <div class="spinner" aria-hidden="true"></div>
+          <strong>{html.escape(str(title))}</strong>
+          <p class="muted">Your payment was successful. Keep these access details. We are connecting your device now.</p>
+          <div class="access-grid">
+            {f"<div class='access-row'><span>Package</span><strong>{package_name}</strong></div>" if package_name else ""}
+            <div class="access-row"><span>Username</span><strong>{username or "-"}</strong></div>
+            <div class="access-row"><span>Password</span><strong>{password or "-"}</strong></div>
+            <div class="access-row"><span>Expires</span><strong>{expires_at or "-"}</strong></div>
+          </div>
+          <p class="muted">Please wait while the router signs you in.</p>
+          {form}
+        </div>
+      </main>
+    """
 
 
 @csrf_exempt
@@ -1383,6 +1436,7 @@ def _public_pay_impl(request, tenant_id):
             "tenant_payout": tenant_payout_details(tenant),
         }
     )
+
     try:
         checkout = initiate_daraja_payment(
             daraja_config,
@@ -1486,17 +1540,9 @@ def public_redeem(request, tenant_id):
         if link_login and payload.get("username") and payload.get("password"):
             return _html_page(
                 "Access restored",
-                (
-                    "<main><div class='card'><strong>Payment found. Connecting...</strong>"
-                    f"<p class='muted'>Package: {html.escape(str(payload.get('package_name') or ''))}</p></div>"
-                    f"<form id='paid-login' method='post' action='{html.escape(str(link_login), quote=True)}'>"
-                    f"<input type='hidden' name='username' value='{html.escape(str(payload.get('username')), quote=True)}'>"
-                    f"<input type='hidden' name='password' value='{html.escape(str(payload.get('password')), quote=True)}'>"
-                    f"<input type='hidden' name='dst' value='{html.escape(str(payload.get('dst') or 'http://connectivitycheck.gstatic.com/generate_204'), quote=True)}'>"
-                    "</form><script>setTimeout(function(){document.getElementById('paid-login').submit();}, 800);</script></main>"
-                ),
+                _paid_access_html("Payment found. Internet access is ready.", payload, link_login, auto_submit=True),
             )
-        return _html_page("Access restored", "<main><div class='card'><strong>Payment found. Your access is active.</strong></div></main>")
+        return _html_page("Access restored", _paid_access_html("Payment found. Your access is active.", payload, "", auto_submit=False))
     return ok(payload)
 
 

@@ -416,7 +416,7 @@ def hotspot_portal_target(portal_url, extra_param):
 
 
 EXPRESSNET_PORTAL_PLACEHOLDER = "https://expressnet.app/api/captive"
-LEGACY_PORTAL_PLACEHOLDER = "https://expresswifi.centipidtechnologies.com/buy/packages"
+LEGACY_PORTAL_PLACEHOLDER = "https://expressnetbilling.com/buy/packages"
 LEGACY_ROUTER_PLACEHOLDER = "71785"
 
 
@@ -436,7 +436,7 @@ def expressnet_hotspot_file_html(page, portal_url):
     source_name = page_name
     if source_name in {"status.html", "radvert.html"}:
         source_name = "rlogin.html"
-    template_path = PROJECT_ROOT / "centipeed" / "centipid-hotspot" / source_name
+    template_path = PROJECT_ROOT / "expressnetbilling" / "expressnetbilling-hotspot" / source_name
     if not template_path.exists():
         return None
 
@@ -445,11 +445,6 @@ def expressnet_hotspot_file_html(page, portal_url):
     target = str(portal_url or "").rstrip("/")
     content = content.replace(LEGACY_PORTAL_PLACEHOLDER, target)
     content = content.replace(EXPRESSNET_PORTAL_PLACEHOLDER, target)
-    content = content.replace("CENTIPID", "EXPRESSNET")
-    content = content.replace("Centipid", "Expressnet")
-    content = content.replace("centipid", "expressnet")
-    content = content.replace("Centipeed", "Expressnet")
-    content = content.replace("centipeed", "expressnet")
     content = content.replace(f"router={LEGACY_ROUTER_PLACEHOLDER}", "router_ip=$(server-address)&link_login=$(link-login)")
     content = content.replace(f"router={LEGACY_ROUTER_PLACEHOLDER}&", "router_ip=$(server-address)&link_login=$(link-login)&")
     content = content.replace(f'"router=71785"', '"router_ip=$(server-address)&link_login=$(link-login)"')
