@@ -1,5 +1,6 @@
-import { ChevronDown, CreditCard, Database, Download, Pause, Pencil, PlugZap, Plus, RefreshCw, Router, Search, Trash2, Users, Wifi } from 'lucide-react';
+import { ChevronDown, CreditCard, Database, Download, Pause, Pencil, PlugZap, Plus, RefreshCw, Router, Search, Trash2, Users, Wifi,CircleCheck, CircleX } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import toast from 'react-hot-toast';
 import api from '../api/axios';
 import Modal from '../components/Modal';
@@ -27,6 +28,9 @@ const initialForm = {
   session_adjustment_direction: 'add',
 };
 
+const ACTIONS_MENU_WIDTH = 176; // w-44
+const ACTIONS_MENU_ESTIMATED_HEIGHT = 220;
+
 function toDate(value) {
   if (!value) return null;
   if (value._seconds) return new Date(value._seconds * 1000);
@@ -38,7 +42,7 @@ function formatDate(value) {
   const date = toDate(value);
   return date && !Number.isNaN(date.valueOf()) ? date.toLocaleDateString() : '-';
 }
-//df
+
 function serviceTypeOf(customer) {
   return String(customer?.service_type || 'pppoe').toLowerCase();
 }
@@ -66,7 +70,9 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
   const [errors, setErrors] = useState({});
   const [editingId, setEditingId] = useState(null);
   const [openActionsId, setOpenActionsId] = useState(null);
-  const actionsRef = useRef(null);
+  const [actionsPosition, setActionsPosition] = useState(null);
+  const actionsMenuRef = useRef(null);
+  const actionsButtonRefs = useRef({});
   const isHotspotOnlyPage = serviceLocked === 'hotspot';
   const hideManualAccessActions = serviceLocked === 'pppoe' || serviceLocked === 'hotspot';
   const activeFormService = serviceLocked || form.service_type || 'pppoe';
@@ -99,6 +105,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
     const active = scopedCustomers.filter((customer) => customer.status === 'active').length;
     const hotspot = scopedCustomers.filter((customer) => serviceTypeOf(customer) === 'hotspot').length;
     const pppoe = scopedCustomers.filter((customer) => serviceTypeOf(customer) === 'pppoe').length;
+   
     const staticUsers = scopedCustomers.filter((customer) => serviceTypeOf(customer) === 'static').length;
     const paused = scopedCustomers.filter((customer) => ['paused', 'suspended', 'inactive'].includes(String(customer.status || '').toLowerCase())).length;
     const offline = scopedCustomers.filter((customer) => ['offline', 'expired'].includes(String(customer.status || '').toLowerCase())).length;
@@ -142,6 +149,8 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
     ['hotspot', 'Hotspot', userStats.hotspot, Wifi],
     ['pppoe', 'PPPoE', userStats.pppoe, CreditCard],
     ['static', 'Static', userStats.static, Database],
+    ['active','active',userStats.active,CircleX],
+    ['inactive','inactive',userStats.inactive,CircleCheck],
     ['paused', 'Paused', userStats.paused, Pause],
     ['offline', 'Offline', userStats.offline, PlugZap],
   ].filter(([key]) => !serviceLocked || ['all', serviceLocked, 'paused', 'offline'].includes(key))), [serviceLocked, userStats]);
@@ -178,25 +187,56 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
     setForm((current) => ({ ...current, service_type: serviceLocked || initialForm.service_type }));
   }, [initialFilter, serviceLocked]);
 
+  const closeActionsMenu = () => {
+    setOpenActionsId(null);
+    setActionsPosition(null);
+  };
+
   useEffect(() => {
+    if (!openActionsId) return undefined;
+
     function handleClickOutside(event) {
-      if (actionsRef.current && !actionsRef.current.contains(event.target)) {
-        setOpenActionsId(null);
-      }
+      const menuEl = actionsMenuRef.current;
+      const buttonEl = actionsButtonRefs.current[openActionsId];
+      if (menuEl && menuEl.contains(event.target)) return;
+      if (buttonEl && buttonEl.contains(event.target)) return;
+      closeActionsMenu();
     }
     function handleKeyDown(event) {
-      if (event.key === 'Escape') setOpenActionsId(null);
+      if (event.key === 'Escape') closeActionsMenu();
     }
+    function handleReposition() {
+      closeActionsMenu();
+    }
+
     document.addEventListener('mousedown', handleClickOutside);
     document.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('scroll', handleReposition, true);
+    window.addEventListener('resize', handleReposition);
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
       document.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('scroll', handleReposition, true);
+      window.removeEventListener('resize', handleReposition);
     };
-  }, []);
+  }, [openActionsId]);
 
   const toggleActions = (id) => {
-    setOpenActionsId((current) => (current === id ? null : id));
+    if (openActionsId === id) {
+      closeActionsMenu();
+      return;
+    }
+    const buttonEl = actionsButtonRefs.current[id];
+    if (buttonEl) {
+      const rect = buttonEl.getBoundingClientRect();
+      const spaceBelow = window.innerHeight - rect.bottom;
+      const openUpward = spaceBelow < ACTIONS_MENU_ESTIMATED_HEIGHT && rect.top > spaceBelow;
+      let left = rect.right - ACTIONS_MENU_WIDTH;
+      left = Math.max(8, Math.min(left, window.innerWidth - ACTIONS_MENU_WIDTH - 8));
+      const top = openUpward ? rect.top - 4 : rect.bottom + 4;
+      setActionsPosition({ top, left, openUpward });
+    }
+    setOpenActionsId(id);
   };
 
   const update = (event) => {
@@ -295,7 +335,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
   };
 
   const editCustomer = (customer) => {
-    setOpenActionsId(null);
+    closeActionsMenu();
     setEditingId(customer.id);
     setForm({
       name: customer.name || '',
@@ -322,7 +362,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
   };
 
   const renewCustomer = async (customer) => {
-    setOpenActionsId(null);
+    closeActionsMenu();
     const packageName = window.prompt('Renew with package name', customer.package || packages[0]?.name || '');
     if (!packageName) return;
     const selected = packages.find((pkg) => pkg.name === packageName);
@@ -362,7 +402,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
   };
 
   const deleteCustomer = async (customer) => {
-    setOpenActionsId(null);
+    closeActionsMenu();
     if (!window.confirm(`Delete ${customer.name}?`)) return;
 
     setDeletingId(customer.id);
@@ -378,7 +418,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
   };
 
   const startPayment = async (customer) => {
-    setOpenActionsId(null);
+    closeActionsMenu();
     const selectedPackage = packageMap[customer.package];
     setPayingId(customer.id);
     try {
@@ -402,7 +442,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
   };
 
   const provisionCustomer = async (customer) => {
-    setOpenActionsId(null);
+    closeActionsMenu();
     setProvisioningId(customer.id);
     try {
       await api.post(`/customers/${customer.id}/provision`);
@@ -415,18 +455,15 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
     }
   };
 
+  const openCustomer = filteredCustomers.find((customer) => customer.id === openActionsId);
+
   return (
     <div className="space-y-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="page-title">{title}</h1>
-          <p className="page-subtitle">
-            {serviceLocked
-              ? `Manage ${serviceLabel(serviceLocked)} customers, expiry, payments, and MikroTik provisioning.`
-              : 'Manage PPPoE, Hotspot, and Static users from one page, with active and inactive filters.'}
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap items-center justify-center justify-between gap-2">
+        
+          <h1 className="tex-[30px]">{title}</h1>
+        
+       <div className='flex flex-row justify-between gap-3'>
           <button type="button" className="btn-secondary" onClick={exportCsv}>
             <Download size={15} />
             Export CSV
@@ -439,7 +476,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
       </div>
 
       <section className="border-b border-slate-200">
-        <div className="flex flex-wrap gap-3 sm:gap-4 overflow-x-auto">
+        <div className="flex flex-row gap-3 overflow-x-auto">
           {userFilterTabs.map(([key, label, count, Icon]) => {
             const active = statusFilter === key;
             return (
@@ -471,10 +508,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
               placeholder={isHotspotOnlyPage ? 'Search name, phone, username, package' : 'Search name, phone, location, username, package'}
             />
           </label>
-          <div className="flex gap-4 text-xs text-slate-500">
-            <span>Active: <strong className="font-normal text-slate-900">{userStats.active}</strong></span>
-            <span>Inactive: <strong className="font-normal text-slate-900">{userStats.inactive}</strong></span>
-          </div>
+          
         </div>
       </section>
 
@@ -515,89 +549,91 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
                 </td>
                 <td className={`table-cell px-3 ${expiryClass(customer.expiry_date)}`}>{formatDate(customer.expiry_date)}</td>
                 <td className="table-cell px-3"><StatusBadge status={customer.status} /></td>
-                <td className="table-cell sticky right-0 border-l border-slate-200 bg-white px-3 text-right">
-                  <div
-                    className="relative inline-block text-left"
-                    ref={openActionsId === customer.id ? actionsRef : null}
+                <td className="table-cell px-3">
+                  <button
+                    type="button"
+                    ref={(el) => { actionsButtonRefs.current[customer.id] = el; }}
+                    className="btn-secondary"
+                    onClick={() => toggleActions(customer.id)}
+                    aria-haspopup="true"
+                    aria-expanded={openActionsId === customer.id}
                   >
-                    <button
-                      type="button"
-                      className="btn-secondary"
-                      onClick={() => toggleActions(customer.id)}
-                      aria-haspopup="true"
-                      aria-expanded={openActionsId === customer.id}
-                    >
-                      Actions
-                      <ChevronDown size={16} className={`transition-transform ${openActionsId === customer.id ? 'rotate-180' : ''}`} />
-                    </button>
-
-                    {openActionsId === customer.id && (
-                      <div
-                        className="absolute right-0 z-20 mt-1 w-44 origin-top-right rounded-md border border-slate-200 bg-white py-1 shadow-lg"
-                        role="menu"
-                      >
-                        {!hideManualAccessActions && (
-                          <button
-                            type="button"
-                            role="menuitem"
-                            className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-                            onClick={() => provisionCustomer(customer)}
-                            disabled={provisioningId === customer.id}
-                          >
-                            <Router size={15} />
-                            {provisioningId === customer.id ? 'Provisioning...' : 'Provision'}
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          role="menuitem"
-                          className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-                          onClick={() => startPayment(customer)}
-                          disabled={payingId === customer.id}
-                        >
-                          <CreditCard size={15} />
-                          {payingId === customer.id ? 'Sending...' : 'Pay'}
-                        </button>
-                        {!hideManualAccessActions && serviceTypeOf(customer) !== 'pppoe' && (
-                          <button
-                            type="button"
-                            role="menuitem"
-                            className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-slate-700 hover:bg-slate-50"
-                            onClick={() => renewCustomer(customer)}
-                          >
-                            <RefreshCw size={15} />
-                            Renew
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          role="menuitem"
-                          className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-slate-700 hover:bg-slate-50"
-                          onClick={() => editCustomer(customer)}
-                        >
-                          <Pencil size={15} />
-                          Edit
-                        </button>
-                        <div className="my-1 border-t border-slate-100" />
-                        <button
-                          type="button"
-                          role="menuitem"
-                          className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-red-600 hover:bg-red-50 disabled:opacity-50"
-                          onClick={() => deleteCustomer(customer)}
-                          disabled={deletingId === customer.id}
-                        >
-                          <Trash2 size={15} />
-                          {deletingId === customer.id ? 'Deleting...' : 'Delete'}
-                        </button>
-                      </div>
-                    )}
-                  </div>
+                    <ChevronDown size={16} className={`transition-transform ${openActionsId === customer.id ? 'rotate-180' : ''}`} />
+                  </button>
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+
+      {openActionsId && actionsPosition && openCustomer && createPortal(
+        <div
+          ref={actionsMenuRef}
+          className="fixed z-[9999] w-44 origin-top-right rounded-md border border-slate-200 bg-white py-1 shadow-lg"
+          style={{
+            top: actionsPosition.openUpward ? undefined : actionsPosition.top,
+            bottom: actionsPosition.openUpward ? window.innerHeight - actionsPosition.top : undefined,
+            left: actionsPosition.left,
+          }}
+          role="menu"
+        >
+          {!hideManualAccessActions && (
+            <button
+              type="button"
+              role="menuitem"
+              className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              onClick={() => provisionCustomer(openCustomer)}
+              disabled={provisioningId === openCustomer.id}
+            >
+              <Router size={15} />
+              {provisioningId === openCustomer.id ? 'Provisioning...' : 'Provision'}
+            </button>
+          )}
+          <button
+            type="button"
+            role="menuitem"
+            className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+            onClick={() => startPayment(openCustomer)}
+            disabled={payingId === openCustomer.id}
+          >
+            <CreditCard size={15} />
+            {payingId === openCustomer.id ? 'Sending...' : 'Pay'}
+          </button>
+          {!hideManualAccessActions && serviceTypeOf(openCustomer) !== 'pppoe' && (
+            <button
+              type="button"
+              role="menuitem"
+              className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-slate-700 hover:bg-slate-50"
+              onClick={() => renewCustomer(openCustomer)}
+            >
+              <RefreshCw size={15} />
+              Renew
+            </button>
+          )}
+          <button
+            type="button"
+            role="menuitem"
+            className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-slate-700 hover:bg-slate-50"
+            onClick={() => editCustomer(openCustomer)}
+          >
+            <Pencil size={15} />
+            Edit
+          </button>
+          <div className="my-1 border-t border-slate-100" />
+          <button
+            type="button"
+            role="menuitem"
+            className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-red-600 hover:bg-red-50 disabled:opacity-50"
+            onClick={() => deleteCustomer(openCustomer)}
+            disabled={deletingId === openCustomer.id}
+          >
+            <Trash2 size={15} />
+            {deletingId === openCustomer.id ? 'Deleting...' : 'Delete'}
+          </button>
+        </div>,
+        document.body
+      )}
 
       {modalOpen && (
         <Modal title={editingId ? 'Edit Customer' : 'Add Customer'} onClose={closeModal}>
