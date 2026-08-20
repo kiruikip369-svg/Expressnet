@@ -523,6 +523,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
               <th className="px-3 py-2">Package</th>
               {!isHotspotOnlyPage && <th className="px-3 py-2">Technician</th>}
               <th className="px-3 py-2">MikroTik</th>
+              <th className="px-3 py-2">Status</th>
               <th className="px-3 py-2">Expiry</th>
               <th className="px-3 py-2">Status</th>
               <th className="sticky right-0 border-l border-slate-200 bg-slate-50 px-3 py-2 text-right">Actions</th>
@@ -542,11 +543,9 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
                 <td className="table-cell px-3">{customer.package || '-'}</td>
                 {!isHotspotOnlyPage && <td className="table-cell px-3">{customer.technician || '-'}</td>}
                 <td className="table-cell px-3">
-                  <div className="space-y-1">
-                    <p className="font-medium text-slate-900">{mikrotikRouterMap[customer.mikrotik_router_id]?.label || customer.mikrotik_router_id || '-'}</p>
-                    <StatusBadge status={customer.provisioning_status || 'pending'} />
-                  </div>
+                 {mikrotikRouterMap[customer.mikrotik_router_id]?.label || customer.mikrotik_router_id || '-'}
                 </td>
+                <td>{customer.provisioning_status || 'pending'}</td>
                 <td className={`table-cell px-3 ${expiryClass(customer.expiry_date)}`}>{formatDate(customer.expiry_date)}</td>
                 <td className="table-cell px-3"><StatusBadge status={customer.status} /></td>
                 <td className="table-cell px-3">
@@ -738,7 +737,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
                       onChange={update}
                     />
                     <span>
-                      <span className="block font-semibold text-slate-800">Give this PPPoE customer a free grace period</span>
+                      <span className="block font-semibold text-slate-800">Give this PPPoE customer grace period</span>
                       <span className="mt-1 block">The customer can use the selected package until the grace period ends, then payment is required.</span>
                     </span>
                   </label>
