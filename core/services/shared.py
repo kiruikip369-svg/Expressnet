@@ -385,14 +385,17 @@ def normalize_public_url(value):
         value = "https:" + value
     if value and not value.startswith(("http://", "https://")):
         value = "https://" + value
+    parts = urlsplit(value)
+    if parts.path.rstrip("/") == "/api":
+        value = urlunsplit((parts.scheme, parts.netloc, "", "", ""))
     return value.rstrip("/")
 
 
 def get_public_base_url():
     candidates = [
         os.getenv("DARAJA_CALLBACK_BASE_URL"),
-        os.getenv("PUBLIC_APP_URL"),
         getattr(settings, "DARAJA_CALLBACK_BASE_URL", ""),
+        os.getenv("PUBLIC_APP_URL"),
         getattr(settings, "PUBLIC_APP_URL", ""),
     ]
     if not settings.DEBUG:

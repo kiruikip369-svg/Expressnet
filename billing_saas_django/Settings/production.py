@@ -59,7 +59,8 @@ def production_public_url(name, default=""):
     return default
 
 
-PUBLIC_APP_URL = production_public_url("PUBLIC_APP_URL", "https://web-production-b9d86.up.railway.app")
+PUBLIC_APP_URL = production_public_url("PUBLIC_APP_URL", "https://expressnetbilling.com")
+DARAJA_CALLBACK_BASE_URL = production_public_url("DARAJA_CALLBACK_BASE_URL", "https://expressnetbilling.com")
 PAYSTACK_CALLBACK_BASE_URL = production_public_url("PAYSTACK_CALLBACK_BASE_URL", PUBLIC_APP_URL)
 
 DATABASE_URL = os.getenv("DATABASE_PUBLIC_URL") or os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL")
