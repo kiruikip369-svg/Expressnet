@@ -222,12 +222,6 @@ export default function Home() {
               </ul>
             </nav>
             <Link
-              to="/login"
-              className="inline-flex items-center border border-[#0db5f7] text-[#0db5f7] hover:bg-[#0db5f7] hover:text-white px-5 py-2.5 rounded-full transition-all font-medium"
-            >
-              Login
-            </Link>
-            <Link
               to={site.cta_url || '/register'}
               className="inline-flex items-center bg-[#0db5f7] hover:bg-[#0ba3e0] text-white px-5 py-2.5 rounded-full transition-all shadow-lg shadow-[#0db5f7]/30 hover:shadow-[#0db5f7]/50 font-medium"
             >
@@ -257,11 +251,8 @@ export default function Home() {
                   </a>
                 </li>
               ))}
-              <li className="flex gap-3 pt-2">
-                <Link to="/login" className="flex-1 text-center border border-[#0db5f7] text-[#0db5f7] py-3 rounded-xl font-bold" onClick={() => setIsMobileMenuOpen(false)}>
-                  Login
-                </Link>
-                <Link to={site.cta_url || '/register'} className="flex-1 text-center bg-[#0db5f7] text-white py-3 rounded-xl font-bold shadow-md" onClick={() => setIsMobileMenuOpen(false)}>
+              <li className="pt-2">
+                <Link to={site.cta_url || '/register'} className="block text-center bg-[#0db5f7] text-white py-3 rounded-xl font-bold shadow-md" onClick={() => setIsMobileMenuOpen(false)}>
                   {site.cta_label || 'Register'}
                 </Link>
               </li>
@@ -573,12 +564,6 @@ export default function Home() {
                         <ChevronRight size={20} className="ml-2" />
                       </Link>
 
-                      <p className="text-center text-slate-400 text-sm mt-4">
-                        Already have an account?{' '}
-                        <Link to="/login" className="text-[#0db5f7] hover:underline font-medium">
-                          Login here
-                        </Link>
-                      </p>
                     </div>
                   </div>
                 </div>

@@ -3,6 +3,7 @@ import html
 import hashlib
 import logging
 import os
+import re
 import secrets
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
@@ -312,6 +313,37 @@ def notify_tenant_activated(tenant):
             f"Your {tenant.get('business_name') or 'Expressnetbilling'} account has been activated. "
             "You can now sign in and finish setting up your workspace.\n\n"
             "Login: /login"
+        ),
+        [tenant.get("email")],
+    )
+
+
+def tenant_slug(value):
+    slug = re.sub(r"[^a-z0-9]+", "-", str(value or "").lower()).strip("-")
+    return slug[:48] or f"tenant-{secrets.token_hex(3)}"
+
+
+def tenant_portal_domain(slug):
+    base_domain = str(os.getenv("TENANT_BASE_DOMAIN") or os.getenv("SAAS_PORTAL_HOST") or os.getenv("PUBLIC_APP_URL") or "").strip().rstrip("/")
+    base_domain = base_domain.replace("https://", "").replace("http://", "").strip("/")
+    if not base_domain:
+        base_domain = "expressnetbilling.com"
+    if "/" in base_domain:
+        base_domain = base_domain.split("/", 1)[0]
+    return f"{slug}.{base_domain}"
+
+
+def notify_tenant_registered(tenant, request=None):
+    login_url = f"{public_base_url(request).rstrip('/')}/login" if request else "/login"
+    send_system_email(
+        "Your Expressnetbilling workspace is ready",
+        (
+            f"Hello {tenant.get('owner_name') or tenant.get('business_name')},\n\n"
+            f"Your {tenant.get('business_name') or 'Expressnetbilling'} workspace has been created.\n\n"
+            f"Subdomain: {tenant.get('subdomain')}\n"
+            f"Workspace URL: {tenant.get('workspace_url')}\n"
+            f"Login: {login_url}\n\n"
+            "Use the email and password you provided during registration to sign in."
         ),
         [tenant.get("email")],
     )
@@ -711,6 +743,13 @@ def auth_register(request):
     email = data["email"].lower().strip()
     if find_child_by_field("tenants", "email", email):
         return ok({"message": "Email already registered"}, 400)
+    base_slug = tenant_slug(data["business_name"])
+    slug = base_slug
+    suffix = 2
+    while find_child_by_field("tenants", "subdomain", slug):
+        slug = f"{base_slug}-{suffix}"
+        suffix += 1
+    workspace_url = f"https://{tenant_portal_domain(slug)}"
 
     tenant_ref = ref("tenants").push(
         {
@@ -718,6 +757,9 @@ def auth_register(request):
             "owner_name": data["owner_name"],
             "email": email,
             "phone": data["phone"],
+            "subdomain": slug,
+            "domain": tenant_portal_domain(slug),
+            "workspace_url": workspace_url,
             "password": hash_password(data["password"]),
             "business_number": str(data.get("business_number") or "").strip(),
             "bank_code": str(data.get("bank_code") or "").strip(),
@@ -737,6 +779,7 @@ def auth_register(request):
     )
     tenant_data = ref(f"tenants/{tenant_ref.key}").get() or {}
     notify_admins_tenant_signup(tenant_ref.key, tenant_data)
+    notify_tenant_registered(tenant_data, request)
     tenant_instance = Tenant.objects.filter(pk=tenant_ref.key).first()
     if tenant_instance:
         ensure_subscription(tenant_instance, data.get("plan") or "basic")
