@@ -1,4 +1,4 @@
-import { Mail, MapPin, Phone, Wifi, Zap, CreditCard, ShieldCheck, Users, BarChart3, Globe, ChevronRight } from 'lucide-react';
+import { Mail, MapPin, Phone, Wifi, Zap, CreditCard, ShieldCheck, Users, BarChart3, Globe, ChevronRight, ClipboardCheck, UserCog } from 'lucide-react';
 import { useEffect, useState, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import axios from 'axios';
@@ -147,6 +147,16 @@ export default function Home() {
       title: 'Multi-Location Support',
       desc: 'Manage multiple hotspot locations from a single dashboard with centralized billing and user control.',
       icon: Globe,
+    },
+    {
+      title: 'Task Management',
+      desc: 'Assign, track, and close out day-to-day tasks — installations, maintenance, and support tickets — so nothing slips through the cracks.',
+      icon: ClipboardCheck,
+    },
+    {
+      title: 'Staff Management',
+      desc: 'Onboard your team, set role-based permissions, and monitor staff activity across every location from one place.',
+      icon: UserCog,
     },
   ];
 
