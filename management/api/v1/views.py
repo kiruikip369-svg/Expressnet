@@ -2682,6 +2682,55 @@ def daraja_callback(request, tenant_id, payment_id, token):
     stk_callback = (((event or {}).get("Body") or {}).get("stkCallback")) or {}
     result_code = stk_callback.get("ResultCode")
     result_desc = stk_callback.get("ResultDesc") or ""
+    if str(payment_id).startswith("system-subscription-"):
+        items = ((stk_callback.get("CallbackMetadata") or {}).get("Item")) or []
+        values = {item.get("Name"): item.get("Value") for item in items if isinstance(item, dict)}
+        amount = values.get("Amount")
+        receipt = values.get("MpesaReceiptNumber") or ""
+        phone = values.get("PhoneNumber") or ""
+        subscription = TenantSubscription.objects.select_related("tenant").filter(tenant_id=tenant_id).first()
+        if str(result_code) != "0":
+            logger.warning(
+                "Daraja system subscription callback failed tenant=%s payment=%s result_code=%s result_desc=%s",
+                tenant_id,
+                payment_id,
+                result_code,
+                result_desc,
+            )
+            return ok({"success": True})
+        if not subscription:
+            logger.warning("Daraja system subscription callback missing subscription tenant=%s payment=%s", tenant_id, payment_id)
+            return ok({"success": True})
+        now = timezone.now()
+        current_expiry = subscription.expires_at if subscription.expires_at and subscription.expires_at > now else now
+        period_end = current_expiry + timedelta(days=subscription.billing_cycle_days)
+        payment = SubscriptionPayment.objects.create(
+            subscription=subscription,
+            amount=Decimal(str(amount or subscription.amount or 0)),
+            currency=subscription.currency,
+            method="mpesa_stk",
+            reference=receipt,
+            notes=f"System subscription STK payment. Phone: {phone}. Callback: {payment_id}",
+            period_start=current_expiry,
+            period_end=period_end,
+            recorded_by="daraja_callback",
+        )
+        subscription.last_paid_at = payment.paid_at
+        subscription.expires_at = period_end
+        subscription.save(update_fields=["last_paid_at", "expires_at", "updated_at"])
+        if subscription.tenant.status == "suspended":
+            subscription.tenant.status = "active"
+            subscription.tenant.save(update_fields=["status", "updated_at"])
+            ref(f"tenants/{tenant_id}").update(
+                {
+                    "status": "active",
+                    "subscription_restored_at": iso_now(),
+                    "suspended_reason": "",
+                    "updated_at": iso_now(),
+                }
+            )
+        logger.info("Daraja system subscription completed tenant=%s payment=%s receipt=%s amount=%s", tenant_id, payment_id, receipt, amount)
+        return ok({"success": True})
     ref(f"tenants/{tenant_id}/payments/{payment_id}").update({
         "daraja_callback_received_at": iso_now(),
         "daraja_callback_result_code": result_code,

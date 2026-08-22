@@ -1,16 +1,8 @@
-import { ChevronDown, Eye, Pencil, Plus, Search } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { ChevronDown, CreditCard, Eye, Pencil, Phone, Plus, RefreshCw, Search, Trash2, X } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-
-const initialExpenses = [
-  { id: 'EXP-001', type: 'SMS', amount: 50, method: 'Mpesa', date: '2026-06-08T06:52:00' },
-  { id: 'EXP-002', type: 'SYSTEM_PAYMENT', amount: 500, method: 'Mpesa', date: '2026-06-04T20:00:00' },
-  { id: 'EXP-003', type: 'SYSTEM_PAYMENT', amount: 500, method: 'Mpesa', date: '2026-05-04T22:35:00' },
-  { id: 'EXP-004', type: 'SYSTEM_PAYMENT', amount: 500, method: 'Mpesa', date: '2026-04-04T11:22:00' },
-  { id: 'EXP-005', type: 'SYSTEM_PAYMENT', amount: 500, method: 'Mpesa', date: '2026-03-03T18:36:00' },
-  { id: 'EXP-006', type: 'SYSTEM_PAYMENT', amount: 503, method: 'Mpesa', date: '2026-02-03T13:40:00' },
-  { id: 'EXP-007', type: 'SYSTEM_PAYMENT', amount: 500, method: 'Mpesa', date: '2026-01-04T05:30:00' },
-];
+import { useSearchParams } from 'react-router-dom';
+import api from '../api/axios';
 
 const blankExpense = { id: '', type: 'SYSTEM_PAYMENT', amount: 0, method: 'Mpesa', date: '' };
 
@@ -43,11 +35,41 @@ function MetricCard({ title, value, helper }) {
 }
 
 export default function Expenses() {
-  const [expenses, setExpenses] = useState(initialExpenses);
+  const [searchParams] = useSearchParams();
+  const [expenses, setExpenses] = useState([]);
+  const [subscription, setSubscription] = useState(null);
   const [draft, setDraft] = useState(blankExpense);
   const [editingId, setEditingId] = useState(null);
   const [modalOpen, setModalOpen] = useState(false);
+  const [payModalOpen, setPayModalOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState(null);
   const [query, setQuery] = useState('');
+  const [phone, setPhone] = useState('');
+  const [payingSystem, setPayingSystem] = useState(false);
+  const [loadingSubscription, setLoadingSubscription] = useState(true);
+
+  const loadSubscription = async () => {
+    setLoadingSubscription(true);
+    try {
+      const { data } = await api.get('/subscription/status');
+      setSubscription(data.subscription);
+    } catch (error) {
+      toast.error(error.response?.data?.message || 'Failed to load system subscription');
+    } finally {
+      setLoadingSubscription(false);
+    }
+  };
+
+  useEffect(() => {
+    loadSubscription();
+  }, []);
+
+  // Auto-open the pay modal if ?paySystem is present in the URL
+  useEffect(() => {
+    if (searchParams.get('paySystem')) {
+      setPayModalOpen(true);
+    }
+  }, [searchParams]);
 
   const filtered = useMemo(() => {
     const needle = query.toLowerCase();
@@ -94,14 +116,54 @@ export default function Expenses() {
     toast.success('Expense saved');
   };
 
+  const confirmDelete = (expense) => {
+    setDeleteTarget(expense);
+  };
+
+  const deleteExpense = () => {
+    if (!deleteTarget) return;
+    setExpenses((current) => current.filter((item) => item.id !== deleteTarget.id));
+    toast.success('Expense deleted');
+    setDeleteTarget(null);
+  };
+
+  const paySystem = async (event) => {
+    event.preventDefault();
+    if (!phone.trim()) {
+      toast.error('Enter the M-Pesa phone number');
+      return;
+    }
+    setPayingSystem(true);
+    try {
+      const { data } = await api.post('/subscription/status', {
+        method: 'mpesa_stk',
+        phone,
+        amount: subscription?.amount || 0,
+        currency: subscription?.currency || 'KES',
+      });
+      toast.success(data.message || 'STK push sent. Complete payment on your phone.');
+      await loadSubscription();
+    } catch (error) {
+      toast.error(error.response?.data?.message || 'Failed to start M-Pesa payment');
+    } finally {
+      setPayingSystem(false);
+    }
+  };
+
   return (
     <div className="space-y-7">
       <div className="flex items-center justify-between gap-3">
         <h1 className="text-xl font-semibold text-black">Expenses</h1>
-        <button type="button" className="btn-primary h-9 px-4 shadow-md" onClick={openCreate}>
-          <Plus size={14} />
-          Create Expense
-        </button>
+        <div className="flex items-center gap-2">
+          <button type="button" className="btn-secondary h-9 px-4" onClick={() => setPayModalOpen(true)}>
+            <CreditCard size={14} />
+            Pay System
+          </button>
+          <button type="button" className="btn-primary h-9 px-4 shadow-md" onClick={openCreate}>
+            <Plus size={14} />
+            Create Expense
+          </button>
+        </div>
       </div>
 
       <section className="grid gap-6 md:grid-cols-3">
@@ -141,10 +203,16 @@ export default function Expenses() {
                   <td className="px-5 py-4">{formatKES(expense.amount)}</td>
                   <td className="px-5 py-4"><span className="rounded-md border px-2 py-1 text-[10px]" style={{ borderColor: 'var(--app-accent-soft)', background: 'var(--app-accent-muted)', color: 'var(--app-accent)' }}>{expense.method}</span></td>
                   <td className="px-5 py-4 text-right">
-                    <button type="button" className="inline-flex items-center gap-1 text-xs font-semibold" style={{ color: 'var(--app-accent)' }} onClick={() => openEdit(expense)}>
-                      <Pencil size={14} className="text-slate-400" />
-                      Edit
-                    </button>
+                    <div className="flex items-center justify-end gap-3">
+                      <button type="button" className="inline-flex items-center gap-1 text-xs font-semibold" style={{ color: 'var(--app-accent)' }} onClick={() => openEdit(expense)}>
+                        <Pencil size={14} className="text-slate-400" />
+                        Edit
+                      </button>
+                      <button type="button" className="inline-flex items-center gap-1 text-xs font-semibold text-red-600" onClick={() => confirmDelete(expense)}>
+                        <Trash2 size={14} className="text-red-400" />
+                        Delete
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -168,6 +236,82 @@ export default function Expenses() {
               <button type="submit" className="btn-primary">Save</button>
             </div>
           </form>
+        </div>
+      )}
+
+      {payModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">
+          <div className="w-full max-w-md rounded-lg bg-white p-5 shadow-xl">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <span className="inline-flex h-9 w-9 items-center justify-center rounded-md" style={{ background: 'var(--app-accent-muted)', color: 'var(--app-accent)' }}>
+                  <CreditCard size={18} />
+                </span>
+                <div>
+                  <h2 className="text-base font-semibold text-black">Pay System Subscription</h2>
+                  <p className="text-xs text-slate-500">Enter your M-Pesa phone number to receive an STK push.</p>
+                </div>
+              </div>
+              <button type="button" className="text-slate-400 hover:text-slate-600" onClick={() => setPayModalOpen(false)}>
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="mt-4 grid gap-3 sm:grid-cols-3">
+              <div className="rounded-md border p-3" style={{ borderColor: 'var(--app-border)', background: 'var(--app-panel-muted)' }}>
+                <p className="text-xs text-slate-500">Plan</p>
+                <p className="mt-1 text-sm font-semibold capitalize text-black">{subscription?.plan || '-'}</p>
+              </div>
+              <div className="rounded-md border p-3" style={{ borderColor: 'var(--app-border)', background: 'var(--app-panel-muted)' }}>
+                <p className="text-xs text-slate-500">Amount</p>
+                <p className="mt-1 text-sm font-semibold text-black">{formatKES(subscription?.amount)}</p>
+              </div>
+              <div className="rounded-md border p-3" style={{ borderColor: 'var(--app-border)', background: 'var(--app-panel-muted)' }}>
+                <p className="text-xs text-slate-500">Expires</p>
+                <p className="mt-1 text-sm font-semibold text-black">{subscription?.expires_at ? formatDate(subscription.expires_at) : '-'}</p>
+              </div>
+            </div>
+            <p className="mt-3 text-xs text-slate-500">
+              System fee: {subscription?.system_fee_percent ?? 0}% of this month&apos;s successful internet sales ({formatKES(subscription?.system_fee_sales_basis)}).
+            </p>
+
+            <form className="mt-4" onSubmit={paySystem}>
+              <label className="text-xs font-semibold text-slate-600">
+                M-Pesa phone number
+                <div className="relative mt-1">
+                  <Phone size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <input className="form-input mt-0 pl-9" value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="07XXXXXXXX or 2547XXXXXXXX" />
+                </div>
+              </label>
+              <div className="mt-4 flex justify-end gap-2">
+                <button type="button" className="btn-secondary" onClick={loadSubscription} disabled={loadingSubscription || payingSystem}>
+                  <RefreshCw size={14} />
+                  Refresh
+                </button>
+                <button type="submit" className="btn-primary" disabled={loadingSubscription || payingSystem}>
+                  {payingSystem ? 'Sending STK...' : 'Pay System'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {deleteTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">
+          <div className="w-full max-w-sm rounded-lg bg-white p-5 shadow-xl">
+            <h2 className="text-base font-semibold text-black">Delete Expense</h2>
+            <p className="mt-2 text-sm text-slate-600">
+              Are you sure you want to delete the expense of <span className="font-semibold text-black">{formatKES(deleteTarget.amount)}</span> ({deleteTarget.type})? This action cannot be undone.
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button type="button" className="btn-secondary" onClick={() => setDeleteTarget(null)}>Cancel</button>
+              <button type="button" className="inline-flex items-center gap-1 rounded-md bg-red-600 px-4 py-2 text-xs font-semibold text-white hover:bg-red-700" onClick={deleteExpense}>
+                <Trash2 size={14} />
+                Delete
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

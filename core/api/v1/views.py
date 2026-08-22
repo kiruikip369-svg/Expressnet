@@ -492,6 +492,36 @@ def subscription_payload(subscription, include_payments=False):
     return data
 
 
+def system_subscription_fee_percent():
+    try:
+        return Decimal(str(os.getenv("SYSTEM_SUBSCRIPTION_FEE_PERCENT", "0.03") or "0.03"))
+    except Exception:
+        return Decimal("0.03")
+
+
+def tenant_monthly_internet_sales(tenant):
+    month_prefix = timezone.now().strftime("%Y-%m")
+    total = Payment.objects.filter(tenant=tenant, status="success", paid_at__startswith=month_prefix).aggregate(total=Sum("amount"))["total"]
+    return Decimal(str(total or 0))
+
+
+def system_subscription_amount(tenant):
+    sales = tenant_monthly_internet_sales(tenant)
+    percent = system_subscription_fee_percent()
+    amount = (sales * percent / Decimal("100")).quantize(Decimal("0.01"))
+    return amount, sales, percent
+
+
+def tenant_subscription_payload(subscription):
+    amount, sales, percent = system_subscription_amount(subscription.tenant)
+    data = subscription_payload(subscription)
+    data["amount"] = float(amount)
+    data["system_fee_percent"] = float(percent)
+    data["system_fee_sales_basis"] = float(sales)
+    data["system_fee_period"] = timezone.now().strftime("%Y-%m")
+    return data
+
+
 def record_subscription_payment(subscription, data, admin_email=""):
     now = timezone.now()
     current_expiry = subscription.expires_at if subscription.expires_at and subscription.expires_at > now else now
@@ -534,13 +564,46 @@ def tenant_subscription_status(request):
         return ok({"message": "Tenant not found"}, 404)
     subscription = ensure_subscription(tenant)
     if method(request, "GET"):
-        return ok({"subscription": subscription_payload(subscription), "payment_required": subscription.is_expired() or tenant.status == "suspended"})
+        return ok({"subscription": tenant_subscription_payload(subscription), "payment_required": subscription.is_expired() or tenant.status == "suspended"})
     data = body(request)
+    if data.get("method") == "mpesa_stk":
+        phone = str(data.get("phone") or "").strip()
+        if not phone:
+            return ok({"message": "Phone number is required"}, 400)
+        amount, sales, percent = system_subscription_amount(tenant)
+        if amount <= 0:
+            return ok({"message": "No system fee is due because this tenant has no successful internet sales for the current month."}, 400)
+        tenant_payload = {"id": str(tenant.pk), "business_name": tenant.business_name}
+        payment_id = f"system-subscription-{subscription.pk}-{secrets.token_hex(6)}"
+        try:
+            checkout = initiate_daraja_payment(
+                tenant_payload,
+                payment_id,
+                amount,
+                phone,
+                description="System renewal",
+                metadata={"subscription_id": str(subscription.pk), "sales_basis": str(sales), "fee_percent": str(percent)},
+                payment_method=data.get("payment_method") or "daraja_paybill",
+            )
+        except PaymentProviderError as exc:
+            return ok({"message": exc.public_message}, getattr(exc, "status_code", 400) or 400)
+        except Exception as exc:
+            logger.exception("System subscription STK failed tenant=%s subscription=%s", tenant.pk, subscription.pk)
+            return ok({"message": str(exc) or "Could not start M-Pesa payment"}, 502)
+        return ok(
+            {
+                "success": True,
+                "message": checkout.get("customer_message") or "STK push sent. Complete payment on your phone.",
+                "checkout": checkout,
+                "payment_id": payment_id,
+                "subscription": tenant_subscription_payload(subscription),
+            }
+        )
     reference = str(data.get("reference") or "").strip()
     if not reference:
         return ok({"message": "Payment reference is required"}, 400)
     payment = record_subscription_payment(subscription, {**data, "method": data.get("method") or "manual"}, "")
-    return ok({"success": True, "message": "Payment submitted", "payment": payment.as_dict(), "subscription": subscription_payload(subscription)})
+    return ok({"success": True, "message": "Payment submitted", "payment": payment.as_dict(), "subscription": tenant_subscription_payload(subscription)})
 
 
 def react_app(request):

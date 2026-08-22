@@ -106,7 +106,7 @@ def tenant_required(view):
                         {
                             "message": "Your subscription has expired. Please pay to continue using the billing system.",
                             "code": "SUBSCRIPTION_PAYMENT_REQUIRED",
-                            "redirect": "/billing/payment",
+                            "redirect": "/expenses?paySystem=1",
                         },
                         status=402,
                     )

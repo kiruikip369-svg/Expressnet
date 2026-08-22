@@ -226,6 +226,7 @@ export default function Dashboard() {
   const [dashboard, setDashboard] = useState(null);
   const [routerResources, setRouterResources] = useState(null);
   const [payments, setPayments] = useState([]);
+  const [subscription, setSubscription] = useState(null);
   const [trafficSeries, setTrafficSeries] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -237,16 +238,18 @@ export default function Dashboard() {
     async function load({ silent = false } = {}) {
       try {
         if (silent) setRefreshing(true);
-        const [statsResult, resourcesResult, paymentsResult] = await Promise.all([
+        const [statsResult, resourcesResult, paymentsResult, subscriptionResult] = await Promise.all([
           api.get('/dashboard/stats'),
           api.get('/router/resources').catch((error) => ({ error })),
           api.get('/payments?all=1').catch(() => ({ data: [] })),
+          api.get('/subscription/status').catch(() => ({ data: null })),
         ]);
         if (!mounted) return;
         setDashboard(statsResult.data);
         if (resourcesResult.data) setRouterResources(resourcesResult.data);
         const rows = Array.isArray(paymentsResult.data) ? paymentsResult.data : paymentsResult.data?.results || [];
         setPayments(rows.slice(0, 5));
+        setSubscription(subscriptionResult.data?.subscription || null);
       } catch (error) {
         if (!silent) toast.error(error.response?.data?.message || 'Failed to load dashboard');
       } finally {
@@ -303,6 +306,12 @@ export default function Dashboard() {
   const tx = Number(router.network_tx_bps || 0);
   const activeSessionCount = Number(router.active_sessions?.total || 0);
   const connectedUsers = Math.max(activeUsers, activeSessionCount);
+  const daysUntilExpiry = subscription?.days_until_expiry;
+  const expiryLabel = daysUntilExpiry === null || daysUntilExpiry === undefined
+    ? 'Renew system subscription'
+    : Number(daysUntilExpiry) < 0
+      ? 'Expired. Click to renew'
+      : `Expires in ${Number(daysUntilExpiry)} ${Number(daysUntilExpiry) === 1 ? 'day' : 'days'}. Click to renew`;
 
   useEffect(() => {
     if (!dashboard && !routerResources) return;
@@ -346,9 +355,9 @@ export default function Dashboard() {
             <RefreshCw size={15} className={refreshing ? 'animate-spin' : ''} />
             Updated: {sampledAt && !Number.isNaN(sampledAt.valueOf()) ? sampledAt.toLocaleTimeString() : '--'}
           </span>
-          <button type="button" className={`inline-flex h-8 items-center gap-2 rounded-md border px-3 ${TYPE.eyebrow}`} style={{ borderColor: 'var(--app-accent-soft)', background: 'var(--app-accent-muted)', color: 'var(--app-accent)' }}>
-            <AlertTriangle size={14} />Expires in 2 days. Click to renew
-          </button>
+          <Link to="/expenses?paySystem=1" className={`inline-flex h-8 items-center gap-2 rounded-md border px-3 ${TYPE.eyebrow}`} style={{ borderColor: 'var(--app-accent-soft)', background: 'var(--app-accent-muted)', color: 'var(--app-accent)' }}>
+            <AlertTriangle size={14} />{expiryLabel}
+          </Link>
           <button type="button" className={`theme-card theme-muted inline-flex h-8 items-center gap-2 rounded-md border px-3 ${TYPE.eyebrow}`}>
             <Filter size={14} />Filters
           </button>
