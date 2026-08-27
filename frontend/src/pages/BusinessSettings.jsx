@@ -37,6 +37,11 @@ const initialSettings = {
   smsProvider: 'Roamtech',
   smsSenderId: 'EXPRESS WIFI',
   smsTemplate: 'Dear {{name}}, your {{package}} payment of KES {{amount}} is complete.',
+  notificationProvider: 'slek',
+  smsEnabled: true,
+  smsOnPayment: true,
+  whatsappEnabled: true,
+  whatsappTemplate: 'Hi {{name}}, your {{package}} internet package is active. Amount payable: Ksh {{amount_payable}}. Username: {{username}}, Password: {{password}}.',
 };
 
 const colorPresets = ['#fa8200', '#2563eb', '#16a34a', '#dc2626', '#7c3aed', '#0891b2', '#111827', '#f59e0b'];
@@ -132,9 +137,25 @@ export default function BusinessSettings() {
     let mounted = true;
     async function loadSettings() {
       try {
-        const { data } = await api.get('/settings/business');
+        const [{ data }, notifications] = await Promise.all([
+          api.get('/settings/business'),
+          api.get('/settings/notifications').catch(() => ({ data: null })),
+        ]);
         if (mounted) {
-          setSettings((current) => ({ ...current, ...fromApi(data) }));
+          setSettings((current) => ({
+            ...current,
+            ...fromApi(data),
+            ...(notifications.data ? {
+              notificationProvider: notifications.data.provider || current.notificationProvider,
+              smsEnabled: notifications.data.sms_enabled !== false,
+              smsOnPayment: notifications.data.sms_on_payment !== false,
+              whatsappEnabled: notifications.data.whatsapp_enabled !== false,
+              smsProvider: notifications.data.provider === 'slek' ? 'Slek WhatsApp' : current.smsProvider,
+              smsSenderId: notifications.data.roamtech_sender_id || current.smsSenderId,
+              smsTemplate: notifications.data.payment_sms_template || current.smsTemplate,
+              whatsappTemplate: notifications.data.payment_whatsapp_template || current.whatsappTemplate,
+            } : {}),
+          }));
         }
       } catch (error) {
         toast.error(error.response?.data?.message || 'Failed to load business settings');
@@ -161,7 +182,18 @@ export default function BusinessSettings() {
     event?.preventDefault();
     setSaving(true);
     try {
-      const { data } = await api.patch('/settings/business', toApi(settings));
+      const [{ data }] = await Promise.all([
+        api.patch('/settings/business', toApi(settings)),
+        api.patch('/settings/notifications', {
+          provider: settings.notificationProvider,
+          sms_enabled: settings.smsEnabled,
+          sms_on_payment: settings.smsOnPayment,
+          whatsapp_enabled: settings.whatsappEnabled,
+          roamtech_sender_id: settings.smsSenderId,
+          payment_sms_template: settings.smsTemplate,
+          payment_whatsapp_template: settings.whatsappTemplate,
+        }),
+      ]);
       if (data.config) {
         setSettings((current) => ({ ...current, ...fromApi(data.config) }));
       }
@@ -193,10 +225,10 @@ export default function BusinessSettings() {
 
   const testSms = async () => {
     try {
-      const { data } = await api.post('/settings/test-sms', { phone: settings.supportPhone });
-      toast.success(data.message || 'Test SMS queued');
+      const { data } = await api.post('/settings/test-sms', { phone: settings.supportPhone, channel: 'whatsapp', message: settings.whatsappTemplate });
+      toast.success(data.message || 'Test WhatsApp sent');
     } catch (error) {
-      toast.error(error.response?.data?.message || 'Failed to send test SMS');
+      toast.error(error.response?.data?.message || 'Failed to send test WhatsApp');
     }
   };
 
@@ -343,16 +375,28 @@ export default function BusinessSettings() {
         )}
 
         {activeTab === 'sms' && (
-          <SettingsShell title="SMS Settings" description="Configure SMS provider and customer message templates.">
+          <SettingsShell title="Communication Settings" description="Configure the default customer messaging channel and templates.">
             <div className="grid gap-5 lg:grid-cols-2">
-              <Field label="SMS Provider"><Input name="smsProvider" value={settings.smsProvider} onChange={update} /></Field>
+              <Field label="Default Provider">
+                <Select name="notificationProvider" value={settings.notificationProvider} onChange={update}>
+                  <option value="slek">Slek WhatsApp</option>
+                </Select>
+              </Field>
               <Field label="Sender ID"><Input name="smsSenderId" value={settings.smsSenderId} onChange={update} /></Field>
             </div>
+            <div className="grid gap-3 lg:grid-cols-3">
+              <Toggle checked={settings.whatsappEnabled} label="Enable WhatsApp messages" onChange={(event) => setSettings((current) => ({ ...current, whatsappEnabled: event.target.checked }))} />
+              <Toggle checked={settings.smsEnabled} label="Enable SMS fallback" onChange={(event) => setSettings((current) => ({ ...current, smsEnabled: event.target.checked }))} />
+              <Toggle checked={settings.smsOnPayment} label="Send on payment" onChange={(event) => setSettings((current) => ({ ...current, smsOnPayment: event.target.checked }))} />
+            </div>
+            <Field label="Payment WhatsApp Template">
+              <textarea name="whatsappTemplate" value={settings.whatsappTemplate} onChange={update} className="theme-input min-h-28 w-full rounded-md border px-3 py-2 text-xs outline-none focus:border-[var(--dashboard-color)]" />
+            </Field>
             <Field label="Payment SMS Template">
               <textarea name="smsTemplate" value={settings.smsTemplate} onChange={update} className="theme-input min-h-28 w-full rounded-md border px-3 py-2 text-xs outline-none focus:border-[var(--dashboard-color)]" />
             </Field>
             <button type="button" className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-[var(--dashboard-color)] px-4 text-xs font-semibold text-white hover:opacity-90" onClick={testSms}>
-              Send test SMS
+              Send test WhatsApp
             </button>
           </SettingsShell>
         )}

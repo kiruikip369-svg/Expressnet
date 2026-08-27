@@ -370,7 +370,7 @@ def normalize_phone(phone):
         return digits
     if digits.startswith("0") and len(digits) == 10:
         return f"254{digits[1:]}"
-    if digits.startswith("7") and len(digits) == 9:
+    if digits.startswith(("7", "1")) and len(digits) == 9:
         return f"254{digits}"
     return digits
 

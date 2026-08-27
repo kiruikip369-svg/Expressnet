@@ -59,9 +59,6 @@ export default function AdminTenantDetail() {
   });
   const [tab, setTab] = useState('customers');
   const [tabRows, setTabRows] = useState([]);
-  const [subscription, setSubscription] = useState(null);
-  const [subForm, setSubForm] = useState({ plan: 'basic', amount: '', expires_at: '', auto_renew: true, notes: '' });
-  const [subPayment, setSubPayment] = useState({ amount: '', method: 'manual', reference: '', notes: '' });
   const [mikrotikResult, setMikrotikResult] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -73,13 +70,6 @@ export default function AdminTenantDetail() {
   }
 
   async function loadTab(nextTab = tab) {
-    if (nextTab === 'subscription') {
-      const { data } = await adminApi.get(`/admin/tenants/${id}/subscription`);
-      setSubscription(data);
-      setSubForm({ plan: data.plan || 'basic', amount: data.amount || '', expires_at: data.expires_at ? data.expires_at.slice(0, 10) : '', auto_renew: data.auto_renew !== false, notes: data.notes || '' });
-      setSubPayment({ amount: data.amount || '', method: 'manual', reference: '', notes: '' });
-      return;
-    }
     const { data } = await adminApi.get(`/admin/tenants/${id}/${nextTab}`);
     setTabRows(Array.isArray(data) ? data : []);
   }
@@ -146,28 +136,6 @@ export default function AdminTenantDetail() {
     }
   };
 
-  const saveSubscription = async () => {
-    try {
-      const { data } = await adminApi.patch(`/admin/tenants/${id}/subscription`, { ...subForm, expires_at: subForm.expires_at ? new Date(subForm.expires_at).toISOString() : '' });
-      setSubscription(data.subscription);
-      toast.success('Subscription updated');
-    } catch (error) {
-      toast.error(error.response?.data?.error || 'Failed to update subscription');
-    }
-  };
-
-  const recordPayment = async (event) => {
-    event.preventDefault();
-    try {
-      const { data } = await adminApi.post(`/admin/tenants/${id}/subscription`, subPayment);
-      setSubscription(data.subscription);
-      toast.success('Payment recorded');
-      await loadTab('subscription');
-    } catch (error) {
-      toast.error(error.response?.data?.error || 'Failed to record payment');
-    }
-  };
-
   if (loading) return <p className="text-sm font-medium text-slate-600">Loading tenant...</p>;
   if (!tenant) return <p className="text-sm font-medium text-slate-600">Tenant not found.</p>;
 
@@ -214,8 +182,8 @@ export default function AdminTenantDetail() {
       <form className="rounded-lg bg-white p-6 shadow-soft ring-1 ring-slate-200" onSubmit={save}>
         <div className="mb-4 grid gap-3 md:grid-cols-3">
           <div className="rounded-md bg-slate-50 p-3"><p className="text-xs text-slate-500">Customers</p><p className="text-xl font-bold">{tab === 'customers' ? tabRows.length : tenant.onboarding?.customers ? 'Set' : '0'}</p></div>
-          <div className="rounded-md bg-slate-50 p-3"><p className="text-xs text-slate-500">Subscription</p><p className="text-xl font-bold">{tenant.subscription?.status || 'active'}</p></div>
-          <div className="rounded-md bg-slate-50 p-3"><p className="text-xs text-slate-500">Plan</p><p className="text-xl font-bold">{tenant.subscription?.plan || 'basic'}</p></div>
+          <div className="rounded-md bg-slate-50 p-3"><p className="text-xs text-slate-500">Packages</p><p className="text-xl font-bold">{tenant.onboarding?.packages ? 'Set' : '0'}</p></div>
+          <div className="rounded-md bg-slate-50 p-3"><p className="text-xs text-slate-500">MikroTik</p><p className="text-xl font-bold">{tenant.onboarding?.mikrotik ? 'Set' : '0'}</p></div>
         </div>
         <div className="grid gap-4 md:grid-cols-2">
           {editableFields.map((field) => (
@@ -273,30 +241,13 @@ export default function AdminTenantDetail() {
 
       <section className="space-y-4">
         <div className="flex flex-wrap gap-2">
-          {['subscription', 'customers', 'payments', 'packages'].map((item) => (
+          {['customers', 'payments', 'packages'].map((item) => (
             <button key={item} className={`rounded-md px-4 py-2 text-sm font-bold capitalize ${tab === item ? 'bg-[#e94560] text-white' : 'bg-white text-slate-700 ring-1 ring-slate-200'}`} onClick={() => switchTab(item)}>
               {item}
             </button>
           ))}
         </div>
-        {tab === 'subscription' ? (
-          <div className="rounded-lg bg-white p-5 shadow-soft ring-1 ring-slate-200">
-            <div className="grid gap-4 md:grid-cols-2">
-              <label className="form-label">Plan<select className="form-input" value={subForm.plan} onChange={(e) => setSubForm((c) => ({ ...c, plan: e.target.value }))}><option value="basic">Basic</option><option value="pro">Pro</option><option value="enterprise">Enterprise</option></select></label>
-              <label className="form-label">Amount<input className="form-input" type="number" value={subForm.amount} onChange={(e) => setSubForm((c) => ({ ...c, amount: e.target.value }))} /></label>
-              <label className="form-label">Expires<input className="form-input" type="date" value={subForm.expires_at} onChange={(e) => setSubForm((c) => ({ ...c, expires_at: e.target.value }))} /></label>
-              <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={subForm.auto_renew} onChange={(e) => setSubForm((c) => ({ ...c, auto_renew: e.target.checked }))} />Auto renew</label>
-            </div>
-            <button className="mt-4 rounded-md bg-[#e94560] px-4 py-2 text-xs font-bold text-white" type="button" onClick={saveSubscription}>Save subscription</button>
-            <form className="mt-6 grid gap-3 md:grid-cols-4" onSubmit={recordPayment}>
-              <input className="form-input" type="number" value={subPayment.amount} onChange={(e) => setSubPayment((c) => ({ ...c, amount: e.target.value }))} placeholder="Amount" />
-              <select className="form-input" value={subPayment.method} onChange={(e) => setSubPayment((c) => ({ ...c, method: e.target.value }))}><option>manual</option><option>mpesa</option></select>
-              <input className="form-input" value={subPayment.reference} onChange={(e) => setSubPayment((c) => ({ ...c, reference: e.target.value }))} placeholder="Reference" />
-              <button className="rounded-md bg-[#16213e] px-4 py-2 text-xs font-bold text-white">Record payment</button>
-            </form>
-            <DataTable rows={subscription?.payments || []} columns={[{ key: 'paid_at', label: 'Date' }, { key: 'amount', label: 'Amount', render: (row) => `KES ${row.amount}` }, { key: 'method', label: 'Method' }, { key: 'reference', label: 'Reference' }, { key: 'recorded_by', label: 'Recorded By' }]} empty="No subscription payments yet." />
-          </div>
-        ) : <DataTable rows={tabRows} columns={columns[tab]} empty={`No ${tab} found for this tenant.`} />}
+        <DataTable rows={tabRows} columns={columns[tab]} empty={`No ${tab} found for this tenant.`} />
       </section>
     </div>
   );

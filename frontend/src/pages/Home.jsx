@@ -1,8 +1,9 @@
-import { Mail, MapPin, Phone, Wifi, Zap, CreditCard, ShieldCheck, Users, BarChart3, Globe, ChevronRight, ClipboardCheck, UserCog } from 'lucide-react';
+import { Mail, MapPin, Phone, Zap, CreditCard, ShieldCheck, Users, BarChart3, Globe, ChevronRight, ClipboardCheck, UserCog } from 'lucide-react';
 import { useEffect, useState, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import axios from 'axios';
 import aboutImageUrl from '../assets/bg.jpg';
+import logoUrl from '../assets/Expresslogo.png';
 
 const publicApi = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
@@ -209,10 +210,9 @@ export default function Home() {
       <header className="fixed top-0 left-0 right-0 z-50 bg-white/95 backdrop-blur-sm shadow-sm transition-all duration-300">
         <div className="mx-auto max-w-6xl px-4 h-20 flex items-center justify-between">
           <a href="#hero" className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-md bg-[#0db5f7] text-white">
-              <Wifi size={22} />
-            </div>
-            <h1 className="text-xl font-bold text-[#0db5f7] tracking-tight">{site.brand_name}</h1>
+            
+              <img src={logoUrl} alt={`${site.brand_name} logo`} className="sm:w-[130px] sm:h-[130px] w-[80px] h-[80px] object-contain object-left" />
+          
           </a>
 
           <div className="hidden md:flex items-center gap-4">
@@ -289,9 +289,9 @@ export default function Home() {
           <div className="mx-auto max-w-6xl px-4 relative z-20 text-left w-full">
             <div className="max-w-3xl">
               <div className={`transition-all duration-1000 transform ${isTextVisible ? 'translate-y-0 opacity-100' : 'translate-y-4 opacity-0'}`}>
-                <span className="inline-block py-1 px-3 rounded-full bg-[#0db5f7]/20 border border-[#0db5f7]/30 text-[#0db5f7] text-sm font-bold tracking-wider mb-6">
+                <p className="inline-block py-1 px-3 bg-[#0db5f7]/20 border border-[#0db5f7]/30 text-[#0db5f7] text-sm font-bold tracking-wider mb-6">
                   HOTSPOT BILLING PLATFORM
-                </span>
+                </p>
                 <h1
                   className="text-4xl md:text-6xl lg:text-7xl font-bold text-white mb-6 leading-tight"
                 >
@@ -541,8 +541,8 @@ export default function Home() {
                     <div className="absolute bottom-0 left-0 w-32 h-32 bg-cyan-400 rounded-full blur-[80px] translate-y-1/2 -translate-x-1/2 pointer-events-none"></div>
 
                     <div className="relative z-10">
-                      <div className="w-16 h-16 bg-white/10 rounded-2xl flex items-center justify-center mb-8 backdrop-blur-sm border border-white/10">
-                        <Wifi size={32} className="text-[#0db5f7]" />
+                      <div className="mb-8 flex h-16 w-56 items-center overflow-hidden rounded-full bg-white px-4 shadow-lg shadow-black/20">
+                        <img src={logoUrl} alt={`${site.brand_name} logo`} className="h-12 w-full object-contain object-left" />
                       </div>
 
                       <h3 className="text-3xl font-bold mb-4">Ready to Grow Your Hotspot Business?</h3>
@@ -590,10 +590,9 @@ export default function Home() {
             {/* Brand Column */}
             <div className="space-y-6">
               <div className="flex items-center gap-3">
-                <div className="w-12 h-12 bg-white/10 rounded-full flex items-center justify-center backdrop-blur-sm border border-white/10">
-                  <Wifi size={24} className="text-[#0db5f7]" />
+                <div className="flex h-14 w-52 items-center overflow-hidden rounded-full bg-white px-3 shadow-sm">
+                  <img src={logoUrl} alt={`${site.brand_name} logo`} className="h-10 w-full object-contain object-left" />
                 </div>
-                <span className="text-2xl font-bold text-white tracking-tight">{site.brand_name}</span>
               </div>
               <p className="text-slate-400 leading-relaxed text-sm">
                 The all-in-one billing platform for hotspot operators. Manage customers, sell packages, collect payments, and control access from anywhere.

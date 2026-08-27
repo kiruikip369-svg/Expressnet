@@ -8,8 +8,6 @@ import Sidebar from './components/Sidebar';
 import AdminAuditLog from './pages/admin/AdminAuditLog';
 import AdminDashboard from './pages/admin/AdminDashboard';
 import AdminLogin from './pages/admin/AdminLogin';
-import AdminSiteSettings from './pages/admin/AdminSiteSettings';
-import AdminSubscriptions from './pages/admin/AdminSubscriptions';
 import AdminSystem from './pages/admin/AdminSystem';
 import AdminTenantDetail from './pages/admin/AdminTenantDetail';
 import AdminTenants from './pages/admin/AdminTenants';
@@ -132,9 +130,7 @@ export default function App() {
           <Route path="dashboard" element={<AdminDashboard />} />
           <Route path="tenants" element={<AdminTenants />} />
           <Route path="tenants/:id" element={<AdminTenantDetail />} />
-          <Route path="subscriptions" element={<AdminSubscriptions />} />
           <Route path="users" element={<AdminUsers />} />
-          <Route path="site" element={<AdminSiteSettings />} />
           <Route path="system" element={<AdminSystem />} />
           <Route path="audit" element={<AdminAuditLog />} />
         </Route>

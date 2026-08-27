@@ -4,6 +4,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import socket
 import ssl
 from datetime import datetime, timedelta, timezone
@@ -543,39 +544,51 @@ def initiate_daraja_b2c(tenant, payment_id, amount, phone, remarks=None):
 def whatsapp_enabled(tenant=None):
     if tenant and tenant.get("whatsapp_enabled") is False:
         return False
-    return os.getenv("WHATSAPP_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+    return os.getenv("WHATSAPP_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+
+
+def normalize_kenyan_whatsapp_number(phone):
+    recipient = normalize_phone(phone)
+    if not recipient:
+        raise ValueError("Phone number is empty")
+    if not re.fullmatch(r"254(7|1)\d{8}", recipient):
+        raise ValueError(f"Invalid Kenyan phone number after normalization: {recipient}")
+    return recipient
 
 
 def send_whatsapp_message(phone, message, tenant=None):
     if not whatsapp_enabled(tenant):
         return {"sent": False, "skipped": "disabled"}
-    token = os.getenv("WHATSAPP_API_TOKEN") or os.getenv("WHATSAPP_ACCESS_TOKEN")
-    phone_number_id = os.getenv("WHATSAPP_PHONE_NUMBER_ID")
-    api_url = os.getenv("WHATSAPP_API_URL", "").strip()
-    if not api_url and phone_number_id:
-        version = os.getenv("WHATSAPP_API_VERSION", "v20.0")
-        api_url = f"https://graph.facebook.com/{version}/{phone_number_id}/messages"
-    if not token or not api_url:
+    provider = str((tenant or {}).get("notification_provider") or os.getenv("WHATSAPP_PROVIDER") or "slek").strip().lower()
+    if provider not in {"slek", "slek_whatsapp"}:
+        provider = "slek"
+
+    slek_key = os.getenv("SLEK_KEY")
+    slek_secret = os.getenv("SLEK_SECRET")
+    api_url = os.getenv("SLEK_WHATSAPP_API_URL", "https://slek.org/whatsapp").strip()
+    if not slek_key or not slek_secret or not api_url:
         return {"sent": False, "skipped": "missing_credentials"}
 
-    recipient = normalize_phone(phone)
-    if not recipient:
-        return {"sent": False, "skipped": "missing_phone"}
+    try:
+        recipient = normalize_kenyan_whatsapp_number(phone)
+    except ValueError as exc:
+        return {"sent": False, "skipped": "invalid_phone", "error": str(exc)}
 
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": recipient,
-        "type": "text",
-        "text": {"preview_url": False, "body": str(message or "")},
-    }
     response = requests.post(
         api_url,
-        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-        json=payload,
+        data={
+            "slek_key": slek_key,
+            "slek_secret": slek_secret,
+            "header": str((tenant or {}).get("business_name") or os.getenv("SLEK_DEFAULT_HEADER") or "Expressnet"),
+            "message": str(message or ""),
+            "recipient_phone": recipient,
+            "recipient_name": str((tenant or {}).get("customer_name") or "Customer"),
+        },
+        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
         timeout=20,
     )
     response.raise_for_status()
-    return {"sent": True, "response": response.json() if response.content else {}}
+    return {"sent": True, "provider": "slek", "recipient": recipient, "response": response.text}
 
 
 def send_sms_message(phone, message, tenant=None):

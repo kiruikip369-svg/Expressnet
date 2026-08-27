@@ -2155,7 +2155,15 @@ def settings_test_sms(request):
     phone = normalize_phone(data.get("phone") or request.tenant.get("phone"))
     if not phone:
         return ok({"message": "Phone number is required"}, 400)
-    return ok({"success": True, "message": "Test SMS queued", "phone": phone})
+    channel = str(data.get("channel") or "whatsapp").strip().lower()
+    test_message = str(data.get("message") or "This is a test message from Expressnet.").strip()
+    if channel == "sms":
+        result = send_sms_message(phone, test_message, request.tenant)
+    else:
+        result = send_whatsapp_message(phone, test_message, request.tenant)
+    if result.get("sent"):
+        return ok({"success": True, "message": f"Test {channel} sent", "phone": phone, "result": result})
+    return ok({"success": False, "message": result.get("skipped") or result.get("error") or f"Failed to send test {channel}", "phone": phone, "result": result}, 400)
 
 
 @csrf_exempt
@@ -2300,7 +2308,7 @@ def settings_notifications(request):
     if method(request, "GET"):
         return ok(
             {
-                "provider": request.tenant.get("notification_provider") or "whatsapp_cloud",
+                "provider": request.tenant.get("notification_provider") or "slek",
                 "sms_enabled": request.tenant.get("sms_enabled") is not False,
                 "sms_on_maintenance": request.tenant.get("sms_on_maintenance") is not False,
                 "sms_on_promotions": request.tenant.get("sms_on_promotions") is not False,
@@ -2311,7 +2319,7 @@ def settings_notifications(request):
                 "sms_template_pppoe": request.tenant.get("sms_template_pppoe") or "Your PPPoE package is active. Username: {{username}}, Password: {{password}}.",
                 "sms_balance": int(request.tenant.get("sms_balance") or 0),
                 "sms_sent_count": int(request.tenant.get("sms_sent_count") or 0),
-                "whatsapp_enabled": bool(request.tenant.get("whatsapp_enabled")) or os.getenv("WHATSAPP_ENABLED", "false").lower() in {"1", "true", "yes", "on"},
+                "whatsapp_enabled": request.tenant.get("whatsapp_enabled") is not False,
                 "roamtech_sender_id": request.tenant.get("roamtech_sender_id") or "",
                 "payment_sms_template": request.tenant.get("payment_sms_template") or "Hi {{name}}, your {{package}} payment of Ksh {{amount_payable}} is confirmed. Username: {{username}}, Password: {{password}}.",
                 "payment_whatsapp_template": request.tenant.get("payment_whatsapp_template") or "Hi {{name}}, your {{package}} internet package is active. Amount payable: Ksh {{amount_payable}}. Username: {{username}}, Password: {{password}}.",
@@ -2319,7 +2327,7 @@ def settings_notifications(request):
         )
     data = body(request)
     updates = {
-        "notification_provider": str(data.get("provider") or "whatsapp_cloud").strip(),
+        "notification_provider": str(data.get("provider") or "slek").strip(),
         "sms_enabled": data.get("sms_enabled") is not False,
         "sms_on_maintenance": data.get("sms_on_maintenance") is not False,
         "sms_on_promotions": data.get("sms_on_promotions") is not False,
