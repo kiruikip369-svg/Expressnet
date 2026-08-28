@@ -151,6 +151,26 @@ def _customer_credentials_sms(customer, tenant):
     )
 
 
+def _find_team_member_by_label(tenant, label):
+    needle = str(label or "").strip().lower()
+    if not needle:
+        return None
+    members = tenant.get("team_members") if isinstance(tenant, dict) else {}
+    if not isinstance(members, dict):
+        members = {}
+    for member_id, member in members.items():
+        values = [
+            member_id,
+            member.get("name"),
+            member.get("email"),
+            member.get("phone"),
+            member.get("role"),
+        ]
+        if any(str(value or "").strip().lower() == needle for value in values):
+            return {"id": member_id, **member}
+    return None
+
+
 def body(request):
     if hasattr(request, "data"):
         if hasattr(request.data, "dict"):
@@ -874,6 +894,7 @@ def _pppoe_grace_payload(data, service_type):
 def customers(request, customer_id=None):
     tenant = request.tenant
     if method(request, "GET") and not customer_id:
+        ensure_expired_customer_invoices(tenant)
         return as_collection_response(request, list_children(f"tenants/{tenant['id']}/customers"))
     if method(request, "GET") and customer_id:
         customer = ref(f"tenants/{tenant['id']}/customers/{customer_id}").get()
@@ -891,6 +912,7 @@ def customers(request, customer_id=None):
             "location",
             "username",
             "password",
+            "amount_payable",
             "package",
             "service_type",
             "status",
@@ -1034,6 +1056,13 @@ def customer_add(request):
         return ok({"message": "Static customers can be saved here, but MikroTik auto-provisioning is only available for PPPoE and Hotspot customers"}, 400)
     linked_routers = request.tenant.get("linked_routers") or {}
     mikrotik_router_id = str(data.get("mikrotik_router_id") or "").strip()
+    if service_type in {"pppoe", "static"} and not str(data.get("technician") or "").strip():
+        return ok({"message": "Select the technician assigned to this customer"}, 400)
+    if service_type in {"pppoe", "static"} and linked_routers:
+        if not mikrotik_router_id:
+            return ok({"message": "Select the MikroTik for this customer"}, 400)
+        if mikrotik_router_id not in linked_routers:
+            return ok({"message": "Selected MikroTik was not found"}, 400)
     if provision and linked_routers:
         if not mikrotik_router_id:
             return ok({"message": "Select the MikroTik router for this customer"}, 400)
@@ -1042,6 +1071,7 @@ def customer_add(request):
     pkg = find_child_by_field(f"tenants/{request.tenant['id']}/packages", "name", data["package_name"])
     if not pkg:
         return ok({"message": f"Package \"{data['package_name']}\" was not found"}, 404)
+    amount_payable = float(data.get("amount_payable") or pkg.get("amount_payable") or pkg.get("price") or 0)
     grace_payload = _pppoe_grace_payload(data, service_type)
     if isinstance(grace_payload, Response):
         return grace_payload
@@ -1089,6 +1119,7 @@ def customer_add(request):
             "mikrotik_router_id": mikrotik_router_id,
             "support": data.get("support") or "",
             "package": data["package_name"],
+            "amount_payable": amount_payable,
             "service_type": service_type,
             "provisioning_status": provisioning_status,
             "provisioning_message": provisioning_message,
@@ -1100,16 +1131,16 @@ def customer_add(request):
         }
     new_ref = ref(f"tenants/{request.tenant['id']}/customers").push(customer_payload)
     notification_result = None
-    if service_type == "pppoe":
+    if service_type in {"pppoe", "static"}:
         try:
-            notification_result = notify_pppoe_customer_created(request.tenant, customer_payload)
+            notification_result = notify_customer_created(request.tenant, customer_payload)
             ref(f"tenants/{request.tenant['id']}/customers/{new_ref.key}").update({
-                "customer_created_notification_status": "sent" if notification_result.get("whatsapp", {}).get("sent") else "skipped",
+                "customer_created_notification_status": "sent" if notification_result.get("customer_whatsapp", {}).get("sent") else "skipped",
                 "customer_created_notification_result": notification_result,
                 "customer_created_notification_at": iso_now(),
             })
         except Exception:
-            logger.exception("Failed to send PPPoE customer creation WhatsApp notification")
+            logger.exception("Failed to send customer creation WhatsApp notification")
     # Sync to Postgres + RADIUS if tenant has RADIUS enabled
     if request.tenant.get("radius_enabled"):
         try:
@@ -1493,6 +1524,7 @@ def staff_requisitions(request):
 @tenant_required
 def payments(request):
     if method(request, "GET"):
+        ensure_expired_customer_invoices(request.tenant)
         payments_data = list_children(f"tenants/{request.tenant['id']}/payments")
         status_filter = request.GET.get("status")
         from_date = parse_date(request.GET.get("from"))
@@ -1585,12 +1617,13 @@ def payment_mark_paid(request, payment_id):
         "callback_result_desc": "Marked as paid by operator",
     }
     ref(f"tenants/{request.tenant['id']}/payments/{payment_id}").update(updates)
+    marked_invoice = mark_customer_invoice_paid(request.tenant["id"], payment.get("customer_id"), {"id": payment_id, **payment, **updates})
     try:
         activate_paid_access(request.tenant, payment_id, {**payment, **updates}, payment.get("phone"), payment_code)
     except Exception as exc:
         ref(f"tenants/{request.tenant['id']}/payments/{payment_id}").update({"access_status": "activation_failed", "callback_result_desc": str(exc)})
         return ok({"success": True, "message": "Payment marked paid, but router activation failed", "activation_error": str(exc)})
-    return ok({"success": True, "message": "Payment marked as paid and access activated"})
+    return ok({"success": True, "message": "Payment marked as paid and access activated", "invoice": marked_invoice})
 
 
 @csrf_exempt
@@ -1624,12 +1657,61 @@ def customer_renew(request, customer_id):
             "source": "manual_renewal",
         }
     )
+    mark_customer_invoice_paid(request.tenant["id"], customer_id, {"id": payment_ref.key, **payment_ref.instance.as_dict()})
     try:
         activate_paid_access(request.tenant, payment_ref.key, {**payment_ref.instance.as_dict(), "package_name": package.get("name")}, customer.get("phone"), payment_ref.instance.payment_code)
     except Exception as exc:
         payment_ref.update({"access_status": "activation_failed", "callback_result_desc": str(exc)})
         return ok({"success": True, "message": "Renewal saved, but router activation failed", "paymentId": payment_ref.key, "activation_error": str(exc)})
     return ok({"success": True, "message": "Customer renewed and access activated", "paymentId": payment_ref.key})
+
+
+@csrf_exempt
+@api_view(["GET", "POST", "PATCH"])
+@tenant_required
+def invoices(request, invoice_id=None):
+    tenant_id = request.tenant["id"]
+    if method(request, "GET") and not invoice_id:
+        ensure_expired_customer_invoices(request.tenant)
+        invoices_data = list_children(f"tenants/{tenant_id}/invoices")
+        status_filter = request.GET.get("status")
+        if status_filter and status_filter != "all":
+            invoices_data = [item for item in invoices_data if item.get("status") == status_filter]
+        return as_collection_response(request, invoices_data)
+    if method(request, "POST") and not invoice_id:
+        data = body(request)
+        invoice = {
+            "invoice_number": str(data.get("invoice_number") or _invoice_id()).strip(),
+            "customer_id": str(data.get("customer_id") or "").strip(),
+            "customer": str(data.get("customer") or data.get("customer_name") or "").strip(),
+            "customer_name": str(data.get("customer_name") or data.get("customer") or "").strip(),
+            "phone": str(data.get("phone") or "").strip(),
+            "item": str(data.get("item") or "Internet subscription").strip(),
+            "package_name": str(data.get("package_name") or "").strip(),
+            "service_type": str(data.get("service_type") or "").strip(),
+            "amount": float(data.get("amount") or 0),
+            "due_at": str(data.get("due_at") or iso_now()).strip(),
+            "status": str(data.get("status") or "sent").strip(),
+            "reason": str(data.get("reason") or "manual").strip(),
+            "created_at": iso_now(),
+            "updated_at": iso_now(),
+        }
+        invoice_ref = ref(f"tenants/{tenant_id}/invoices").push(invoice)
+        return ok({"success": True, "message": "Invoice created", "invoice": {"id": invoice_ref.key, **invoice}}, 201)
+    if not invoice_id:
+        return ok({"message": "Invoice id is required"}, 400)
+    invoice = ref(f"tenants/{tenant_id}/invoices/{invoice_id}").get()
+    if not invoice:
+        return ok({"message": "Invoice not found"}, 404)
+    if method(request, "PATCH"):
+        data = body(request)
+        updates = {key: data[key] for key in ["customer", "customer_name", "phone", "item", "package_name", "service_type", "amount", "due_at", "status"] if key in data}
+        if "amount" in updates:
+            updates["amount"] = float(updates["amount"] or 0)
+        updates["updated_at"] = iso_now()
+        ref(f"tenants/{tenant_id}/invoices/{invoice_id}").update(updates)
+        return ok({"success": True, "message": "Invoice saved", "invoice": {"id": invoice_id, **invoice, **updates}})
+    return ok({"message": "Method not allowed"}, 405)
 
 
 def tenant_payments(tenant_id):
@@ -2187,6 +2269,11 @@ def settings_test_whatsapp(request):
         "notification_provider": str(data.get("provider") or request.tenant.get("notification_provider") or "slek").strip(),
         "whatsapp_enabled": data.get("whatsapp_enabled") is not False,
     }
+    apiwap_api_key = str(data.get("apiwap_api_key") or "").strip()
+    if apiwap_api_key and apiwap_api_key not in {MASKED, "********", "••••••••"}:
+        tenant["apiwap_api_key"] = apiwap_api_key
+    if data.get("apiwap_base_url"):
+        tenant["apiwap_base_url"] = str(data.get("apiwap_base_url")).strip()
     result = send_whatsapp_message(phone, test_message, tenant)
     if result.get("sent"):
         return ok({"success": True, "message": "Test WhatsApp notification sent", "phone": phone, "result": result})
@@ -2353,7 +2440,7 @@ def settings_notifications(request):
                 "roamtech_sender_id": request.tenant.get("roamtech_sender_id") or "",
                 "apiwap_base_url": request.tenant.get("apiwap_base_url") or "https://api.apiwap.com/api/v1",
                 "has_apiwap_api_key": bool(request.tenant.get("apiwap_api_key")),
-                "customer_created_whatsapp_template": strip_customer_template_tokens(request.tenant.get("customer_created_whatsapp_template") or "Your PPPoE internet account has been created."),
+                "customer_created_whatsapp_template": strip_customer_template_tokens(request.tenant.get("customer_created_whatsapp_template") or "Your internet account has been created successfully."),
                 "payment_sms_template": strip_customer_template_tokens(request.tenant.get("payment_sms_template") or "Your payment is confirmed."),
                 "payment_whatsapp_template": strip_customer_template_tokens(request.tenant.get("payment_whatsapp_template") or "Your internet package is active. Thank you for your payment."),
                 "expiry_whatsapp_template": strip_customer_template_tokens(request.tenant.get("expiry_whatsapp_template") or "Your internet package is about to expire. Please renew to stay connected."),
@@ -2382,10 +2469,25 @@ def settings_notifications(request):
         "notifications_updated_at": iso_now(),
     }
     apiwap_api_key = str(data.get("apiwap_api_key") or "").strip()
-    if apiwap_api_key and apiwap_api_key not in {MASKED, "********"}:
+    if apiwap_api_key and apiwap_api_key not in {MASKED, "********", "••••••••"}:
         updates["apiwap_api_key"] = apiwap_api_key
     ref(f"tenants/{request.tenant['id']}").update(updates)
-    return ok({"success": True, "message": "Notification settings saved", "config": updates})
+    try:
+        tenant_obj = Tenant.objects.get(pk=request.tenant["id"])
+        tenant_obj.apply_data(updates)
+        tenant_obj.save()
+    except Tenant.DoesNotExist:
+        logger.warning("Notification settings saved to Firebase only; tenant model not found tenant=%s", request.tenant["id"])
+    saved = {**request.tenant, **updates}
+    return ok({
+        "success": True,
+        "message": "Notification settings saved",
+        "config": {key: value for key, value in updates.items() if key != "apiwap_api_key"},
+        "provider": saved.get("notification_provider") or "slek",
+        "whatsapp_enabled": saved.get("whatsapp_enabled") is not False,
+        "has_apiwap_api_key": bool(saved.get("apiwap_api_key")),
+        "apiwap_base_url": saved.get("apiwap_base_url") or "https://api.apiwap.com/api/v1",
+    })
 
 
 def to_access_username(phone):
@@ -2458,37 +2560,153 @@ def append_expiry_details(message, context):
 
 
 def append_customer_created_details(message, context):
-    base = str(message or "").strip() or "Your PPPoE internet account has been created."
+    service_label = str(context.get("service_type") or "internet").upper()
+    base = str(message or "").strip() or f"Your {service_label} account has been created."
     details = (
         f"Name: {context.get('name') or 'customer'}. "
         f"Package: {context.get('package') or ''}. "
+        f"Amount payable: Ksh {context.get('amount_payable') or ''}. "
+        "Your technician will assist with setup."
+    )
+    return f"{base} {details}"
+
+
+def append_technician_credentials_details(message, context):
+    service_label = str(context.get("service_type") or "internet").upper()
+    base = str(message or "").strip() or f"A {service_label} customer account has been created."
+    details = (
+        f"Customer: {context.get('name') or 'customer'}. "
+        f"Phone: {context.get('phone') or ''}. "
+        f"Package: {context.get('package') or ''}. "
+        f"Amount payable: Ksh {context.get('amount_payable') or ''}. "
         f"Username: {context.get('username') or ''}. "
         f"Password: {context.get('password') or ''}."
     )
     return f"{base} {details}"
 
 
-def notify_pppoe_customer_created(tenant, customer):
-    if str((customer or {}).get("service_type") or "").strip().lower() != "pppoe":
-        return {"whatsapp": {"sent": False, "skipped": "not_pppoe"}}
+def notify_customer_created(tenant, customer):
+    service_type = str((customer or {}).get("service_type") or "").strip().lower()
+    if service_type not in {"pppoe", "static"}:
+        return {"whatsapp": {"sent": False, "skipped": "unsupported_service_type"}}
     if (tenant or {}).get("whatsapp_enabled") is False or (tenant or {}).get("whatsapp_on_customer_created") is False:
         return {"whatsapp": {"sent": False, "skipped": "disabled"}}
+    technician = _find_team_member_by_label(tenant, customer.get("technician"))
     context = {
         "name": customer.get("name") or customer.get("phone") or "customer",
+        "phone": customer.get("phone") or "",
         "package": customer.get("package") or customer.get("package_name") or "",
+        "service_type": service_type,
+        "amount_payable": customer.get("amount_payable") or "",
         "username": customer.get("username") or "",
         "password": customer.get("password") or "",
     }
-    template = (tenant or {}).get("customer_created_whatsapp_template") or "Your PPPoE internet account has been created."
-    message = append_customer_created_details(strip_customer_template_tokens(template), context)
-    return {
-        "whatsapp": send_whatsapp_message(
+    template = (tenant or {}).get("customer_created_whatsapp_template") or f"Your {service_type.upper()} internet account has been created."
+    technician_template = (tenant or {}).get("technician_customer_credentials_template") or f"A {service_type.upper()} customer account has been created."
+    results = {
+        "customer_whatsapp": send_whatsapp_message(
             customer.get("phone"),
-            message,
+            append_customer_created_details(strip_customer_template_tokens(template), context),
             tenant,
             recipient_name=context["name"],
         )
     }
+    if technician and technician.get("phone"):
+        results["technician_whatsapp"] = send_whatsapp_message(
+            technician.get("phone"),
+            append_technician_credentials_details(strip_customer_template_tokens(technician_template), context),
+            tenant,
+            recipient_name=technician.get("name") or "Technician",
+        )
+    else:
+        results["technician_whatsapp"] = {"sent": False, "skipped": "missing_technician_phone"}
+    results["whatsapp"] = results["customer_whatsapp"]
+    return results
+
+
+def _invoice_id():
+    return f"INV-{timezone.now().strftime('%Y%m%d')}-{secrets.token_hex(3).upper()}"
+
+
+def create_customer_invoice(tenant, customer, amount, reason="subscription_due", due_at=None):
+    tenant_id = tenant.get("id")
+    if not tenant_id:
+        return None
+    invoice = {
+        "invoice_number": _invoice_id(),
+        "customer_id": customer.get("id"),
+        "customer": customer.get("name") or customer.get("phone") or "Customer",
+        "customer_name": customer.get("name") or customer.get("phone") or "Customer",
+        "phone": customer.get("phone") or "",
+        "item": f"{customer.get('package') or 'Internet'} subscription",
+        "package_name": customer.get("package") or "",
+        "service_type": customer.get("service_type") or "",
+        "amount": float(amount or 0),
+        "due_at": due_at or iso_now(),
+        "status": "sent",
+        "reason": reason,
+        "created_at": iso_now(),
+        "updated_at": iso_now(),
+    }
+    invoice_ref = ref(f"tenants/{tenant_id}/invoices").push(invoice)
+    return {"id": invoice_ref.key, **invoice}
+
+
+def mark_customer_invoice_paid(tenant_id, customer_id, payment):
+    if not customer_id:
+        return None
+    invoices = list_children(f"tenants/{tenant_id}/invoices")
+    open_invoice = next(
+        (
+            invoice for invoice in sorted(invoices, key=lambda item: item.get("created_at") or "", reverse=True)
+            if str(invoice.get("customer_id") or "") == str(customer_id) and invoice.get("status") != "paid"
+        ),
+        None,
+    )
+    if not open_invoice:
+        return None
+    updates = {
+        "status": "paid",
+        "paid_at": payment.get("paid_at") or iso_now(),
+        "payment_id": payment.get("id"),
+        "payment_code": payment.get("payment_code"),
+        "updated_at": iso_now(),
+    }
+    ref(f"tenants/{tenant_id}/invoices/{open_invoice['id']}").update(updates)
+    return {"id": open_invoice["id"], **open_invoice, **updates}
+
+
+def ensure_expired_customer_invoices(tenant):
+    tenant_id = tenant.get("id")
+    if not tenant_id:
+        return []
+    now = timezone.now()
+    created = []
+    for customer in list_children(f"tenants/{tenant_id}/customers"):
+        if str(customer.get("service_type") or "").strip().lower() not in {"pppoe", "static"}:
+            continue
+        expiry_raw = customer.get("expiry_date") or customer.get("expires_at")
+        if not expiry_raw:
+            continue
+        expiry = parse_datetime(str(expiry_raw))
+        if not expiry:
+            continue
+        if expiry.tzinfo is None:
+            expiry = timezone.make_aware(expiry, timezone.get_current_timezone())
+        if expiry > now:
+            continue
+        marker = f"expiry_invoice_{expiry.date().isoformat()}"
+        if customer.get(marker):
+            continue
+        amount_due = customer.get("amount_payable")
+        if amount_due in {None, ""}:
+            pkg = find_child_by_field(f"tenants/{tenant_id}/packages", "name", customer.get("package"))
+            amount_due = (pkg or {}).get("amount_payable") or (pkg or {}).get("price") or 0
+        invoice = create_customer_invoice(tenant, customer, amount_due, reason="subscription_expired", due_at=expiry.isoformat())
+        if invoice:
+            ref(f"tenants/{tenant_id}/customers/{customer['id']}").update({marker: invoice["id"], "last_expiry_invoice_at": iso_now()})
+            created.append(invoice)
+    return created
 
 
 def notify_payment_access(tenant, payment, access):
@@ -2558,6 +2776,7 @@ def send_expiry_notifications(request):
     due_at = now + timedelta(hours=hours)
     sent = []
     skipped = []
+    invoices_created = []
     for customer in list_children(f"tenants/{request.tenant['id']}/customers"):
         expiry_raw = customer.get("expiry_date") or customer.get("expires_at")
         if not expiry_raw:
@@ -2567,8 +2786,18 @@ def send_expiry_notifications(request):
             continue
         if expiry.tzinfo is None:
             expiry = timezone.make_aware(expiry, timezone.get_current_timezone())
-        if expiry < now or expiry > due_at:
+        if expiry > due_at:
             continue
+        invoice_marker = f"expiry_invoice_{expiry.date().isoformat()}"
+        if expiry <= now and not customer.get(invoice_marker):
+            amount_due = customer.get("amount_payable")
+            if amount_due in {None, ""}:
+                pkg = find_child_by_field(f"tenants/{request.tenant['id']}/packages", "name", customer.get("package"))
+                amount_due = (pkg or {}).get("amount_payable") or (pkg or {}).get("price") or 0
+            invoice = create_customer_invoice(request.tenant, customer, amount_due, reason="subscription_expired", due_at=expiry.isoformat())
+            if invoice:
+                ref(f"tenants/{request.tenant['id']}/customers/{customer['id']}").update({invoice_marker: invoice["id"], "last_expiry_invoice_at": iso_now()})
+                invoices_created.append(invoice)
         marker = f"expiry_whatsapp_notice_{expiry.date().isoformat()}"
         if customer.get(marker):
             skipped.append({"customer_id": customer.get("id"), "reason": "already_notified"})
@@ -2579,7 +2808,7 @@ def send_expiry_notifications(request):
             sent.append({"customer_id": customer.get("id"), "phone": customer.get("phone")})
         else:
             skipped.append({"customer_id": customer.get("id"), "phone": customer.get("phone"), "result": result})
-    return ok({"success": True, "message": f"Sent {len(sent)} expiry WhatsApp notifications", "sent": sent, "skipped": skipped})
+    return ok({"success": True, "message": f"Sent {len(sent)} expiry WhatsApp notifications", "sent": sent, "skipped": skipped, "invoices_created": invoices_created})
 
 
 def activate_paid_access(tenant, payment_id, payment, phone, payment_code):
@@ -2763,6 +2992,7 @@ def complete_daraja_payment(tenant_id, payment_id, callback_metadata, amount, re
         "tenant_settlement_status": payment.get("tenant_settlement_status") or "queued",
     }
     tenant_data = ref(f"tenants/{tenant_id}").get() or {}
+    mark_customer_invoice_paid(tenant_id, payment.get("customer_id"), {"id": payment_id, **payment, **update})
     collection_account = str(update.get("collection_account") or "").strip().lower()
     platform_collected = collection_account != "tenant_daraja"
     payout = tenant_payout_details(tenant_data)

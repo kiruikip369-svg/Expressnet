@@ -29,7 +29,7 @@ const defaults = {
   sms_on_promotions: true,
   apiwap_base_url: 'https://api.apiwap.com/api/v1',
   apiwap_api_key: '',
-  customer_created_whatsapp_template: 'Your PPPoE internet account has been created.',
+  customer_created_whatsapp_template: 'Your internet account has been created successfully.',
   payment_whatsapp_template: 'Your internet package is active. Thank you for your payment.',
   expiry_whatsapp_template: 'Your internet package is about to expire. Please renew to stay connected.',
   sms_template_maintenance: 'We will be performing scheduled maintenance. Thank you for your patience.',
@@ -80,7 +80,7 @@ const tabs = [
 ];
 
 const notificationTypes = [
-  ['whatsapp_on_customer_created', PlugZap, 'PPPoE customer created', 'Sent when a PPPoE customer account is created.'],
+  ['whatsapp_on_customer_created', PlugZap, 'Customer created', 'Sent when a PPPoE or Static customer account is created.'],
   ['sms_on_payment', ShoppingCart, 'Package payments', 'Sent after customer payment and internet activation.'],
   ['whatsapp_on_expiry', AlarmClock, 'Package expiry', 'Sent before a customer package expires.'],
   ['sms_on_maintenance', AlarmClock, 'Maintenance notices', 'Use when notifying customers about planned service work.'],
@@ -88,7 +88,7 @@ const notificationTypes = [
 ];
 
 const templateFields = [
-  ['customer_created_whatsapp_template', 'PPPoE customer created message', 'Customer name, package, username, and password are added automatically.'],
+  ['customer_created_whatsapp_template', 'Customer created message', 'Customer name, package, and payable amount are added automatically. Credentials are sent to the assigned technician.'],
   ['payment_whatsapp_template', 'Payment message', 'Customer name, package, amount, username, and password are added automatically.'],
   ['expiry_whatsapp_template', 'Expiry message', 'Customer name, package, username, and expiry time are added automatically.'],
   ['sms_template_maintenance', 'Maintenance message', 'Plain message for planned downtime or service work.'],
@@ -178,7 +178,13 @@ export default function Messages() {
         payment_sms_template: nextForm.payment_whatsapp_template,
       });
       toast.success(data.message || 'Message settings saved');
-      setForm((current) => ({ ...current, apiwap_api_key: current.apiwap_api_key ? MASKED : '' }));
+      setForm((current) => ({
+        ...current,
+        provider: data.provider || nextForm.provider,
+        whatsapp_enabled: data.whatsapp_enabled !== false,
+        apiwap_base_url: data.apiwap_base_url || nextForm.apiwap_base_url,
+        apiwap_api_key: data.has_apiwap_api_key ? MASKED : '',
+      }));
     } catch (error) {
       toast.error(error.response?.data?.message || 'Failed to save message settings');
     } finally {
@@ -199,9 +205,16 @@ export default function Messages() {
   const testConnection = async (provider = activeProvider) => {
     setTesting(true);
     try {
+      let testForm = form;
+      if (provider.id === 'apiwap' && form.apiwap_api_key && form.apiwap_api_key !== MASKED) {
+        await saveSettings({ ...form, provider: 'apiwap', whatsapp_enabled: true });
+        testForm = { ...form, provider: 'apiwap', whatsapp_enabled: true };
+      }
       const { data } = await api.post('/settings/test-whatsapp', {
         provider: provider.id,
         whatsapp_enabled: true,
+        apiwap_base_url: testForm.apiwap_base_url,
+        apiwap_api_key: testForm.apiwap_api_key,
         message: `${provider.name} test WhatsApp notification from your billing system.`,
       });
       toast.success(data.message || `${provider.name} connection tested`);

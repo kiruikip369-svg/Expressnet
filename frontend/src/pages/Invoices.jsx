@@ -1,12 +1,7 @@
 import { ChevronDown, FileText, Pencil, Plus, Search } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-
-const initialInvoices = [
-  { id: 'INV-001', customer: 'Acme Cyber', item: 'Monthly internet package', amount: 4500, due_at: '2026-07-05T17:00:00', status: 'paid' },
-  { id: 'INV-002', customer: 'Grace Homes', item: 'Router installation', amount: 8500, due_at: '2026-07-12T17:00:00', status: 'sent' },
-  { id: 'INV-003', customer: 'Main Street Office', item: 'Dedicated link renewal', amount: 15000, due_at: '2026-07-20T17:00:00', status: 'draft' },
-];
+import api from '../api/axios';
 
 const blankInvoice = { id: '', customer: '', item: '', amount: 0, due_at: '', status: 'draft' };
 
@@ -46,11 +41,28 @@ function MetricCard({ title, value, helper }) {
 }
 
 export default function Invoices() {
-  const [invoices, setInvoices] = useState(initialInvoices);
+  const [invoices, setInvoices] = useState([]);
   const [draft, setDraft] = useState(blankInvoice);
   const [editingId, setEditingId] = useState(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [query, setQuery] = useState('');
+  const [loading, setLoading] = useState(true);
+
+  async function loadInvoices() {
+    setLoading(true);
+    try {
+      const { data } = await api.get('/invoices?page_size=100');
+      setInvoices(Array.isArray(data) ? data : data.results || []);
+    } catch (error) {
+      toast.error(error.response?.data?.message || 'Failed to load invoices');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadInvoices();
+  }, []);
 
   const filtered = useMemo(() => {
     const needle = query.toLowerCase();
@@ -77,12 +89,17 @@ export default function Invoices() {
 
   const save = (event) => {
     event.preventDefault();
-    const payload = { ...draft, id: draft.id || `INV-${Date.now().toString().slice(-4)}`, amount: Number(draft.amount || 0) };
-    setInvoices((current) => (editingId ? current.map((item) => (item.id === editingId ? payload : item)) : [payload, ...current]));
-    setModalOpen(false);
-    setEditingId(null);
-    setDraft(blankInvoice);
-    toast.success('Invoice saved');
+    const payload = { ...draft, amount: Number(draft.amount || 0) };
+    const request = editingId ? api.patch(`/invoices/${editingId}`, payload) : api.post('/invoices', payload);
+    request.then(async () => {
+      setModalOpen(false);
+      setEditingId(null);
+      setDraft(blankInvoice);
+      toast.success('Invoice saved');
+      await loadInvoices();
+    }).catch((error) => {
+      toast.error(error.response?.data?.message || 'Failed to save invoice');
+    });
   };
 
   return (
@@ -121,12 +138,14 @@ export default function Invoices() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 text-xs text-black">
-              {filtered.length === 0 ? (
+              {loading ? (
+                <tr><td className="px-5 py-10 text-center text-slate-500" colSpan="7">Loading invoices...</td></tr>
+              ) : filtered.length === 0 ? (
                 <tr><td className="px-5 py-10 text-center text-slate-500" colSpan="7">No invoices found.</td></tr>
               ) : filtered.map((invoice) => (
                 <tr key={invoice.id}>
-                  <td className="px-5 py-4 font-bold" style={{ color: 'var(--app-accent)' }}>{invoice.id}</td>
-                  <td className="px-5 py-4">{invoice.customer}</td>
+                  <td className="px-5 py-4 font-bold" style={{ color: 'var(--app-accent)' }}>{invoice.invoice_number || invoice.id}</td>
+                  <td className="px-5 py-4">{invoice.customer || invoice.customer_name}</td>
                   <td className="px-5 py-4">{invoice.item}</td>
                   <td className="px-5 py-4">{formatKES(invoice.amount)}</td>
                   <td className="px-5 py-4">{formatDate(invoice.due_at)}</td>

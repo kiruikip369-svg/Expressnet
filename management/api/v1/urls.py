@@ -11,6 +11,8 @@ urlpatterns = [
     path("customers/<str:customer_id>", views.customers),
     path("customers/<str:customer_id>/renew", views.customer_renew),
     path("payments", views.payments),
+    path("invoices", views.invoices),
+    path("invoices/<str:invoice_id>", views.invoices),
     path("payments/pay", views.payments),
     path("payments/<str:payment_id>/mark-paid", views.payment_mark_paid),
     path("reports/revenue", views.report_revenue),

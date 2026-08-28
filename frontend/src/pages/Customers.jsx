@@ -1,4 +1,4 @@
-import { ChevronDown, CreditCard, Database, Download, Pause, Pencil, PlugZap, Plus, RefreshCw, Router, Search, Trash2, Users, Wifi,CircleCheck, CircleX } from 'lucide-react';
+import { ChevronDown, CreditCard, Database, Download, Eye, EyeOff, Pause, Pencil, PlugZap, Plus, RefreshCw, Router, Search, Trash2, Users, Wifi,CircleCheck, CircleX } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import toast from 'react-hot-toast';
@@ -12,6 +12,7 @@ const initialForm = {
   location: '',
   username: '',
   password: '',
+  amount_payable: '',
   technician: '',
   router_serial_number: '',
   mikrotik_router_id: '',
@@ -58,6 +59,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
   const [customers, setCustomers] = useState([]);
   const [packages, setPackages] = useState([]);
   const [mikrotikRouters, setMikrotikRouters] = useState([]);
+  const [staff, setStaff] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [payingId, setPayingId] = useState(null);
@@ -70,6 +72,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
   const [errors, setErrors] = useState({});
   const [editingId, setEditingId] = useState(null);
   const [openActionsId, setOpenActionsId] = useState(null);
+  const [visiblePasswords, setVisiblePasswords] = useState({});
   const [actionsPosition, setActionsPosition] = useState(null);
   const actionsMenuRef = useRef(null);
   const actionsButtonRefs = useRef({});
@@ -91,8 +94,18 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
     }, {});
   }, [mikrotikRouters]);
 
+  const staffMap = useMemo(() => {
+    return staff.reduce((map, member) => {
+      if (member.id) map[member.id] = member;
+      if (member.name) map[member.name] = member;
+      if (member.phone) map[member.phone] = member;
+      return map;
+    }, {});
+  }, [staff]);
+
   const formPackageOptions = useMemo(() => {
     const selectedService = serviceLocked || form.service_type || 'pppoe';
+    if (selectedService === 'static') return packages;
     return packages.filter((pkg) => (pkg.service_type || 'hotspot') === selectedService);
   }, [form.service_type, packages, serviceLocked]);
 
@@ -171,6 +184,12 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
         label: router.identity || router.board_name || router.name || `MikroTik ${id}`,
         host: router.last_seen_ip || mikrotikRes.data?.mikrotik_host || '',
       })));
+      try {
+        const staffRes = await api.get('/staff?all=1');
+        setStaff(Array.isArray(staffRes.data) ? staffRes.data : staffRes.data.results || []);
+      } catch {
+        setStaff([]);
+      }
     } catch (error) {
       toast.error(error.response?.data?.message || 'Failed to load customers');
     } finally {
@@ -241,10 +260,12 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
 
   const update = (event) => {
     const { name, type, checked, value } = event.target;
+    const selectedPackage = name === 'package_name' ? packages.find((pkg) => pkg.name === value) : null;
     setForm((current) => ({
       ...current,
       [name]: type === 'checkbox' ? checked : value,
-      ...(name === 'service_type' ? { package_name: '' } : {}),
+      ...(name === 'service_type' ? { package_name: '', amount_payable: '' } : {}),
+      ...(name === 'package_name' && selectedPackage ? { amount_payable: selectedPackage.amount_payable ?? selectedPackage.price ?? '' } : {}),
       ...(name === 'mikrotik_router_id' && value ? { provision_mikrotik: true } : {}),
     }));
     setErrors((current) => ({ ...current, [event.target.name]: '' }));
@@ -258,6 +279,12 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
     const selectedPackage = packages.find((pkg) => pkg.name === form.package_name);
     const selectedService = serviceLocked || form.service_type || 'pppoe';
     if (selectedPackage && (selectedPackage.service_type || 'hotspot') !== selectedService) nextErrors.package_name = `Select a ${selectedService.toUpperCase()} package`;
+    if (['pppoe', 'static'].includes(selectedService)) {
+      const amount = Number(form.amount_payable);
+      if (!Number.isFinite(amount) || amount < 0) nextErrors.amount_payable = 'Enter a valid payable amount';
+      if (!form.technician) nextErrors.technician = 'Select the technician assigned to this customer';
+      if (mikrotikRouters.length > 0 && !form.mikrotik_router_id) nextErrors.mikrotik_router_id = 'Select the MikroTik for this customer';
+    }
     if (selectedService === 'pppoe' && form.grace_period_enabled) {
       const value = Number(form.grace_period_value);
       if (!Number.isFinite(value) || value <= 0) nextErrors.grace_period_value = 'Enter a grace period greater than zero';
@@ -266,7 +293,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
       const value = Number(form.session_adjustment_value);
       if (!Number.isFinite(value) || value <= 0) nextErrors.session_adjustment_value = 'Enter a session adjustment greater than zero';
     }
-    if ((form.provision_mikrotik || form.mikrotik_router_id) && mikrotikRouters.length > 0 && !form.mikrotik_router_id) nextErrors.mikrotik_router_id = 'Select the MikroTik for this customer';
+    if (!['pppoe', 'static'].includes(selectedService) && (form.provision_mikrotik || form.mikrotik_router_id) && mikrotikRouters.length > 0 && !form.mikrotik_router_id) nextErrors.mikrotik_router_id = 'Select the MikroTik for this customer';
     setErrors(nextErrors);
     return Object.keys(nextErrors).length === 0;
   };
@@ -289,6 +316,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
       service_type: serviceType,
       provision_mikrotik: serviceType !== 'static' && form.provision_mikrotik,
     };
+    if (['pppoe', 'static'].includes(serviceType)) payload.amount_payable = Number(form.amount_payable || 0);
     if (serviceType === 'pppoe' && form.grace_period_enabled) {
       payload.grace_period_enabled = form.grace_period_enabled;
       payload.grace_period_value = form.grace_period_value;
@@ -351,6 +379,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
       location: customer.location || '',
       username: customer.username || '',
       password: '',
+      amount_payable: customer.amount_payable || '',
       technician: customer.technician || '',
       router_serial_number: customer.router_serial_number || '',
       mikrotik_router_id: customer.mikrotik_router_id || '',
@@ -389,8 +418,8 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
 
   const exportCsv = () => {
     const headers = isHotspotOnlyPage
-      ? ['name', 'phone', 'username', 'package', 'service_type', 'mikrotik_router_id', 'status', 'expiry_date']
-      : ['name', 'phone', 'location', 'username', 'package', 'service_type', 'technician', 'router_serial_number', 'mikrotik_router_id', 'support', 'status', 'expiry_date'];
+      ? ['name', 'phone', 'username', 'password', 'package', 'service_type', 'mikrotik_router_id', 'status', 'expiry_date']
+      : ['name', 'phone', 'location', 'username', 'password', 'amount_payable', 'package', 'service_type', 'technician', 'router_serial_number', 'mikrotik_router_id', 'support', 'status', 'expiry_date'];
     const csv = [headers.join(','), ...filteredCustomers.map((item) => headers.map((key) => JSON.stringify(item[key] ?? '')).join(','))].join('\n');
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
     const link = document.createElement('a');
@@ -434,7 +463,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
         customer_id: customer.id,
         customer_name: customer.name,
         phone: customer.phone,
-        amount: selectedPackage?.price,
+        amount: customer.amount_payable || selectedPackage?.amount_payable || selectedPackage?.price,
         package_name: customer.package,
         service_type: serviceTypeOf(customer),
       });
@@ -528,6 +557,8 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
               <th className="px-3 py-2">Phone</th>
               {!isHotspotOnlyPage && <th className="px-3 py-2">Location</th>}
               <th className="px-3 py-2">Username</th>
+              <th className="px-3 py-2">Password</th>
+              {!isHotspotOnlyPage && <th className="px-3 py-2">Payable</th>}
               <th className="px-3 py-2">Package</th>
               {!isHotspotOnlyPage && <th className="px-3 py-2">Technician</th>}
               <th className="px-3 py-2">MikroTik</th>
@@ -539,17 +570,33 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
           </thead>
           <tbody className="divide-y divide-slate-100">
             {loading ? (
-              <tr><td className="table-cell text-slate-500" colSpan={isHotspotOnlyPage ? 8 : 10}>Loading customers...</td></tr>
+              <tr><td className="table-cell text-slate-500" colSpan={isHotspotOnlyPage ? 10 : 13}>Loading customers...</td></tr>
             ) : filteredCustomers.length === 0 ? (
-              <tr><td className="table-cell text-slate-500" colSpan={isHotspotOnlyPage ? 8 : 10}>No customers found.</td></tr>
+              <tr><td className="table-cell text-slate-500" colSpan={isHotspotOnlyPage ? 10 : 13}>No customers found.</td></tr>
             ) : filteredCustomers.map((customer) => (
               <tr key={customer.id}>
                 <td className="table-cell px-3 font-medium text-slate-900">{customer.name}</td>
                 <td className="table-cell px-3">{customer.phone}</td>
                 {!isHotspotOnlyPage && <td className="table-cell px-3">{customer.location || '-'}</td>}
                 <td className="table-cell px-3">{customer.username}</td>
+                <td className="table-cell px-3">
+                  <span className="inline-flex items-center gap-2">
+                    <span className="min-w-[80px] font-mono text-[11px]">{visiblePasswords[customer.id] ? (customer.password || '-') : customer.password ? '••••••••' : '-'}</span>
+                    {customer.password && (
+                      <button
+                        type="button"
+                        className="rounded p-1 text-slate-500 hover:bg-slate-100"
+                        onClick={() => setVisiblePasswords((current) => ({ ...current, [customer.id]: !current[customer.id] }))}
+                        aria-label={visiblePasswords[customer.id] ? 'Hide password' : 'Show password'}
+                      >
+                        {visiblePasswords[customer.id] ? <EyeOff size={14} /> : <Eye size={14} />}
+                      </button>
+                    )}
+                  </span>
+                </td>
+                {!isHotspotOnlyPage && <td className="table-cell px-3">Ksh {Number(customer.amount_payable || 0).toLocaleString('en-KE')}</td>}
                 <td className="table-cell px-3">{customer.package || '-'}</td>
-                {!isHotspotOnlyPage && <td className="table-cell px-3">{customer.technician || '-'}</td>}
+                {!isHotspotOnlyPage && <td className="table-cell px-3">{staffMap[customer.technician]?.name || customer.technician || '-'}</td>}
                 <td className="table-cell px-3">
                  {mikrotikRouterMap[customer.mikrotik_router_id]?.label || customer.mikrotik_router_id || '-'}
                 </td>
@@ -688,7 +735,15 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
                 <>
                   <div>
                     <label className="form-label" htmlFor="technician">Technician who attended</label>
-                    <input id="technician" name="technician" className="form-input" value={form.technician} onChange={update} />
+                    <select id="technician" name="technician" className="form-input" value={form.technician} onChange={update}>
+                      <option value="">Select technician</option>
+                      {staff.map((member) => (
+                        <option key={member.id || member.email || member.phone} value={member.id || member.name || member.phone}>
+                          {member.name || member.email || member.phone}{member.phone ? ` - ${member.phone}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                    {errors.technician && <p className="form-error">{errors.technician}</p>}
                   </div>
                   <div>
                     <label className="form-label" htmlFor="router_serial_number">Router serial number</label>
@@ -697,9 +752,9 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
                 </>
               )}
               <div>
-                <label className="form-label" htmlFor="mikrotik_router_id">Create in MikroTik</label>
+                <label className="form-label" htmlFor="mikrotik_router_id">MikroTik</label>
                 <select id="mikrotik_router_id" name="mikrotik_router_id" className="form-input" value={form.mikrotik_router_id} onChange={update}>
-                  <option value="">Select installed MikroTik</option>
+                  <option value="">Select linked MikroTik</option>
                   {mikrotikRouters.map((router) => (
                     <option key={router.id} value={router.id}>
                       {router.label}{router.host ? ` - ${router.host}` : ''}
@@ -734,6 +789,23 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
                 </select>
                 {errors.package_name && <p className="form-error">{errors.package_name}</p>}
               </div>
+              {['pppoe', 'static'].includes(activeFormService) && (
+                <div className="sm:col-span-2">
+                  <label className="form-label" htmlFor="amount_payable">Amount payable</label>
+                  <input
+                    id="amount_payable"
+                    name="amount_payable"
+                    type="number"
+                    min="0"
+                    step="1"
+                    className="form-input"
+                    value={form.amount_payable}
+                    onChange={update}
+                    placeholder="Amount the customer should pay"
+                  />
+                  {errors.amount_payable && <p className="form-error">{errors.amount_payable}</p>}
+                </div>
+              )}
               {activeFormService === 'pppoe' && (
                 <div className="sm:col-span-2 rounded-md border border-slate-200 bg-slate-50 p-3">
                   <label className="flex items-start gap-3 text-xs text-slate-600">

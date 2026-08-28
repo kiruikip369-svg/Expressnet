@@ -542,8 +542,8 @@ def initiate_daraja_b2c(tenant, payment_id, amount, phone, remarks=None):
 
 
 def whatsapp_enabled(tenant=None):
-    if tenant and tenant.get("whatsapp_enabled") is False:
-        return False
+    if tenant and "whatsapp_enabled" in tenant:
+        return tenant.get("whatsapp_enabled") is not False
     return os.getenv("WHATSAPP_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
 
 
@@ -569,6 +569,14 @@ def slek_config():
         "key": str(os.getenv("SLEK_KEY") or "").strip(),
         "secret": str(os.getenv("SLEK_SECRET") or "").strip(),
     }
+
+
+def check_dns(host):
+    try:
+        socket.gethostbyname(host)
+        return True
+    except socket.gaierror:
+        return False
 
 
 def normalize_kenyan_whatsapp_number(phone):
@@ -618,6 +626,11 @@ def send_slek_whatsapp_message(phone, message, tenant=None, recipient_name=None,
 
 
 def _post_apiwap_whatsapp(config, recipient, message):
+    host = urlparse(config["api_url"]).hostname or "api.apiwap.com"
+    if not check_dns(host):
+        raise requests.exceptions.ConnectionError(
+            f"Could not resolve '{host}'. This is a local network/DNS issue, not an API key problem."
+        )
     response = requests.post(
         config["api_url"],
         json={

@@ -14,6 +14,7 @@ PAGE_RULES = [
     ("customers", ("customers",)),
     ("packages", ("packages",)),
     ("payments", ("payments",)),
+    ("invoices", ("invoices",)),
     ("vouchers", ("vouchers",)),
     ("expenses", ("reports/expenses",)),
     ("reports", ("reports/",)),

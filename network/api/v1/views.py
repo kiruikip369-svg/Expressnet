@@ -89,7 +89,7 @@ logger = logging.getLogger(__name__)
 
 
 DEFAULT_SITE = {
-    "brand_name": "Expressnet",
+    "brand_name": "Expressnetbilling",
     "headline": "Internet billing built for hotspot businesses",
     "subheadline": "Sell packages, collect M-Pesa payments, and activate MikroTik users automatically.",
     "about": "We help hotspot operators manage customers, packages, payments, and access control from one secure platform.",
@@ -97,7 +97,7 @@ DEFAULT_SITE = {
     "email": "expressnet.support@gmail.com",
     "location": "Thika , Kenya",
     "address": "Nairobi, Kenya",
-    "cta_label": "Register your business",
+    "cta_label": "Register",
     "cta_url": "/register",
 }
 MASKED = "••••••••"
