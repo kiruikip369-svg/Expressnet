@@ -2182,7 +2182,11 @@ def settings_test_whatsapp(request):
     if not phone:
         return ok({"message": "Phone number is required to test WhatsApp notifications"}, 400)
     test_message = str(data.get("message") or "This is a test WhatsApp notification from Expressnet.").strip()
-    tenant = {**request.tenant, "notification_provider": str(data.get("provider") or request.tenant.get("notification_provider") or "slek").strip()}
+    tenant = {
+        **request.tenant,
+        "notification_provider": str(data.get("provider") or request.tenant.get("notification_provider") or "slek").strip(),
+        "whatsapp_enabled": data.get("whatsapp_enabled") is not False,
+    }
     result = send_whatsapp_message(phone, test_message, tenant)
     if result.get("sent"):
         return ok({"success": True, "message": "Test WhatsApp notification sent", "phone": phone, "result": result})
@@ -2368,7 +2372,7 @@ def settings_notifications(request):
         "sms_template_promotion": str(data.get("sms_template_promotion") or "").strip(),
         "sms_template_hotspot": strip_customer_template_tokens(data.get("sms_template_hotspot") or ""),
         "sms_template_pppoe": strip_customer_template_tokens(data.get("sms_template_pppoe") or ""),
-        "whatsapp_enabled": bool(data.get("whatsapp_enabled")),
+        "whatsapp_enabled": data.get("whatsapp_enabled") is not False,
         "roamtech_sender_id": str(data.get("roamtech_sender_id") or "").strip(),
         "apiwap_base_url": str(data.get("apiwap_base_url") or "https://api.apiwap.com/api/v1").strip(),
         "customer_created_whatsapp_template": strip_customer_template_tokens(data.get("customer_created_whatsapp_template") or ""),

@@ -192,14 +192,18 @@ export default function Messages() {
   };
 
   const saveApiKey = async () => {
-    await saveSettings({ ...form, provider: 'apiwap' });
+    await saveSettings({ ...form, provider: 'apiwap', whatsapp_enabled: true });
     setConfigOpen(false);
   };
 
   const testConnection = async (provider = activeProvider) => {
     setTesting(true);
     try {
-      const { data } = await api.post('/settings/test-whatsapp', { provider: provider.id, message: `${provider.name} test WhatsApp notification from your billing system.` });
+      const { data } = await api.post('/settings/test-whatsapp', {
+        provider: provider.id,
+        whatsapp_enabled: true,
+        message: `${provider.name} test WhatsApp notification from your billing system.`,
+      });
       toast.success(data.message || `${provider.name} connection tested`);
     } catch (error) {
       toast.error(error.response?.data?.message || `${provider.name} test failed`);
@@ -264,7 +268,7 @@ export default function Messages() {
                         onClick={() => {
                           setForm((current) => ({ ...current, provider: provider.id }));
                           if (provider.id === 'apiwap') setConfigOpen(true);
-                          if (provider.id === 'slek') saveSettings({ ...form, provider: 'slek' });
+                          if (provider.id === 'slek') saveSettings({ ...form, provider: 'slek', whatsapp_enabled: true });
                         }}
                       >
                         <Settings size={14} />
