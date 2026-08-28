@@ -1673,7 +1673,7 @@ def invoices(request, invoice_id=None):
     tenant_id = request.tenant["id"]
     if method(request, "GET") and not invoice_id:
         ensure_expired_customer_invoices(request.tenant)
-        invoices_data = list_children(f"tenants/{tenant_id}/invoices")
+        invoices_data = [{"id": item_id, **item} for item_id, item in _tenant_extra_dict(tenant_id, "invoices").items()]
         status_filter = request.GET.get("status")
         if status_filter and status_filter != "all":
             invoices_data = [item for item in invoices_data if item.get("status") == status_filter]
@@ -1696,11 +1696,15 @@ def invoices(request, invoice_id=None):
             "created_at": iso_now(),
             "updated_at": iso_now(),
         }
-        invoice_ref = ref(f"tenants/{tenant_id}/invoices").push(invoice)
-        return ok({"success": True, "message": "Invoice created", "invoice": {"id": invoice_ref.key, **invoice}}, 201)
+        new_id = secrets.token_hex(8)
+        invoices_data = _tenant_extra_dict(tenant_id, "invoices")
+        invoices_data[new_id] = invoice
+        _save_tenant_extra_dict(tenant_id, "invoices", invoices_data)
+        return ok({"success": True, "message": "Invoice created", "invoice": {"id": new_id, **invoice}}, 201)
     if not invoice_id:
         return ok({"message": "Invoice id is required"}, 400)
-    invoice = ref(f"tenants/{tenant_id}/invoices/{invoice_id}").get()
+    invoices_data = _tenant_extra_dict(tenant_id, "invoices")
+    invoice = invoices_data.get(invoice_id)
     if not invoice:
         return ok({"message": "Invoice not found"}, 404)
     if method(request, "PATCH"):
@@ -1709,7 +1713,8 @@ def invoices(request, invoice_id=None):
         if "amount" in updates:
             updates["amount"] = float(updates["amount"] or 0)
         updates["updated_at"] = iso_now()
-        ref(f"tenants/{tenant_id}/invoices/{invoice_id}").update(updates)
+        invoices_data[invoice_id] = {**invoice, **updates}
+        _save_tenant_extra_dict(tenant_id, "invoices", invoices_data)
         return ok({"success": True, "message": "Invoice saved", "invoice": {"id": invoice_id, **invoice, **updates}})
     return ok({"message": "Method not allowed"}, 405)
 
@@ -2632,6 +2637,7 @@ def create_customer_invoice(tenant, customer, amount, reason="subscription_due",
     tenant_id = tenant.get("id")
     if not tenant_id:
         return None
+    invoice_id = secrets.token_hex(8)
     invoice = {
         "invoice_number": _invoice_id(),
         "customer_id": customer.get("id"),
@@ -2648,14 +2654,16 @@ def create_customer_invoice(tenant, customer, amount, reason="subscription_due",
         "created_at": iso_now(),
         "updated_at": iso_now(),
     }
-    invoice_ref = ref(f"tenants/{tenant_id}/invoices").push(invoice)
-    return {"id": invoice_ref.key, **invoice}
+    invoices_data = _tenant_extra_dict(tenant_id, "invoices")
+    invoices_data[invoice_id] = invoice
+    _save_tenant_extra_dict(tenant_id, "invoices", invoices_data)
+    return {"id": invoice_id, **invoice}
 
 
 def mark_customer_invoice_paid(tenant_id, customer_id, payment):
     if not customer_id:
         return None
-    invoices = list_children(f"tenants/{tenant_id}/invoices")
+    invoices = [{"id": invoice_id, **invoice} for invoice_id, invoice in _tenant_extra_dict(tenant_id, "invoices").items()]
     open_invoice = next(
         (
             invoice for invoice in sorted(invoices, key=lambda item: item.get("created_at") or "", reverse=True)
@@ -2672,7 +2680,9 @@ def mark_customer_invoice_paid(tenant_id, customer_id, payment):
         "payment_code": payment.get("payment_code"),
         "updated_at": iso_now(),
     }
-    ref(f"tenants/{tenant_id}/invoices/{open_invoice['id']}").update(updates)
+    invoices_data = _tenant_extra_dict(tenant_id, "invoices")
+    invoices_data[open_invoice["id"]] = {**invoices_data.get(open_invoice["id"], {}), **updates}
+    _save_tenant_extra_dict(tenant_id, "invoices", invoices_data)
     return {"id": open_invoice["id"], **open_invoice, **updates}
 
 
