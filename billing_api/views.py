@@ -44,6 +44,8 @@ from management.api.v1.views import (
     settings_logo,
     settings_notifications,
     settings_test_sms,
+    settings_test_whatsapp,
+    send_expiry_notifications,
     team_invite,
     team_member_permissions,
     team_members,

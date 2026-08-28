@@ -547,7 +547,36 @@ def whatsapp_enabled(tenant=None):
     return os.getenv("WHATSAPP_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
 
 
+def apiwap_config(tenant=None):
+    return {
+        "enabled": (tenant or {}).get("whatsapp_enabled", True) is not False,
+        "api_url": str(
+            (tenant or {}).get("apiwap_base_url")
+            or os.getenv("APIWAP_BASE_URL")
+            or "https://api.apiwap.com/api/v1"
+        ).strip(),
+        "api_key": str((tenant or {}).get("apiwap_api_key") or os.getenv("APIWAP_API_KEY") or "").strip(),
+    }
+
+
+def slek_config():
+    return {
+        "api_url": str(os.getenv("SLEK_API_URL") or "https://slek.org/whatsapp").strip(),
+        "key": str(os.getenv("SLEK_KEY") or "").strip(),
+        "secret": str(os.getenv("SLEK_SECRET") or "").strip(),
+    }
+
+
 def normalize_kenyan_whatsapp_number(phone):
+    recipient = normalize_phone(phone)
+    if not recipient:
+        raise ValueError("Phone number is empty")
+    if not re.fullmatch(r"254(7|1)\d{8}", recipient):
+        raise ValueError(f"Invalid Kenyan phone number after normalization: {recipient}")
+    return f"+{recipient}"
+
+
+def normalize_kenyan_whatsapp_number_plain(phone):
     recipient = normalize_phone(phone)
     if not recipient:
         raise ValueError("Phone number is empty")
@@ -556,17 +585,47 @@ def normalize_kenyan_whatsapp_number(phone):
     return recipient
 
 
-def send_whatsapp_message(phone, message, tenant=None):
+def send_slek_whatsapp_message(phone, message, tenant=None, recipient_name=None, header=None):
+    config = slek_config()
+    if not config["key"] or not config["secret"] or not config["api_url"]:
+        return {"sent": False, "provider": "slek", "skipped": "missing_credentials"}
+    try:
+        recipient = normalize_kenyan_whatsapp_number_plain(phone)
+    except ValueError as exc:
+        return {"sent": False, "provider": "slek", "skipped": "invalid_phone", "error": str(exc)}
+    try:
+        response = requests.post(
+            config["api_url"],
+            data={
+                "slek_key": config["key"],
+                "slek_secret": config["secret"],
+                "header": header or (tenant or {}).get("business_name") or "Expressnet",
+                "message": str(message or ""),
+                "recipient_phone": recipient,
+                "recipient_name": recipient_name or "Customer",
+            },
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
+            timeout=30,
+        )
+        response.raise_for_status()
+        return {"sent": True, "provider": "slek", "recipient": recipient, "response": response.text}
+    except requests.exceptions.RequestException as exc:
+        return {"sent": False, "provider": "slek", "recipient": recipient, "error": str(exc)}
+
+
+def send_whatsapp_message(phone, message, tenant=None, recipient_name=None, header=None):
     if not whatsapp_enabled(tenant):
         return {"sent": False, "skipped": "disabled"}
     provider = str((tenant or {}).get("notification_provider") or os.getenv("WHATSAPP_PROVIDER") or "slek").strip().lower()
-    if provider not in {"slek", "slek_whatsapp"}:
-        provider = "slek"
+    if provider in {"slek", "default", "expressnet"}:
+        return send_slek_whatsapp_message(phone, message, tenant, recipient_name=recipient_name, header=header)
+    if provider not in {"apiwap", "apiwap_whatsapp"}:
+        return {"sent": False, "skipped": "unsupported_provider"}
 
-    slek_key = os.getenv("SLEK_KEY")
-    slek_secret = os.getenv("SLEK_SECRET")
-    api_url = os.getenv("SLEK_WHATSAPP_API_URL", "https://slek.org/whatsapp").strip()
-    if not slek_key or not slek_secret or not api_url:
+    config = apiwap_config(tenant)
+    if not config["enabled"]:
+        return {"sent": False, "skipped": "disabled"}
+    if not config["api_key"] or not config["api_url"]:
         return {"sent": False, "skipped": "missing_credentials"}
 
     try:
@@ -574,21 +633,25 @@ def send_whatsapp_message(phone, message, tenant=None):
     except ValueError as exc:
         return {"sent": False, "skipped": "invalid_phone", "error": str(exc)}
 
-    response = requests.post(
-        api_url,
-        data={
-            "slek_key": slek_key,
-            "slek_secret": slek_secret,
-            "header": str((tenant or {}).get("business_name") or os.getenv("SLEK_DEFAULT_HEADER") or "Expressnet"),
-            "message": str(message or ""),
-            "recipient_phone": recipient,
-            "recipient_name": str((tenant or {}).get("customer_name") or "Customer"),
-        },
-        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
-        timeout=20,
-    )
-    response.raise_for_status()
-    return {"sent": True, "provider": "slek", "recipient": recipient, "response": response.text}
+    try:
+        response = requests.post(
+            f"{config['api_url'].rstrip('/')}/whatsapp/send-message",
+            json={
+                "phoneNumber": recipient,
+                "message": str(message or ""),
+                "type": "text",
+            },
+            headers={"Authorization": f"Bearer {config['api_key']}", "Content-Type": "application/json"},
+            timeout=20,
+        )
+        response.raise_for_status()
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = response.text
+        return {"sent": True, "provider": "apiwap", "recipient": recipient, "response": payload}
+    except requests.exceptions.RequestException as exc:
+        return {"sent": False, "provider": "apiwap", "recipient": recipient, "error": str(exc)}
 
 
 def send_sms_message(phone, message, tenant=None):

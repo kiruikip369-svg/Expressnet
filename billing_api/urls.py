@@ -95,6 +95,8 @@ urlpatterns = [
     path("settings/business", management_views.settings_business),
     path("settings/logo", management_views.settings_logo),
     path("settings/test-sms", management_views.settings_test_sms),
+    path("settings/test-whatsapp", management_views.settings_test_whatsapp),
+    path("settings/expiry-notifications", management_views.send_expiry_notifications),
     path("settings/delete-customers", management_views.settings_delete_customers),
     path("settings/mikrotik", network_views.settings_mikrotik),
     path("settings/mikrotik/test", network_views.settings_mikrotik_test),

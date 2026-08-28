@@ -1099,10 +1099,16 @@ def customer_add(request):
             "created_at": iso_now(),
         }
     new_ref = ref(f"tenants/{request.tenant['id']}/customers").push(customer_payload)
-    try:
-        send_sms_message(data["phone"], _customer_credentials_sms(customer_payload, request.tenant), request.tenant)
-    except Exception:
-        logger.exception("Failed to send customer credential SMS")
+    if service_type == "pppoe":
+        try:
+            notification_result = notify_pppoe_customer_created(request.tenant, customer_payload)
+            ref(f"tenants/{request.tenant['id']}/customers/{new_ref.key}").update({
+                "customer_created_notification_status": "sent" if notification_result.get("whatsapp", {}).get("sent") else "skipped",
+                "customer_created_notification_result": notification_result,
+                "customer_created_notification_at": iso_now(),
+            })
+        except Exception:
+            logger.exception("Failed to send PPPoE customer creation WhatsApp notification")
     # Sync to Postgres + RADIUS if tenant has RADIUS enabled
     if request.tenant.get("radius_enabled"):
         try:
@@ -2167,6 +2173,23 @@ def settings_test_sms(request):
 
 
 @csrf_exempt
+@api_view(["POST"])
+@tenant_required
+def settings_test_whatsapp(request):
+    data = body(request)
+    phone = normalize_phone(data.get("phone") or request.tenant.get("phone"))
+    if not phone:
+        return ok({"message": "Phone number is required to test WhatsApp notifications"}, 400)
+    test_message = str(data.get("message") or "This is a test WhatsApp notification from Expressnet.").strip()
+    tenant = {**request.tenant, "notification_provider": str(data.get("provider") or request.tenant.get("notification_provider") or "slek").strip()}
+    result = send_whatsapp_message(phone, test_message, tenant)
+    if result.get("sent"):
+        return ok({"success": True, "message": "Test WhatsApp notification sent", "phone": phone, "result": result})
+    reason = result.get("skipped") or result.get("error") or "Failed to send test WhatsApp notification"
+    return ok({"success": False, "message": reason, "phone": phone, "result": result}, 400)
+
+
+@csrf_exempt
 @api_view(["GET", "POST", "PATCH", "DELETE"])
 @tenant_required
 def tickets(request, ticket_id=None):
@@ -2313,16 +2336,22 @@ def settings_notifications(request):
                 "sms_on_maintenance": request.tenant.get("sms_on_maintenance") is not False,
                 "sms_on_promotions": request.tenant.get("sms_on_promotions") is not False,
                 "sms_on_payment": request.tenant.get("sms_on_payment") is not False,
+                "whatsapp_on_customer_created": request.tenant.get("whatsapp_on_customer_created") is not False,
+                "whatsapp_on_expiry": request.tenant.get("whatsapp_on_expiry") is not False,
                 "sms_template_maintenance": request.tenant.get("sms_template_maintenance") or "We will be performing scheduled maintenance. Thank you for your patience.",
                 "sms_template_promotion": request.tenant.get("sms_template_promotion") or "Special offer from {{business}}: {{message}}",
-                "sms_template_hotspot": request.tenant.get("sms_template_hotspot") or "Your hotspot package is active. Username: {{username}}, Password: {{password}}.",
-                "sms_template_pppoe": request.tenant.get("sms_template_pppoe") or "Your PPPoE package is active. Username: {{username}}, Password: {{password}}.",
+                "sms_template_hotspot": strip_customer_template_tokens(request.tenant.get("sms_template_hotspot") or "Your hotspot package is active."),
+                "sms_template_pppoe": strip_customer_template_tokens(request.tenant.get("sms_template_pppoe") or "Your PPPoE package is active."),
                 "sms_balance": int(request.tenant.get("sms_balance") or 0),
                 "sms_sent_count": int(request.tenant.get("sms_sent_count") or 0),
                 "whatsapp_enabled": request.tenant.get("whatsapp_enabled") is not False,
                 "roamtech_sender_id": request.tenant.get("roamtech_sender_id") or "",
-                "payment_sms_template": request.tenant.get("payment_sms_template") or "Hi {{name}}, your {{package}} payment of Ksh {{amount_payable}} is confirmed. Username: {{username}}, Password: {{password}}.",
-                "payment_whatsapp_template": request.tenant.get("payment_whatsapp_template") or "Hi {{name}}, your {{package}} internet package is active. Amount payable: Ksh {{amount_payable}}. Username: {{username}}, Password: {{password}}.",
+                "apiwap_base_url": request.tenant.get("apiwap_base_url") or "https://api.apiwap.com/api/v1",
+                "has_apiwap_api_key": bool(request.tenant.get("apiwap_api_key")),
+                "customer_created_whatsapp_template": strip_customer_template_tokens(request.tenant.get("customer_created_whatsapp_template") or "Your PPPoE internet account has been created."),
+                "payment_sms_template": strip_customer_template_tokens(request.tenant.get("payment_sms_template") or "Your payment is confirmed."),
+                "payment_whatsapp_template": strip_customer_template_tokens(request.tenant.get("payment_whatsapp_template") or "Your internet package is active. Thank you for your payment."),
+                "expiry_whatsapp_template": strip_customer_template_tokens(request.tenant.get("expiry_whatsapp_template") or "Your internet package is about to expire. Please renew to stay connected."),
             }
         )
     data = body(request)
@@ -2332,16 +2361,24 @@ def settings_notifications(request):
         "sms_on_maintenance": data.get("sms_on_maintenance") is not False,
         "sms_on_promotions": data.get("sms_on_promotions") is not False,
         "sms_on_payment": data.get("sms_on_payment") is not False,
+        "whatsapp_on_customer_created": data.get("whatsapp_on_customer_created") is not False,
+        "whatsapp_on_expiry": data.get("whatsapp_on_expiry") is not False,
         "sms_template_maintenance": str(data.get("sms_template_maintenance") or "").strip(),
         "sms_template_promotion": str(data.get("sms_template_promotion") or "").strip(),
-        "sms_template_hotspot": str(data.get("sms_template_hotspot") or "").strip(),
-        "sms_template_pppoe": str(data.get("sms_template_pppoe") or "").strip(),
+        "sms_template_hotspot": strip_customer_template_tokens(data.get("sms_template_hotspot") or ""),
+        "sms_template_pppoe": strip_customer_template_tokens(data.get("sms_template_pppoe") or ""),
         "whatsapp_enabled": bool(data.get("whatsapp_enabled")),
         "roamtech_sender_id": str(data.get("roamtech_sender_id") or "").strip(),
-        "payment_sms_template": str(data.get("payment_sms_template") or "").strip(),
-        "payment_whatsapp_template": str(data.get("payment_whatsapp_template") or "").strip(),
+        "apiwap_base_url": str(data.get("apiwap_base_url") or "https://api.apiwap.com/api/v1").strip(),
+        "customer_created_whatsapp_template": strip_customer_template_tokens(data.get("customer_created_whatsapp_template") or ""),
+        "payment_sms_template": strip_customer_template_tokens(data.get("payment_sms_template") or ""),
+        "payment_whatsapp_template": strip_customer_template_tokens(data.get("payment_whatsapp_template") or ""),
+        "expiry_whatsapp_template": strip_customer_template_tokens(data.get("expiry_whatsapp_template") or ""),
         "notifications_updated_at": iso_now(),
     }
+    apiwap_api_key = str(data.get("apiwap_api_key") or "").strip()
+    if apiwap_api_key and apiwap_api_key not in {MASKED, "********"}:
+        updates["apiwap_api_key"] = apiwap_api_key
     ref(f"tenants/{request.tenant['id']}").update(updates)
     return ok({"success": True, "message": "Notification settings saved", "config": updates})
 
@@ -2385,21 +2422,83 @@ def render_notification_template(template, context):
     return rendered
 
 
+def strip_customer_template_tokens(template):
+    rendered = str(template or "")
+    for token in ["name", "username", "package", "amount_payable", "password", "amount", "expires_at"]:
+        rendered = rendered.replace("{{" + token + "}}", "")
+    return " ".join(rendered.split()).strip()
+
+
+def append_payment_access_details(message, context):
+    base = str(message or "").strip() or "Your internet package is active."
+    details = (
+        f"Name: {context.get('name') or 'customer'}. "
+        f"Package: {context.get('package') or ''}. "
+        f"Amount: Ksh {context.get('amount_payable') or context.get('amount') or ''}. "
+        f"Username: {context.get('username') or ''}. "
+        f"Password: {context.get('password') or ''}."
+    )
+    return f"{base} {details}"
+
+
+def append_expiry_details(message, context):
+    base = str(message or "").strip() or "Your internet package is about to expire."
+    details = (
+        f"Name: {context.get('name') or 'customer'}. "
+        f"Package: {context.get('package') or ''}. "
+        f"Username: {context.get('username') or ''}. "
+        f"Expires: {context.get('expires_at') or ''}."
+    )
+    return f"{base} {details}"
+
+
+def append_customer_created_details(message, context):
+    base = str(message or "").strip() or "Your PPPoE internet account has been created."
+    details = (
+        f"Name: {context.get('name') or 'customer'}. "
+        f"Package: {context.get('package') or ''}. "
+        f"Username: {context.get('username') or ''}. "
+        f"Password: {context.get('password') or ''}."
+    )
+    return f"{base} {details}"
+
+
+def notify_pppoe_customer_created(tenant, customer):
+    if str((customer or {}).get("service_type") or "").strip().lower() != "pppoe":
+        return {"whatsapp": {"sent": False, "skipped": "not_pppoe"}}
+    if (tenant or {}).get("whatsapp_enabled") is False or (tenant or {}).get("whatsapp_on_customer_created") is False:
+        return {"whatsapp": {"sent": False, "skipped": "disabled"}}
+    context = {
+        "name": customer.get("name") or customer.get("phone") or "customer",
+        "package": customer.get("package") or customer.get("package_name") or "",
+        "username": customer.get("username") or "",
+        "password": customer.get("password") or "",
+    }
+    template = (tenant or {}).get("customer_created_whatsapp_template") or "Your PPPoE internet account has been created."
+    message = append_customer_created_details(strip_customer_template_tokens(template), context)
+    return {
+        "whatsapp": send_whatsapp_message(
+            customer.get("phone"),
+            message,
+            tenant,
+            recipient_name=context["name"],
+        )
+    }
+
+
 def notify_payment_access(tenant, payment, access):
     amount_payable = payment.get("amount_payable") or payment.get("amount") or ""
-    template = (tenant or {}).get("payment_sms_template") or "Hi {{name}}, your {{package}} payment of Ksh {{amount_payable}} is confirmed. Username: {{username}}, Password: {{password}}."
-    message = render_notification_template(
-        template,
-        {
-            "name": payment.get("customer_name") or payment.get("phone") or "customer",
-            "package": payment.get("package_name") or "",
-            "amount": payment.get("amount") or "",
-            "amount_payable": amount_payable,
-            "username": access.get("username") or access.get("mac_address") or "",
-            "password": access.get("password") or "",
-            "expires_at": access.get("expiry_date") or "",
-        },
-    )
+    notification_context = {
+        "name": payment.get("customer_name") or payment.get("phone") or "customer",
+        "package": payment.get("package_name") or "",
+        "amount": payment.get("amount") or "",
+        "amount_payable": amount_payable,
+        "username": access.get("username") or access.get("mac_address") or "",
+        "password": access.get("password") or "",
+        "expires_at": access.get("expiry_date") or "",
+    }
+    template = (tenant or {}).get("payment_sms_template") or "Your payment is confirmed."
+    message = append_payment_access_details(strip_customer_template_tokens(template), notification_context)
     results = {}
     if (tenant or {}).get("sms_on_payment") is not False:
         balance = int((tenant or {}).get("sms_balance") or 0)
@@ -2411,10 +2510,71 @@ def notify_payment_access(tenant, payment, access):
                 tenant_id = tenant.get("id")
                 if tenant_id:
                     ref(f"tenants/{tenant_id}").update({"sms_balance": balance - 1, "sms_sent_count": int((tenant or {}).get("sms_sent_count") or 0) + 1})
-    if (tenant or {}).get("whatsapp_enabled") or os.getenv("WHATSAPP_ENABLED", "false").lower() in {"1", "true", "yes", "on"}:
+    if (tenant or {}).get("whatsapp_enabled") is not False:
         whatsapp_template = (tenant or {}).get("payment_whatsapp_template") or message
-        results["whatsapp"] = send_whatsapp_message(payment.get("phone"), render_notification_template(whatsapp_template, {"name": payment.get("customer_name") or payment.get("phone") or "customer", "package": payment.get("package_name") or "", "amount": payment.get("amount") or "", "amount_payable": amount_payable, "username": access.get("username") or access.get("mac_address") or "", "password": access.get("password") or ""}), tenant)
+        customer_name = notification_context["name"]
+        results["whatsapp"] = send_whatsapp_message(
+            payment.get("phone"),
+            append_payment_access_details(strip_customer_template_tokens(whatsapp_template), notification_context),
+            tenant,
+            recipient_name=customer_name,
+        )
     return results
+
+
+def notify_package_expiry(tenant, customer):
+    if (tenant or {}).get("whatsapp_enabled") is False or (tenant or {}).get("whatsapp_on_expiry") is False:
+        return {"whatsapp": {"sent": False, "skipped": "disabled"}}
+    context = {
+        "name": customer.get("name") or customer.get("phone") or "customer",
+        "package": customer.get("package") or "",
+        "username": customer.get("username") or "",
+        "expires_at": customer.get("expiry_date") or customer.get("expires_at") or "",
+    }
+    template = (tenant or {}).get("expiry_whatsapp_template") or "Your internet package is about to expire. Please renew to stay connected."
+    message = append_expiry_details(strip_customer_template_tokens(template), context)
+    return {
+        "whatsapp": send_whatsapp_message(
+            customer.get("phone"),
+            message,
+            tenant,
+            recipient_name=context["name"],
+        )
+    }
+
+
+@csrf_exempt
+@api_view(["POST"])
+@tenant_required
+def send_expiry_notifications(request):
+    data = body(request)
+    hours = int(data.get("hours") or 24)
+    now = timezone.now()
+    due_at = now + timedelta(hours=hours)
+    sent = []
+    skipped = []
+    for customer in list_children(f"tenants/{request.tenant['id']}/customers"):
+        expiry_raw = customer.get("expiry_date") or customer.get("expires_at")
+        if not expiry_raw:
+            continue
+        expiry = parse_datetime(str(expiry_raw))
+        if not expiry:
+            continue
+        if expiry.tzinfo is None:
+            expiry = timezone.make_aware(expiry, timezone.get_current_timezone())
+        if expiry < now or expiry > due_at:
+            continue
+        marker = f"expiry_whatsapp_notice_{expiry.date().isoformat()}"
+        if customer.get(marker):
+            skipped.append({"customer_id": customer.get("id"), "reason": "already_notified"})
+            continue
+        result = notify_package_expiry(request.tenant, customer)
+        if result.get("whatsapp", {}).get("sent"):
+            ref(f"tenants/{request.tenant['id']}/customers/{customer['id']}").update({marker: iso_now(), "last_expiry_notification_at": iso_now()})
+            sent.append({"customer_id": customer.get("id"), "phone": customer.get("phone")})
+        else:
+            skipped.append({"customer_id": customer.get("id"), "phone": customer.get("phone"), "result": result})
+    return ok({"success": True, "message": f"Sent {len(sent)} expiry WhatsApp notifications", "sent": sent, "skipped": skipped})
 
 
 def activate_paid_access(tenant, payment_id, payment, phone, payment_code):

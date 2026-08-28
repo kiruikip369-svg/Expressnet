@@ -21,6 +21,8 @@ urlpatterns = [
     path("settings/business", views.settings_business),
     path("settings/logo", views.settings_logo),
     path("settings/test-sms", views.settings_test_sms),
+    path("settings/test-whatsapp", views.settings_test_whatsapp),
+    path("settings/expiry-notifications", views.send_expiry_notifications),
     path("settings/delete-customers", views.settings_delete_customers),
     path("settings/notifications", views.settings_notifications),
     path("staff", views.staff_members),

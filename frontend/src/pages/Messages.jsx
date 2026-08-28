@@ -1,104 +1,153 @@
 import {
-  AlertTriangle,
+  AlarmClock,
+  Bell,
+  CheckCircle2,
+  ExternalLink,
+  MessageCircle,
   MessageSquare,
+  MoreVertical,
+  PlugZap,
   Save,
   Send,
+  Settings,
   ShoppingCart,
-  Smartphone,
-  Wifi,
+  X,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import api from '../api/axios';
 
+const MASKED = '********';
+
 const defaults = {
-  sms_enabled: true,
+  provider: 'slek',
+  whatsapp_enabled: true,
+  sms_on_payment: true,
+  whatsapp_on_customer_created: true,
+  whatsapp_on_expiry: true,
   sms_on_maintenance: true,
   sms_on_promotions: true,
-  sms_on_payment: true,
-  whatsapp_enabled: false,
-  roamtech_sender_id: '',
-  sms_template_maintenance: '',
-  sms_template_promotion: '',
-  sms_template_hotspot: '',
-  sms_template_pppoe: '',
-  sms_balance: 0,
-  sms_sent_count: 0,
+  apiwap_base_url: 'https://api.apiwap.com/api/v1',
+  apiwap_api_key: '',
+  customer_created_whatsapp_template: 'Your PPPoE internet account has been created.',
+  payment_whatsapp_template: 'Your internet package is active. Thank you for your payment.',
+  expiry_whatsapp_template: 'Your internet package is about to expire. Please renew to stay connected.',
+  sms_template_maintenance: 'We will be performing scheduled maintenance. Thank you for your patience.',
+  sms_template_promotion: 'Special offer from our team. Contact support for details.',
 };
 
-function Toggle({ checked, disabled, onChange }) {
+const providers = [
+  {
+    id: 'slek',
+    name: 'Slek',
+    country: 'Kenya',
+    channel: 'WhatsApp',
+    badge: 'Default',
+    accent: 'border-l-4 border-l-sky-500',
+    logo: <span className="text-xl font-bold tracking-tight"><span className="text-sky-600">slek</span></span>,
+    configureUrl: '#',
+  },
+  {
+    id: 'apiwap',
+    name: 'ApiWap',
+    country: 'Kenya',
+    channel: 'WhatsApp',
+    badge: 'Primary',
+    accent: 'border-l-4 border-l-emerald-500',
+    logo: <span className="text-xl font-bold tracking-tight"><span className="text-orange-500">api</span><span className="text-sky-500">wap</span></span>,
+    configureUrl: 'https://account.apiwap.com/register',
+  },
+  {
+    id: 'africastalking',
+    name: "Africa's Talking",
+    channel: 'SMS',
+    logo: <span className="text-sm font-extrabold leading-none"><span className="text-emerald-600">Africa's</span><br /><span className="text-orange-500">Talking</span></span>,
+    configureUrl: '#',
+  },
+  {
+    id: 'twilio',
+    name: 'Twilio',
+    channel: 'SMS / WhatsApp',
+    logo: <span className="text-xl font-extrabold text-red-500">twilio</span>,
+    configureUrl: '#',
+  },
+];
+
+const tabs = [
+  ['types', Bell, 'Notification Types'],
+  ['templates', MessageSquare, 'Templates'],
+  ['providers', PlugZap, 'Providers / APIs'],
+];
+
+const notificationTypes = [
+  ['whatsapp_on_customer_created', PlugZap, 'PPPoE customer created', 'Sent when a PPPoE customer account is created.'],
+  ['sms_on_payment', ShoppingCart, 'Package payments', 'Sent after customer payment and internet activation.'],
+  ['whatsapp_on_expiry', AlarmClock, 'Package expiry', 'Sent before a customer package expires.'],
+  ['sms_on_maintenance', AlarmClock, 'Maintenance notices', 'Use when notifying customers about planned service work.'],
+  ['sms_on_promotions', MessageCircle, 'Promotions', 'Use for offers, discounts, and customer updates.'],
+];
+
+const templateFields = [
+  ['customer_created_whatsapp_template', 'PPPoE customer created message', 'Customer name, package, username, and password are added automatically.'],
+  ['payment_whatsapp_template', 'Payment message', 'Customer name, package, amount, username, and password are added automatically.'],
+  ['expiry_whatsapp_template', 'Expiry message', 'Customer name, package, username, and expiry time are added automatically.'],
+  ['sms_template_maintenance', 'Maintenance message', 'Plain message for planned downtime or service work.'],
+  ['sms_template_promotion', 'Promotion message', 'Plain message for offers and general announcements.'],
+];
+
+function Toggle({ checked, onChange }) {
   return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      disabled={disabled}
-      onClick={onChange}
-      className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-app-accent focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-40 ${
-        checked ? 'bg-app-navy' : 'bg-slate-200'
-      }`}
-    >
-      <span
-        className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform duration-200 ${
-          checked ? 'translate-x-6' : 'translate-x-1'
-        }`}
-      />
+    <button type="button" role="switch" aria-checked={checked} onClick={onChange} className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition ${checked ? 'bg-violet-600' : 'bg-slate-200'}`}>
+      <span className={`h-4 w-4 rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-6' : 'translate-x-1'}`} />
     </button>
   );
 }
 
-function charCount(text) {
-  const len = text?.length || 0;
-  return { chars: len, parts: Math.max(1, Math.ceil(len / 160)) };
+function ProviderBadge({ provider }) {
+  const connectedProvider = provider.id === 'apiwap' || provider.id === 'slek';
+  return (
+    <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold ${connectedProvider ? 'bg-emerald-50 text-emerald-600' : 'bg-violet-50 text-violet-600'}`}>
+      <MessageSquare size={12} />
+      {provider.channel}
+    </span>
+  );
 }
 
-function ensureAccessDetails(template, serviceLabel) {
-  const text = String(template || '').trim();
-  const fallback = `Your ${serviceLabel} package is active.`;
-  const base = text || fallback;
-  const hasUsername = base.includes('{{username}}');
-  const hasPassword = base.includes('{{password}}');
-  if (hasUsername && hasPassword) return base;
-  const suffix = [
-    !hasUsername ? 'Username: {{username}}' : '',
-    !hasPassword ? 'Password: {{password}}' : '',
-  ].filter(Boolean).join(', ');
-  return `${base}${base.endsWith('.') ? '' : '.'} ${suffix}.`;
-}
-
-function stripAccessDetails(template) {
-  return String(template || '')
-    .replace(/\s*Username:\s*\{\{username\}\}\s*,?\s*/gi, ' ')
-    .replace(/\s*Password:\s*\{\{password\}\}\s*\.?/gi, ' ')
-    .replace(/\s*\{\{username\}\}\s*,?\s*/gi, ' ')
-    .replace(/\s*\{\{password\}\}\s*\.?/gi, ' ')
-    .replace(/\s{2,}/g, ' ')
-    .trim();
+function cleanTemplate(text) {
+  return String(text || '').replace(/\{\{[^}]+\}\}/g, '').replace(/\s{2,}/g, ' ').trim();
 }
 
 export default function Messages() {
   const [form, setForm] = useState(defaults);
+  const [activeTab, setActiveTab] = useState('providers');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [tab, setTab] = useState('types');
+  const [testing, setTesting] = useState(false);
+  const [configOpen, setConfigOpen] = useState(false);
+
+  const activeProvider = useMemo(() => providers.find((provider) => provider.id === form.provider) || providers[0], [form.provider]);
+  const connected = Boolean(form.apiwap_api_key);
 
   useEffect(() => {
     async function load() {
       try {
         const { data } = await api.get('/settings/notifications');
         setForm({
-          sms_enabled: data.sms_enabled !== false,
+          ...defaults,
+          provider: data.provider || 'slek',
+          whatsapp_enabled: data.whatsapp_enabled !== false,
+          sms_on_payment: data.sms_on_payment !== false,
+          whatsapp_on_customer_created: data.whatsapp_on_customer_created !== false,
+          whatsapp_on_expiry: data.whatsapp_on_expiry !== false,
           sms_on_maintenance: data.sms_on_maintenance !== false,
           sms_on_promotions: data.sms_on_promotions !== false,
-          sms_on_payment: data.sms_on_payment !== false,
-          whatsapp_enabled: Boolean(data.whatsapp_enabled),
-          roamtech_sender_id: data.roamtech_sender_id || '',
-          sms_template_maintenance: data.sms_template_maintenance || '',
-          sms_template_promotion: data.sms_template_promotion || '',
-          sms_template_hotspot: stripAccessDetails(data.sms_template_hotspot || ''),
-          sms_template_pppoe: stripAccessDetails(data.sms_template_pppoe || ''),
-          sms_balance: data.sms_balance || 0,
-          sms_sent_count: data.sms_sent_count || 0,
+          apiwap_base_url: data.apiwap_base_url || defaults.apiwap_base_url,
+          apiwap_api_key: data.has_apiwap_api_key ? MASKED : '',
+          customer_created_whatsapp_template: cleanTemplate(data.customer_created_whatsapp_template) || defaults.customer_created_whatsapp_template,
+          payment_whatsapp_template: cleanTemplate(data.payment_whatsapp_template) || defaults.payment_whatsapp_template,
+          expiry_whatsapp_template: cleanTemplate(data.expiry_whatsapp_template) || defaults.expiry_whatsapp_template,
+          sms_template_maintenance: cleanTemplate(data.sms_template_maintenance) || defaults.sms_template_maintenance,
+          sms_template_promotion: cleanTemplate(data.sms_template_promotion) || defaults.sms_template_promotion,
         });
       } catch (error) {
         toast.error(error.response?.data?.message || 'Failed to load message settings');
@@ -106,30 +155,30 @@ export default function Messages() {
         setLoading(false);
       }
     }
-
     load();
   }, []);
 
   const update = (event) => {
-    const { checked, name, type, value } = event.target;
-    setForm((current) => ({ ...current, [name]: type === 'checkbox' ? checked : value }));
+    const { name, value } = event.target;
+    const nextValue = name.includes('template') ? cleanTemplate(value) : value;
+    setForm((current) => ({ ...current, [name]: nextValue }));
   };
 
   const toggle = (name) => {
     setForm((current) => ({ ...current, [name]: !current[name] }));
   };
 
-  const save = async (event) => {
-    event.preventDefault();
+  const saveSettings = async (nextForm = form) => {
     setSaving(true);
     try {
-      const payload = {
-        ...form,
-        sms_template_hotspot: ensureAccessDetails(form.sms_template_hotspot, 'hotspot'),
-        sms_template_pppoe: ensureAccessDetails(form.sms_template_pppoe, 'PPPoE'),
-      };
-      const { data } = await api.patch('/settings/notifications', payload);
-      toast.success(data.message || 'Roamtech message settings saved');
+      const { data } = await api.patch('/settings/notifications', {
+        ...nextForm,
+        sms_enabled: nextForm.whatsapp_enabled,
+        whatsapp_enabled: nextForm.whatsapp_enabled,
+        payment_sms_template: nextForm.payment_whatsapp_template,
+      });
+      toast.success(data.message || 'Message settings saved');
+      setForm((current) => ({ ...current, apiwap_api_key: current.apiwap_api_key ? MASKED : '' }));
     } catch (error) {
       toast.error(error.response?.data?.message || 'Failed to save message settings');
     } finally {
@@ -137,221 +186,189 @@ export default function Messages() {
     }
   };
 
-  if (loading) {
-    return <p className="text-sm font-medium text-slate-600">Loading message settings...</p>;
-  }
+  const save = async (event) => {
+    event.preventDefault();
+    await saveSettings();
+  };
 
-  // Rows for the Notification Types table. Each maps to a real field on `form`,
-  // and optionally to one of the sms_template_* fields shown in the Templates tab.
-  const notificationRows = [
-    {
-      id: 'payment_hotspot',
-      title: 'Package Purchase (Hotspot)',
-      description: 'Sent when a customer pays for a Hotspot package',
-      icon: ShoppingCart,
-      iconBg: 'bg-blue-50',
-      iconColor: 'text-blue-500',
-      toggleField: 'sms_on_payment',
-      templateField: 'sms_template_hotspot',
-      templateLabel: 'Hotspot package message',
-    },
-    {
-      id: 'payment_pppoe',
-      title: 'Package Purchase (PPPoE)',
-      description: 'Sent when a customer pays for a PPPoE package',
-      icon: ShoppingCart,
-      iconBg: 'bg-blue-50',
-      iconColor: 'text-blue-500',
-      toggleField: 'sms_on_payment',
-      templateField: 'sms_template_pppoe',
-      templateLabel: 'PPPoE package message',
-    },
-    {
-      id: 'maintenance',
-      title: 'Maintenance Notices',
-      description: 'Sent to customers ahead of planned network maintenance',
-      icon: AlertTriangle,
-      iconBg: 'bg-amber-50',
-      iconColor: 'text-amber-500',
-      toggleField: 'sms_on_maintenance',
-      templateField: 'sms_template_maintenance',
-      templateLabel: 'Maintenance message',
-    },
-    {
-      id: 'promotions',
-      title: 'Promotions',
-      description: 'Sent for promotional offers and announcements',
-      icon: MessageSquare,
-      iconBg: 'bg-teal-50',
-      iconColor: 'text-teal-500',
-      toggleField: 'sms_on_promotions',
-      templateField: 'sms_template_promotion',
-      templateLabel: 'Promotion message',
-    },
-    {
-      id: 'whatsapp',
-      title: 'WhatsApp Messaging',
-      description: 'Send payment confirmations over WhatsApp instead of SMS',
-      icon: Smartphone,
-      iconBg: 'bg-violet-50',
-      iconColor: 'text-violet-500',
-      toggleField: 'whatsapp_enabled',
-      templateField: null,
-      templateLabel: null,
-    },
-  ];
+  const saveApiKey = async () => {
+    await saveSettings({ ...form, provider: 'apiwap' });
+    setConfigOpen(false);
+  };
 
-  const templateCards = notificationRows.filter((row) => row.templateField);
+  const testConnection = async (provider = activeProvider) => {
+    setTesting(true);
+    try {
+      const { data } = await api.post('/settings/test-whatsapp', { provider: provider.id, message: `${provider.name} test WhatsApp notification from your billing system.` });
+      toast.success(data.message || `${provider.name} connection tested`);
+    } catch (error) {
+      toast.error(error.response?.data?.message || `${provider.name} test failed`);
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  if (loading) return <p className="text-sm font-medium text-slate-600">Loading message settings...</p>;
 
   return (
-    <div className="space-y-4">
-      <section className="surface-card">
-        <div className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h1 className="page-title">Messages</h1>
-            <p className="page-subtitle">
-              Configure Roamtech SMS and WhatsApp messages sent after Hotspot or PPPoE package payments.
-            </p>
-          </div>
-          <div className="inline-flex h-9 items-center gap-2 rounded-md bg-app-navy px-3 text-sm font-medium text-white">
-            <MessageSquare size={17} />
-            Roamtech
-          </div>
+    <form className="space-y-4" onSubmit={save}>
+      <section className="surface-card overflow-hidden">
+        <div className="grid grid-cols-3">
+          {tabs.map(([key, Icon, label]) => (
+            <button key={key} type="button" onClick={() => setActiveTab(key)} className={`relative flex h-14 items-center justify-center gap-2 text-xs font-semibold transition ${activeTab === key ? 'text-violet-600' : 'text-slate-500 hover:text-slate-800'}`}>
+              <Icon size={15} />
+              <span className="hidden sm:inline">{label}</span>
+              {activeTab === key && <span className="absolute bottom-0 h-0.5 w-40 max-w-[80%] rounded-full bg-violet-600" />}
+            </button>
+          ))}
         </div>
       </section>
 
-      <form className="surface-card" onSubmit={save}>
-        {/* Master switch + sender ID + balance strip */}
-        <div className="flex flex-col gap-4 border-b border-slate-200 p-4 sm:flex-row sm:items-center sm:justify-between">
-          <label className="flex items-center gap-3">
-            <Toggle checked={form.sms_enabled} onChange={() => toggle('sms_enabled')} />
-            <span>
-              <span className="block text-sm font-medium text-slate-950">SMS notifications enabled</span>
-              <span className="block text-xs text-slate-500">Turn off to pause all outgoing SMS, regardless of the settings below.</span>
-            </span>
-          </label>
-          <div className="flex flex-wrap items-center gap-4">
-            <p className="whitespace-nowrap text-sm font-semibold text-slate-700">
-              Balance: {form.sms_balance} &nbsp;|&nbsp; Sent: {form.sms_sent_count}
-            </p>
-          </div>
-        </div>
+      {activeTab === 'providers' && (
+        <section className="surface-card p-5">
+          <h1 className="text-base font-bold text-slate-900">Connected Providers</h1>
+          <p className="mt-1 text-xs text-slate-500">Manage your notification API providers and channels.</p>
 
-        {/* Tabs */}
-        <div className="flex gap-6 border-b border-slate-200 px-4">
-          <button
-            type="button"
-            onClick={() => setTab('types')}
-            className={`relative py-3.5 text-sm font-medium transition-colors ${
-              tab === 'types' ? 'text-app-navy' : 'text-slate-500 hover:text-slate-700'
-            }`}
-          >
-            Notification Types
-            {tab === 'types' && <span className="absolute inset-x-0 -bottom-px h-0.5 rounded-full bg-app-navy" />}
-          </button>
-          <button
-            type="button"
-            onClick={() => setTab('templates')}
-            className={`relative py-3.5 text-sm font-medium transition-colors ${
-              tab === 'templates' ? 'text-app-navy' : 'text-slate-500 hover:text-slate-700'
-            }`}
-          >
-            Message Templates
-            {tab === 'templates' && <span className="absolute inset-x-0 -bottom-px h-0.5 rounded-full bg-app-navy" />}
-          </button>
-        </div>
-
-        {/* Notification Types */}
-        {tab === 'types' && (
-          <div className="p-4">
-            <p className="mb-3 text-xs text-slate-500">Select which events send an SMS to your customers.</p>
-            <div className="overflow-hidden rounded-lg border border-slate-200">
-              <table className="w-full text-left text-sm">
-                <thead>
-                  <tr className="border-b border-slate-200 bg-slate-50/70 text-xs font-medium text-slate-500">
-                    <th className="px-4 py-2.5 font-medium">Notification</th>
-                    <th className="px-4 py-2.5 font-medium">Description</th>
-                    <th className="px-4 py-2.5 font-medium">Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {notificationRows.map((row, idx) => {
-                    const Icon = row.icon;
-                    const checked = form[row.toggleField];
-                    return (
-                      <tr
-                        key={row.id}
-                        className={`${idx !== notificationRows.length - 1 ? 'border-b border-slate-100' : ''} hover:bg-slate-50/60`}
-                      >
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-2.5">
-                            <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${row.iconBg}`}>
-                              <Icon className={`h-3.5 w-3.5 ${row.iconColor}`} strokeWidth={2.25} />
-                            </span>
-                            <span className="font-medium text-slate-800">{row.title}</span>
-                          </div>
-                        </td>
-                        <td className="px-4 py-3 text-slate-500">{row.description}</td>
-                        <td className="px-4 py-3">
-                          <Toggle
-                            checked={checked}
-                            disabled={!form.sms_enabled && row.id !== 'whatsapp'}
-                            onChange={() => toggle(row.toggleField)}
-                          />
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
-        {/* Message Templates */}
-        {tab === 'templates' && (
-          <div className="p-4">
-            <p className="mb-3 text-xs text-slate-500">Write the message text only. Customer username and password are added automatically for Hotspot and PPPoE templates.</p>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              {templateCards.map((row) => {
-                const Icon = row.icon;
-                const { chars, parts } = charCount(form[row.templateField]);
-                return (
-                  <div key={row.id} className="rounded-lg border border-slate-200 p-4">
-                    <div className="mb-2.5 flex items-center gap-2">
-                      <span className={`flex h-6 w-6 items-center justify-center rounded-full ${row.iconBg}`}>
-                        <Icon className={`h-3 w-3 ${row.iconColor}`} strokeWidth={2.25} />
-                      </span>
-                      <span className="text-sm font-medium text-slate-800">{row.templateLabel}</span>
+          <div className="mt-4 overflow-hidden rounded-lg border border-slate-200">
+            {providers.map((provider) => {
+              const selected = form.provider === provider.id;
+              const isConnected = provider.id === 'slek' || (provider.id === 'apiwap' && connected);
+              return (
+                <div key={provider.id} className={`${provider.accent || ''} border-b border-slate-100 bg-white last:border-b-0`}>
+                  <div className="grid gap-4 p-4 lg:grid-cols-[80px_1fr_auto_auto_auto] lg:items-center">
+                    <button type="button" onClick={() => setForm((current) => ({ ...current, provider: provider.id }))} className={`flex h-16 w-20 items-center justify-center rounded-md border ${selected ? 'border-violet-200 bg-violet-50/40' : 'border-slate-200 bg-white'}`}>
+                      {provider.logo}
+                    </button>
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h2 className="text-sm font-bold text-slate-900">{provider.name}</h2>
+                        {provider.badge && <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-bold text-violet-600">{provider.badge}</span>}
+                      </div>
+                      <p className="mt-1 text-xs text-slate-500">{provider.channel} Provider</p>
+                      <p className={`mt-1 text-[11px] font-semibold ${isConnected ? 'text-emerald-600' : 'text-orange-500'}`}>
+                        {provider.country && <span className="mr-2 text-slate-600">{provider.country}</span>}
+                        {isConnected ? 'Connected' : 'Not configured'}
+                      </p>
                     </div>
-                    <textarea
-                      name={row.templateField}
-                      value={form[row.templateField]}
-                      onChange={update}
-                      className="min-h-24 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-xs leading-relaxed text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-app-accent focus:ring-2 focus:ring-blue-100"
-                      placeholder={`Write the ${row.templateLabel.toLowerCase()}...`}
-                    />
-                    <p className="mt-2 text-[11px] text-slate-400">
-                      Characters: {chars} &nbsp;|&nbsp; Parts: {parts}
-                    </p>
+                    <ProviderBadge provider={provider} />
+                    <div className="flex items-center gap-2">
+                      {(provider.id === 'slek' || provider.id === 'apiwap') && (
+                        <button type="button" className="btn-secondary" onClick={() => testConnection(provider)} disabled={testing || !isConnected}>
+                          <MessageSquare size={14} />
+                          {testing ? 'Testing...' : 'Test Connection'}
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="btn-secondary text-violet-600"
+                        onClick={() => {
+                          setForm((current) => ({ ...current, provider: provider.id }));
+                          if (provider.id === 'apiwap') setConfigOpen(true);
+                          if (provider.id === 'slek') saveSettings({ ...form, provider: 'slek' });
+                        }}
+                      >
+                        <Settings size={14} />
+                        Configure
+                      </button>
+                    </div>
+                    <button type="button" className="rounded-md p-2 text-slate-500 hover:bg-slate-50" aria-label={`${provider.name} menu`}><MoreVertical size={17} /></button>
                   </div>
-                );
-              })}
+                </div>
+              );
+            })}
+          </div>
+
+        </section>
+      )}
+
+      {activeTab === 'types' && (
+        <section className="surface-card p-5">
+          <h1 className="text-base font-bold text-slate-900">Notification Types</h1>
+          <div className="mt-4 grid gap-3">
+            {notificationTypes.map(([key, Icon, title, description]) => (
+              <div key={key} className="flex items-center justify-between gap-4 rounded-lg border border-slate-200 p-4">
+                <div className="flex items-center gap-3">
+                  <span className="flex h-9 w-9 items-center justify-center rounded-full bg-violet-50 text-violet-600"><Icon size={17} /></span>
+                  <div><h2 className="text-sm font-semibold text-slate-900">{title}</h2><p className="mt-1 text-xs text-slate-500">{description}</p></div>
+                </div>
+                <Toggle checked={form[key]} onChange={() => toggle(key)} />
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {activeTab === 'templates' && (
+        <section className="surface-card p-5">
+          <h1 className="text-base font-bold text-slate-900">Message Templates</h1>
+          <p className="mt-1 text-xs text-slate-500">Write simple message text. Customer details are added automatically by the system.</p>
+          <div className="mt-4 grid gap-4 md:grid-cols-2">
+            {templateFields.map(([name, label, helper]) => (
+              <label key={name} className="block rounded-lg border border-slate-200 p-4">
+                <span className="text-sm font-semibold text-slate-900">{label}</span>
+                <textarea name={name} value={form[name]} onChange={update} className="mt-3 min-h-28 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-xs leading-relaxed outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100" />
+                <span className="mt-2 block text-[11px] text-slate-500">{helper}</span>
+                <span className="mt-1 block text-[11px] text-slate-400">Characters: {form[name]?.length || 0}</span>
+              </label>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <div className="flex justify-end">
+        <button type="submit" className="btn-primary" disabled={saving}>
+          {saving ? <Send size={17} /> : <Save size={17} />}
+          {saving ? 'Saving...' : 'Save Changes'}
+        </button>
+      </div>
+
+      {configOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">
+          <div className="w-full max-w-lg rounded-lg bg-white shadow-2xl">
+            <div className="flex items-start justify-between border-b border-slate-200 px-5 py-4">
+              <div>
+                <h2 className="text-base font-bold text-slate-900">Configure ApiWap</h2>
+                <p className="mt-1 text-xs text-slate-500">Paste the API key generated from your ApiWap account.</p>
+              </div>
+              <button type="button" className="rounded-md p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700" onClick={() => setConfigOpen(false)} aria-label="Close configure dialog">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="space-y-4 p-5">
+              <label className="form-label">ApiWap API key
+                <input
+                  className="form-input"
+                  type="password"
+                  name="apiwap_api_key"
+                  value={form.apiwap_api_key}
+                  onChange={update}
+                  placeholder="Paste ApiWap API key"
+                  autoComplete="off"
+                />
+              </label>
+              <label className="form-label">ApiWap base URL
+                <input className="form-input" name="apiwap_base_url" value={form.apiwap_base_url} onChange={update} />
+              </label>
+              <p className="flex items-center gap-2 text-xs text-slate-500">
+                <CheckCircle2 size={14} className={connected ? 'text-emerald-500' : 'text-slate-400'} />
+                {connected ? 'An ApiWap API key is saved for this account.' : 'Generate your ApiWap API key, paste it here, then save.'}
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-2 border-t border-slate-200 px-5 py-4 sm:flex-row sm:justify-end">
+              <a href="https://account.apiwap.com/register" target="_blank" rel="noreferrer" className="btn-secondary justify-center text-violet-600">
+                <ExternalLink size={15} />
+                Get API Key
+              </a>
+              <button type="button" className="btn-primary justify-center" onClick={saveApiKey} disabled={saving}>
+                <Save size={15} />
+                {saving ? 'Saving...' : 'Save'}
+              </button>
             </div>
           </div>
-        )}
-
-        <div className="flex flex-col gap-3 border-t border-slate-200 p-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-2 text-sm text-slate-600">
-            <Wifi size={17} className="text-app-navy" />
-            <span>Roamtech is used for both Hotspot and PPPoE notifications.</span>
-          </div>
-          <button type="submit" className="btn-primary" disabled={saving}>
-            {saving ? <Send size={17} /> : <Save size={17} />}
-            {saving ? 'Saving...' : 'Save Messages'}
-          </button>
         </div>
-      </form>
-    </div>
+      )}
+    </form>
   );
 }

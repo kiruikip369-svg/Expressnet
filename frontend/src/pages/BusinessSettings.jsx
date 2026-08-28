@@ -36,12 +36,12 @@ const initialSettings = {
   terms: '',
   smsProvider: 'Roamtech',
   smsSenderId: 'EXPRESS WIFI',
-  smsTemplate: 'Dear {{name}}, your {{package}} payment of KES {{amount}} is complete.',
-  notificationProvider: 'slek',
+  smsTemplate: 'Your payment is complete. Thank you for choosing us.',
+  notificationProvider: 'apiwap',
   smsEnabled: true,
   smsOnPayment: true,
   whatsappEnabled: true,
-  whatsappTemplate: 'Hi {{name}}, your {{package}} internet package is active. Amount payable: Ksh {{amount_payable}}. Username: {{username}}, Password: {{password}}.',
+  whatsappTemplate: 'Your internet package is active. Thank you for your payment.',
 };
 
 const colorPresets = ['#fa8200', '#2563eb', '#16a34a', '#dc2626', '#7c3aed', '#0891b2', '#111827', '#f59e0b'];
@@ -68,6 +68,10 @@ function toApi(settings) {
     dark_mode: settings.themeMode === 'dark',
     font: settings.font,
   };
+}
+
+function cleanMessageTemplate(text) {
+  return String(text || '').replace(/\{\{[^}]+\}\}/g, '').replace(/\s{2,}/g, ' ').trim();
 }
 
 function SettingsShell({ title, description, children }) {
@@ -150,10 +154,10 @@ export default function BusinessSettings() {
               smsEnabled: notifications.data.sms_enabled !== false,
               smsOnPayment: notifications.data.sms_on_payment !== false,
               whatsappEnabled: notifications.data.whatsapp_enabled !== false,
-              smsProvider: notifications.data.provider === 'slek' ? 'Slek WhatsApp' : current.smsProvider,
+              smsProvider: notifications.data.provider === 'apiwap' ? 'ApiWap WhatsApp' : current.smsProvider,
               smsSenderId: notifications.data.roamtech_sender_id || current.smsSenderId,
-              smsTemplate: notifications.data.payment_sms_template || current.smsTemplate,
-              whatsappTemplate: notifications.data.payment_whatsapp_template || current.whatsappTemplate,
+              smsTemplate: cleanMessageTemplate(notifications.data.payment_sms_template) || current.smsTemplate,
+              whatsappTemplate: cleanMessageTemplate(notifications.data.payment_whatsapp_template) || current.whatsappTemplate,
             } : {}),
           }));
         }
@@ -379,7 +383,7 @@ export default function BusinessSettings() {
             <div className="grid gap-5 lg:grid-cols-2">
               <Field label="Default Provider">
                 <Select name="notificationProvider" value={settings.notificationProvider} onChange={update}>
-                  <option value="slek">Slek WhatsApp</option>
+                  <option value="apiwap">ApiWap WhatsApp</option>
                 </Select>
               </Field>
               <Field label="Sender ID"><Input name="smsSenderId" value={settings.smsSenderId} onChange={update} /></Field>

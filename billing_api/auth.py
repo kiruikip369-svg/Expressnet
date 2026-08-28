@@ -17,7 +17,7 @@ PAGE_RULES = [
     ("vouchers", ("vouchers",)),
     ("expenses", ("reports/expenses",)),
     ("reports", ("reports/",)),
-    ("messages", ("settings/notifications", "settings/test-sms")),
+    ("messages", ("settings/notifications", "settings/test-sms", "settings/test-whatsapp", "settings/expiry-notifications")),
     ("emails", ()),
     ("mikrotik", ("router/", "settings/mikrotik")),
     ("equipment", ()),
