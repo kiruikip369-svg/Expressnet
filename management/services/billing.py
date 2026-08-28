@@ -548,14 +548,18 @@ def whatsapp_enabled(tenant=None):
 
 
 def apiwap_config(tenant=None):
+    api_url = str(
+        (tenant or {}).get("apiwap_base_url")
+        or os.getenv("APIWAP_API_URL")
+        or os.getenv("APIWAP_BASE_URL")
+        or "https://api.apiwap.com/api/v1"
+    ).strip()
+    if not api_url.rstrip("/").endswith("/whatsapp/send-message"):
+        api_url = f"{api_url.rstrip('/')}/whatsapp/send-message"
     return {
         "enabled": (tenant or {}).get("whatsapp_enabled", True) is not False,
-        "api_url": str(
-            (tenant or {}).get("apiwap_base_url")
-            or os.getenv("APIWAP_BASE_URL")
-            or "https://api.apiwap.com/api/v1"
-        ).strip(),
-        "api_key": str((tenant or {}).get("apiwap_api_key") or os.getenv("APIWAP_API_KEY") or "").strip(),
+        "api_url": api_url,
+        "api_key": str((tenant or {}).get("apiwap_api_key") or os.getenv("APIWAP_TOKEN") or os.getenv("APIWAP_API_KEY") or "").strip(),
     }
 
 
@@ -613,30 +617,16 @@ def send_slek_whatsapp_message(phone, message, tenant=None, recipient_name=None,
         return {"sent": False, "provider": "slek", "recipient": recipient, "error": str(exc)}
 
 
-def _apiwap_response_ok(payload):
-    if isinstance(payload, dict):
-        for key in ["success", "sent", "status"]:
-            if key in payload and payload.get(key) is True:
-                return True
-        text = " ".join(str(payload.get(key) or "") for key in ["message", "status", "response"])
-    else:
-        text = str(payload or "")
-    lowered = text.lower()
-    if any(term in lowered for term in ["error", "failed", "invalid", "unauthorized", "not connected", "not registered"]):
-        return False
-    return any(term in lowered for term in ["success", "sent", "queued", "delivered"])
-
-
 def _post_apiwap_whatsapp(config, recipient, message):
     response = requests.post(
-        f"{config['api_url'].rstrip('/')}/whatsapp/send-message",
+        config["api_url"],
         json={
             "phoneNumber": recipient,
             "message": str(message or ""),
             "type": "text",
         },
-        headers={"Authorization": f"Bearer {config['api_key']}", "Content-Type": "application/json"},
-        timeout=20,
+        headers={"Authorization": f"Bearer {config['api_key']}"},
+        timeout=15,
     )
     response.raise_for_status()
     try:
@@ -663,20 +653,12 @@ def send_whatsapp_message(phone, message, tenant=None, recipient_name=None, head
 
     try:
         recipient = normalize_kenyan_whatsapp_number(phone)
-        plain_recipient = recipient.lstrip("+")
     except ValueError as exc:
         return {"sent": False, "skipped": "invalid_phone", "error": str(exc)}
 
     try:
         payload = _post_apiwap_whatsapp(config, recipient, message)
-        if _apiwap_response_ok(payload):
-            return {"sent": True, "provider": "apiwap", "recipient": recipient, "response": payload}
-        if plain_recipient != recipient:
-            retry_payload = _post_apiwap_whatsapp(config, plain_recipient, message)
-            if _apiwap_response_ok(retry_payload):
-                return {"sent": True, "provider": "apiwap", "recipient": plain_recipient, "response": retry_payload}
-            return {"sent": False, "provider": "apiwap", "recipient": plain_recipient, "response": retry_payload, "first_response": payload, "error": "ApiWap did not accept the message"}
-        return {"sent": False, "provider": "apiwap", "recipient": recipient, "response": payload, "error": "ApiWap did not accept the message"}
+        return {"sent": True, "provider": "apiwap", "recipient": recipient, "response": payload}
     except requests.exceptions.RequestException as exc:
         return {"sent": False, "provider": "apiwap", "recipient": recipient, "error": str(exc)}
 
