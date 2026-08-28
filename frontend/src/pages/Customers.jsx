@@ -319,11 +319,19 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
         await api.patch(`/customers/${editingId}`, customerPayload());
         toast.success('Customer updated');
       } else {
-        await api.post('/customers/add', {
+        const { data } = await api.post('/customers/add', {
           ...customerPayload(),
           package_name: form.package_name,
         });
-        toast.success('Customer added and credentials sent');
+        const whatsappSent = data.notification?.whatsapp?.sent;
+        if (whatsappSent) {
+          toast.success('Customer added and WhatsApp credentials sent');
+        } else if ((serviceLocked || form.service_type) === 'pppoe') {
+          toast.success('Customer added');
+          toast.error(data.notification?.whatsapp?.error || data.notification?.whatsapp?.skipped || 'WhatsApp credentials were not sent. Check message provider settings.');
+        } else {
+          toast.success('Customer added');
+        }
       }
       closeModal();
       await load();

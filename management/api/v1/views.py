@@ -1099,6 +1099,7 @@ def customer_add(request):
             "created_at": iso_now(),
         }
     new_ref = ref(f"tenants/{request.tenant['id']}/customers").push(customer_payload)
+    notification_result = None
     if service_type == "pppoe":
         try:
             notification_result = notify_pppoe_customer_created(request.tenant, customer_payload)
@@ -1120,7 +1121,7 @@ def customer_add(request):
                 sync_radius_customer(tenant_obj, pg_customer)
         except Exception:
             pass
-    return ok({"success": True, "message": "Customer added", "customerId": new_ref.key})
+    return ok({"success": True, "message": "Customer added", "customerId": new_ref.key, "notification": notification_result})
 
 
 def _normalize_permissions(value):
