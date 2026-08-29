@@ -295,11 +295,6 @@ export default function MikrotikSettings() {
               </button>
             </div>
             <pre className="mx-4 mb-4 mt-3 max-h-44 overflow-auto whitespace-pre-wrap break-all rounded-md bg-slate-800 p-4 text-xs leading-6 text-slate-100">{provision?.command || 'Generating command...'}</pre>
-            {provision?.script_host && (
-              <p className="px-4 pb-4 text-xs text-slate-300">
-                If fetch reports resolving error, run <span className="font-semibold text-slate-100">{provision.dns_test_command}</span> on the router to confirm DNS.
-              </p>
-            )}
             {provision?.mode === 'migration' && (
               <p className="px-4 pb-4 text-xs font-semibold text-amber-200">This command only saves the current router data into Expressnet. Turn migration off afterward to generate the normal provisioning command.</p>
             )}
