@@ -73,6 +73,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
   const [editingId, setEditingId] = useState(null);
   const [openActionsId, setOpenActionsId] = useState(null);
   const [visiblePasswords, setVisiblePasswords] = useState({});
+  const [showEditPassword, setShowEditPassword] = useState(false);
   const [actionsPosition, setActionsPosition] = useState(null);
   const actionsMenuRef = useRef(null);
   const actionsButtonRefs = useRef({});
@@ -181,7 +182,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
       const linkedRouters = mikrotikRes.data?.linked_routers || {};
       setMikrotikRouters(Object.entries(linkedRouters).map(([id, router]) => ({
         id,
-        label: router.identity || router.board_name || router.name || `MikroTik ${id}`,
+        label: router.name || router.mikrotik_name || router.router_name || router.label || router.identity || router.board_name || `MikroTik ${id}`,
         host: router.last_seen_ip || mikrotikRes.data?.mikrotik_host || '',
       })));
       try {
@@ -301,6 +302,7 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
   const closeModal = () => {
     setModalOpen(false);
     setEditingId(null);
+    setShowEditPassword(false);
     setForm({ ...initialForm, service_type: serviceLocked || initialForm.service_type });
     setErrors({});
   };
@@ -373,12 +375,13 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
   const editCustomer = (customer) => {
     closeActionsMenu();
     setEditingId(customer.id);
+    setShowEditPassword(false);
     setForm({
       name: customer.name || '',
       phone: customer.phone || '',
       location: customer.location || '',
       username: customer.username || '',
-      password: '',
+      password: customer.password || '',
       amount_payable: customer.amount_payable || '',
       technician: customer.technician || '',
       router_serial_number: customer.router_serial_number || '',
@@ -718,15 +721,25 @@ export default function Customers({ initialFilter = 'all', serviceLocked = null,
                   </div>
                   <div>
                     <label className="form-label" htmlFor="password">Password</label>
-                    <input
-                      id="password"
-                      name="password"
-                      type="text"
-                      className="form-input"
-                      value={form.password}
-                      onChange={update}
-                      placeholder="Leave blank to keep current password"
-                    />
+                    <div className="relative">
+                      <input
+                        id="password"
+                        name="password"
+                        type={showEditPassword ? 'text' : 'password'}
+                        className="form-input pr-10"
+                        value={form.password}
+                        onChange={update}
+                        placeholder="Leave blank to keep current password"
+                      />
+                      <button
+                        type="button"
+                        className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-500 hover:bg-slate-100"
+                        onClick={() => setShowEditPassword((value) => !value)}
+                        aria-label={showEditPassword ? 'Hide password' : 'Show password'}
+                      >
+                        {showEditPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                      </button>
+                    </div>
                     {errors.password && <p className="form-error">{errors.password}</p>}
                   </div>
                 </>
