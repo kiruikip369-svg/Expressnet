@@ -1746,14 +1746,61 @@ def in_range(item_date, start, end):
     return True
 
 
+def is_current_active_package_customer(customer, now=None, paid_customer_ids=None, paid_usernames=None, paid_phones=None):
+    now = now or utcnow()
+    paid_customer_ids = {str(value) for value in (paid_customer_ids or set()) if value}
+    paid_usernames = {str(value).strip().lower() for value in (paid_usernames or set()) if str(value or "").strip()}
+    paid_phones = {str(value).strip() for value in (paid_phones or set()) if str(value or "").strip()}
+    if isinstance(customer, Customer):
+        customer_id = str(customer.pk)
+        status = customer.status
+        package = customer.package
+        expiry_date = customer.expiry_date
+        last_payment_id = customer.last_payment_id
+        last_payment_code = customer.last_payment_code
+        username = customer.username
+        phone = customer.phone
+    else:
+        customer_id = str((customer or {}).get("id") or "")
+        status = (customer or {}).get("status")
+        package = (customer or {}).get("package")
+        expiry_date = (customer or {}).get("expiry_date")
+        last_payment_id = (customer or {}).get("last_payment_id")
+        last_payment_code = (customer or {}).get("last_payment_code")
+        username = (customer or {}).get("username")
+        phone = (customer or {}).get("phone")
+    if str(status or "").strip().lower() != "active":
+        return False
+    if not str(package or "").strip():
+        return False
+    has_payment = (
+        bool(str(last_payment_id or "").strip())
+        or bool(str(last_payment_code or "").strip())
+        or (customer_id and customer_id in paid_customer_ids)
+        or (str(username or "").strip().lower() in paid_usernames)
+        or (str(phone or "").strip() in paid_phones)
+    )
+    if not has_payment:
+        return False
+    expires_at = parse_date(expiry_date)
+    if not expires_at:
+        return True
+    if timezone.is_naive(expires_at):
+        expires_at = timezone.make_aware(expires_at, timezone.get_current_timezone())
+    return expires_at > now
+
+
 @csrf_exempt
 @api_view(["GET"])
 @tenant_required
 def dashboard_stats(request):
     tenant_id = request.tenant["id"]
-    payments_data = tenant_payments(tenant_id)
-    customers_data = tenant_customers(tenant_id)
-    packages_data = tenant_packages(tenant_id)
+    payments_qs = Payment.objects.filter(tenant_id=tenant_id)
+    customers_qs = Customer.objects.filter(tenant_id=tenant_id)
+    packages_qs = InternetPackage.objects.filter(tenant_id=tenant_id)
+    payments_data = [payment.as_dict() for payment in payments_qs]
+    customers_data = [customer.as_dict() for customer in customers_qs]
+    packages_data = [package.as_dict() for package in packages_qs]
     now = utcnow()
     today = now.date()
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
@@ -1768,6 +1815,13 @@ def dashboard_stats(request):
         )
 
     paid_payments = [p for p in payments_data if p.get("status") == "success"]
+    paid_customer_ids = {p.get("customer_id") for p in paid_payments}
+    paid_usernames = {p.get("access_username") for p in paid_payments}
+    paid_phones = {p.get("phone") for p in paid_payments}
+    current_active_package_customers = [
+        c for c in customers_data
+        if is_current_active_package_customer(c, now, paid_customer_ids, paid_usernames, paid_phones)
+    ]
     daraja_paid_payments = [p for p in paid_payments if is_daraja_payment(p)]
     revenue_this_month = sum(float(p.get("amount") or 0) for p in paid_payments if (payment_date(p) or now) >= month_start)
     revenue_today = sum(float(p.get("amount") or 0) for p in daraja_paid_payments if payment_date(p) and payment_date(p).date() == today)
@@ -1787,7 +1841,7 @@ def dashboard_stats(request):
     for offset in range(6, -1, -1):
         day = (now - timedelta(days=offset)).date()
         label = day.strftime("%a")
-        active = len([c for c in customers_data if c.get("status") == "active"])
+        active = len(current_active_package_customers)
         new = len([c for c in customers_data if parse_date(c.get("created_at")) and parse_date(c.get("created_at")).date() == day])
         days.append([label, active, new])
 
@@ -1845,7 +1899,7 @@ def dashboard_stats(request):
     package_performance = []
     for package in packages_data:
         name = package.get("name")
-        active_count = len([c for c in customers_data if c.get("package") == name and c.get("status") == "active"])
+        active_count = len([c for c in current_active_package_customers if c.get("package") == name])
         revenue = package_revenue.get(name, 0)
         # Use real RADIUS data usage if available, fall back to package field
         if name in radius_package_usage and radius_package_count.get(name, 0) > 0:
@@ -1868,8 +1922,8 @@ def dashboard_stats(request):
     pppoe_customers = [c for c in customers_data if str(c.get("service_type") or "pppoe").lower() == "pppoe"]
     hotspot_customers = [c for c in customers_data if str(c.get("service_type") or "hotspot").lower() == "hotspot"]
     active_hotspot_users = [
-        c for c in hotspot_customers
-        if str(c.get("status") or "").lower() == "active"
+        c for c in current_active_package_customers
+        if str(c.get("service_type") or "").lower() == "hotspot"
     ]
     def snapshot_active_sessions(router_snapshot):
         migration = ((router_snapshot or {}).get("migration_export") or {})
@@ -1926,7 +1980,7 @@ def dashboard_stats(request):
     last_seen = parse_date(request.tenant.get("mikrotik_last_seen_at"))
     agent_online = bool(last_seen and utcnow() - last_seen <= timedelta(minutes=3))
     router_status = "suspended" if request.tenant.get("mikrotik_router_suspended") else "online" if router_sample_source == "routeros_api" or agent_online else "offline"
-    active_ratio = (len([c for c in customers_data if c.get("status") == "active"]) / len(customers_data) * 100) if customers_data else 0
+    active_ratio = (len(current_active_package_customers) / len(customers_data) * 100) if customers_data else 0
     traffic = snapshot.get("traffic") or {}
     traffic_bps = int(traffic.get("rx_bps") or 0) + int(traffic.get("tx_bps") or 0)
     signal_values = [
@@ -1985,7 +2039,7 @@ def dashboard_stats(request):
         pass
     router_active_session_count = int((active_sessions or {}).get("total") or len(active_session_items or [])) if isinstance(active_sessions, dict) else 0
     connected_users_count = len(active_session_usernames) or max(router_active_session_count, radius_active_session_count)
-    enabled_customers_count = len([c for c in customers_data if c.get("status") == "active"])
+    enabled_customers_count = len(current_active_package_customers)
     top_active_sessions = [
         {
             "username": item.get("username") or "-",
