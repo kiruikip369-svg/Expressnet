@@ -3004,7 +3004,19 @@ def router_resources(request):
             except (TypeError, ValueError):
                 pass
         strongest_signal = max(numeric_signals) if numeric_signals else None
-        internet_strength = max(0, min(100, round((strongest_signal + 90) / 40 * 100))) if strongest_signal is not None else 0
+        internet_strength_source = "wireless_signal" if strongest_signal is not None else "router_link"
+        if strongest_signal is not None:
+            internet_strength = max(0, min(100, round((strongest_signal + 90) / 40 * 100)))
+        else:
+            enabled_interfaces = [
+                item for item in status.get("interfaces", [])
+                if not item.get("disabled")
+            ]
+            running_interfaces = [
+                item for item in enabled_interfaces
+                if item.get("running")
+            ]
+            internet_strength = round((len(running_interfaces) / len(enabled_interfaces)) * 100) if enabled_interfaces else (100 if source == "routeros_api" else 0)
         active_sessions = status.get("active_sessions") if isinstance(status.get("active_sessions"), dict) else snapshot_active_sessions(status)
         active_session_items = active_sessions.get("items") if isinstance(active_sessions, dict) else []
         return {
@@ -3022,6 +3034,7 @@ def router_resources(request):
             "top_active_sessions": active_session_items[:5] if isinstance(active_session_items, list) else [],
             "wireless_signal_strength": strongest_signal,
             "internet_strength_percent": internet_strength,
+            "internet_strength_source": internet_strength_source,
             "interfaces": [
                 {
                     "name": item.get("name"),

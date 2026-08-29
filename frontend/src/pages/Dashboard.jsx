@@ -235,18 +235,34 @@ export default function Dashboard() {
   useEffect(() => {
     setDarkMode(readDarkMode());
     let mounted = true;
-    async function load({ silent = false } = {}) {
+
+    async function loadRouterResources({ silent = false } = {}) {
       try {
         if (silent) setRefreshing(true);
-        const [statsResult, resourcesResult, paymentsResult, subscriptionResult] = await Promise.all([
+        const result = await api.get('/router/resources');
+        if (!mounted) return;
+        setRouterResources(result.data);
+      } catch (error) {
+        if (!mounted) return;
+        setRouterResources((previous) => previous || null);
+        if (!silent && error.response?.status !== 503) {
+          toast.error(error.response?.data?.message || 'Failed to load live router data');
+        }
+      } finally {
+        if (mounted && silent) setRefreshing(false);
+      }
+    }
+
+    async function loadDashboard({ silent = false } = {}) {
+      try {
+        if (silent) setRefreshing(true);
+        const [statsResult, paymentsResult, subscriptionResult] = await Promise.all([
           api.get('/dashboard/stats'),
-          api.get('/router/resources').catch((error) => ({ error })),
           api.get('/payments?all=1').catch(() => ({ data: [] })),
           api.get('/subscription/status').catch(() => ({ data: null })),
         ]);
         if (!mounted) return;
         setDashboard(statsResult.data);
-        if (resourcesResult.data) setRouterResources(resourcesResult.data);
         const rows = Array.isArray(paymentsResult.data) ? paymentsResult.data : paymentsResult.data?.results || [];
         setPayments(rows.slice(0, 5));
         setSubscription(subscriptionResult.data?.subscription || null);
@@ -259,11 +275,23 @@ export default function Dashboard() {
         }
       }
     }
-    load();
-    const timer = window.setInterval(() => load({ silent: true }), 10000);
+
+    async function loadInitial() {
+      setLoading(true);
+      await Promise.all([
+        loadDashboard(),
+        loadRouterResources(),
+      ]);
+      if (mounted) setLoading(false);
+    }
+
+    loadInitial();
+    const routerTimer = window.setInterval(() => loadRouterResources({ silent: true }), 5000);
+    const dashboardTimer = window.setInterval(() => loadDashboard({ silent: true }), 30000);
     return () => {
       mounted = false;
-      window.clearInterval(timer);
+      window.clearInterval(routerTimer);
+      window.clearInterval(dashboardTimer);
     };
   }, []);
 
@@ -301,11 +329,13 @@ export default function Dashboard() {
   const sampledAt = router.sampled_at ? new Date(router.sampled_at) : null;
   const sourceLabel = router.sample_source === 'routeros_api' ? 'Live MikroTik resource sample' : 'Latest router snapshot';
   const signal = Number(router.internet_strength_percent ?? 0);
+  const signalSource = router.internet_strength_source === 'wireless_signal' ? 'Wireless signal' : 'Router link status';
   const cpu = Number(router.cpu_load_percent ?? 0);
   const rx = Number(router.network_rx_bps || 0);
   const tx = Number(router.network_tx_bps || 0);
+  const hasRouterSessionSample = router.active_sessions && typeof router.active_sessions === 'object';
   const activeSessionCount = Number(router.active_sessions?.total || 0);
-  const connectedUsers = Math.max(activeUsers, activeSessionCount);
+  const connectedUsers = hasRouterSessionSample ? activeSessionCount : activeUsers;
   const daysUntilExpiry = subscription?.days_until_expiry;
   const expiryLabel = daysUntilExpiry === null || daysUntilExpiry === undefined
     ? 'Renew system subscription'
@@ -386,7 +416,7 @@ export default function Dashboard() {
           </div>
           <div className="mt-4 grid gap-3 lg:grid-cols-[0.92fr_1.08fr]">
             <div className="grid gap-3 sm:grid-cols-2">
-              <MetricTile icon={Wifi} title="Internet Strength" value={`${signal}%`} helper={router.board_name || '--'} percent={signal} />
+              <MetricTile icon={Wifi} title="Internet Strength" value={`${signal}%`} helper={signalSource} percent={signal} />
               <MetricTile icon={Radio} title="Network Traffic" value={formatBitrate(rx + tx)} helper={`RX ${formatBitrate(rx)} / TX ${formatBitrate(tx)}`} />
               <MetricTile icon={Cpu} title="CPU Status" value={`${cpu}%`} helper={router.board_name || '--'} />
               <MetricTile icon={Gauge} title="Uptime" value={router.uptime || '0s'} helper={router.sample_source || '--'} />

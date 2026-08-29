@@ -1937,8 +1937,18 @@ def dashboard_stats(request):
     if signal_values:
         strongest_signal = max(signal_values)
         internet_strength_percent = max(0, min(100, round((strongest_signal + 90) / 40 * 100)))
+        internet_strength_source = "wireless_signal"
     else:
-        internet_strength_percent = 0
+        internet_strength_source = "router_link"
+        enabled_interfaces = [
+            item for item in snapshot.get("interfaces", [])
+            if not item.get("disabled")
+        ]
+        running_interfaces = [
+            item for item in enabled_interfaces
+            if item.get("running")
+        ]
+        internet_strength_percent = round((len(running_interfaces) / len(enabled_interfaces)) * 100) if enabled_interfaces else (100 if router_sample_source == "routeros_api" else 0)
     traffic_percent = round(min((traffic_bps / 1_000_000), 100), 1) if traffic_bps and router_status == "online" else 0
     active_sessions = snapshot.get("active_sessions") if isinstance(snapshot.get("active_sessions"), dict) else snapshot_active_sessions(snapshot)
     active_session_items = active_sessions.get("items") if isinstance(active_sessions, dict) else []
@@ -2007,6 +2017,7 @@ def dashboard_stats(request):
                 "board_name": device.get("board_name") or request.tenant.get("mikrotik_detected_board"),
                 "cpu_load_percent": cpu_load,
                 "internet_strength_percent": internet_strength_percent,
+                "internet_strength_source": internet_strength_source,
                 "traffic_percent": traffic_percent,
                 "network_traffic_bps": traffic_bps if router_status == "online" else 0,
                 "network_rx_bps": traffic.get("rx_bps") if router_status == "online" else 0,
