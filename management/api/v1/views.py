@@ -1985,6 +1985,7 @@ def dashboard_stats(request):
         pass
     router_active_session_count = int((active_sessions or {}).get("total") or len(active_session_items or [])) if isinstance(active_sessions, dict) else 0
     connected_users_count = len(active_session_usernames) or max(router_active_session_count, radius_active_session_count)
+    enabled_customers_count = len([c for c in customers_data if c.get("status") == "active"])
     top_active_sessions = [
         {
             "username": item.get("username") or "-",
@@ -2008,8 +2009,9 @@ def dashboard_stats(request):
                 "total_customers": len(customers_data),
                 "pppoe_customers": len(pppoe_customers),
                 "hotspot_customers": len(hotspot_customers),
-                "active_customers": connected_users_count,
-                "enabled_customers": len([c for c in customers_data if c.get("status") == "active"]),
+                "active_customers": enabled_customers_count,
+                "enabled_customers": enabled_customers_count,
+                "connected_users": connected_users_count,
                 "daraja_revenue_today": round(revenue_today, 2),
             },
             "router_health": {

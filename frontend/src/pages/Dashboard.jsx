@@ -322,6 +322,7 @@ export default function Dashboard() {
   const hotspotUsers = Number(summary.hotspot_customers || 0);
   const activeUsers = Number(summary.active_customers || 0);
   const enabledUsers = Number(summary.enabled_customers || 0);
+  const liveConnectedUsers = Number(summary.connected_users || 0);
   const packages = dashboard?.package_utilization || [];
   const activePackages = packages.reduce((sum, item) => sum + Number(item[1] || 0), 0);
   const staticUsers = Math.max(0, totalUsers - pppoeUsers - hotspotUsers);
@@ -335,7 +336,12 @@ export default function Dashboard() {
   const tx = Number(router.network_tx_bps || 0);
   const hasRouterSessionSample = router.active_sessions && typeof router.active_sessions === 'object';
   const activeSessionCount = Number(router.active_sessions?.total || 0);
-  const connectedUsers = hasRouterSessionSample ? activeSessionCount : activeUsers;
+  const connectedUsers = Math.max(
+    hasRouterSessionSample ? activeSessionCount : 0,
+    liveConnectedUsers,
+    activeUsers,
+    enabledUsers,
+  );
   const daysUntilExpiry = subscription?.days_until_expiry;
   const expiryLabel = daysUntilExpiry === null || daysUntilExpiry === undefined
     ? 'Renew system subscription'
