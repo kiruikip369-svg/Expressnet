@@ -294,7 +294,13 @@ export default function MikrotikSettings() {
                 Copy
               </button>
             </div>
-            <pre className="mx-4 mb-4 mt-3 max-h-44 overflow-auto whitespace-pre-wrap break-all rounded-md bg-slate-800 p-4 text-xs leading-6 text-slate-100">{provision?.command || 'Generating command...'}</pre>
+            <textarea
+              className="mx-4 mb-4 mt-3 block h-36 w-[calc(100%-2rem)] resize-none rounded-md border border-slate-700 bg-slate-800 p-4 font-mono text-xs leading-6 text-slate-100 outline-none"
+              readOnly
+              spellCheck="false"
+              value={provision?.command || 'Generating command...'}
+              onFocus={(event) => event.target.select()}
+            />
             {provision?.mode === 'migration' && (
               <p className="px-4 pb-4 text-xs font-semibold text-amber-200">This command only saves the current router data into Expressnet. Turn migration off afterward to generate the normal provisioning command.</p>
             )}
