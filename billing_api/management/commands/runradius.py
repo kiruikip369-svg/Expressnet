@@ -41,7 +41,7 @@ class Command(BaseCommand):
         self.stdout.write("Starting RADIUS server...")
         self.stdout.write(f"  Host:      {options['host'] or 'default (0.0.0.0)'}")
         self.stdout.write(f"  Auth port: {options['auth_port'] or 'default (1812)'}")
-        self.stdout.write(f"  Acct port: {options['acct-port'] or 'default (1813)'}")
+        self.stdout.write(f"  Acct port: {options['acct_port'] or 'default (1813)'}")
         self.stdout.write("Press Ctrl+C to stop.")
 
         try:

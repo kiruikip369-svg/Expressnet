@@ -809,7 +809,14 @@ def public_verify(request, tenant_id):
                 logger.exception("Daraja STK verification failed tenant=%s payment=%s checkout=%s", tenant_id, payment_id, checkout_request_id)
         if payment.get("status") != "success":
             return ok({"success": False, "status": payment.get("status") or "pending", "message": "Waiting for M-Pesa confirmation."}, 202)
-    if payment.get("status") == "success" and not payment.get("access_username"):
+    radius_customer_ready = True
+    if payment.get("status") == "success" and payment.get("access_username"):
+        radius_customer_ready = Customer.objects.filter(
+            tenant_id=tenant_id,
+            username__iexact=str(payment.get("access_username") or "").strip(),
+            status__iexact="active",
+        ).exclude(radius_secret="").exists()
+    if payment.get("status") == "success" and (not payment.get("access_username") or not radius_customer_ready):
         tenant = {"id": tenant_id, **(ref(f"tenants/{tenant_id}").get() or {})}
         try:
             activate_paid_access(
@@ -2594,6 +2601,11 @@ def _upsert_sql_customer(tenant_id, data):
     return customer
 
 
+def _numeric_pk(value):
+    text = str(value or "").strip()
+    return text if text.isdigit() else None
+
+
 def render_notification_template(template, context):
     rendered = str(template or "")
     for key, value in context.items():
@@ -2891,6 +2903,19 @@ def send_expiry_notifications(request):
 def activate_paid_access(tenant, payment_id, payment, phone, payment_code):
     tenant_id = tenant["id"]
     package_name = payment.get("package_name")
+    tenant_obj = Tenant.objects.filter(pk=tenant_id).first()
+    pg_payment_id = _numeric_pk(payment_id)
+    pg_customer_id = _numeric_pk(payment.get("customer_id"))
+    pg_payment = Payment.objects.filter(tenant_id=tenant_id, pk=pg_payment_id).first() if pg_payment_id else None
+    pg_customer = None
+    if pg_payment and pg_payment.customer_id:
+        pg_customer = pg_payment.customer
+    if not pg_customer and pg_customer_id:
+        pg_customer = Customer.objects.filter(tenant_id=tenant_id, pk=pg_customer_id).first()
+    if not pg_customer and payment.get("username"):
+        pg_customer = Customer.objects.filter(tenant_id=tenant_id, username__iexact=payment.get("username")).first()
+    if not pg_customer and phone:
+        pg_customer = Customer.objects.filter(tenant_id=tenant_id, phone=str(phone)).first()
     customers_data = list_children(f"tenants/{tenant_id}/customers")
     customer = None
     if payment.get("customer_id"):
@@ -2899,16 +2924,19 @@ def activate_paid_access(tenant, payment_id, payment, phone, payment_code):
         customer = next((c for c in customers_data if str(c.get("username") or "").lower() == str(payment.get("username") or "").lower()), None)
     if not customer and phone:
         customer = next((c for c in customers_data if str(c.get("phone")) == str(phone)), None)
+    if not customer and pg_customer:
+        customer = pg_customer.as_dict()
     service_type = payment.get("service_type") or (customer or {}).get("service_type") or "hotspot"
     package_for_access = package_name or (customer or {}).get("package")
-    pkg = find_child_by_field(f"tenants/{tenant_id}/packages", "name", package_for_access)
+    pg_package = InternetPackage.objects.filter(tenant_id=tenant_id, name=package_for_access).first() if package_for_access else None
+    pkg = pg_package.as_dict() if pg_package else find_child_by_field(f"tenants/{tenant_id}/packages", "name", package_for_access)
     duration = package_duration_delta(pkg)
     duration_seconds = int(duration.total_seconds())
     expiry = package_expiry_date(utcnow(), pkg)
     router_client_mac = normalize_mac(payment.get("router_client_mac") or payment.get("router_mac"))
     router_client_ip = str(payment.get("router_client_ip") or payment.get("ip") or "").strip()
     mac_address = normalize_mac(payment.get("mac_address") or (router_client_mac if service_type == "hotspot" else "") or (customer or {}).get("mac_address"))
-    username = mac_address if service_type == "tv" else (payment.get("username") or (customer or {}).get("username") or to_access_username(phone))
+    username = mac_address if service_type == "tv" else (payment.get("access_username") or payment.get("username") or (customer or {}).get("username") or to_access_username(phone))
     password = str(payment.get("pending_access_password") or payment.get("access_password") or (customer or {}).get("password") or payment_code)
     customer_name = _payment_customer_name({**(customer or {}), **payment}, phone, username)
     if customer:
@@ -2950,7 +2978,7 @@ def activate_paid_access(tenant, payment_id, payment, phone, payment_code):
         try:
             from billing_api.radius_provisioning import sync_radius_customer, upsert_pg_customer
 
-            tenant_obj = Tenant.objects.get(pk=tenant_id)
+            tenant_obj = tenant_obj or Tenant.objects.get(pk=tenant_id)
             pg_customer = sql_customer or upsert_pg_customer(tenant_obj, {"name": customer_name, "phone": phone, "username": username, "password": password, "package": package_for_access, "service_type": service_type, "status": "active", "expiry_date": expiry.isoformat(), "last_payment_id": payment_id, "last_payment_code": payment_code})
             sync_radius_customer(tenant_obj, pg_customer or {"username": username, "password": password})
             logger.info(
@@ -3012,7 +3040,44 @@ def activate_paid_access(tenant, payment_id, payment, phone, payment_code):
     else:
         router_access_status = "pending"
         router_access_error = "No linked MikroTik router"
-    ref(f"tenants/{tenant_id}/payments/{payment_id}").update({"customer_id": customer_id, "access_username": username, "access_password": password, "access_mac_address": mac_address, "access_expires_at": expiry.isoformat(), "access_status": router_access_status, "access_error": router_access_error, "auto_reconnect": True})
+    payment_access_updates = {
+        "customer_id": customer_id,
+        "access_username": username,
+        "access_password": password,
+        "access_mac_address": mac_address,
+        "access_expires_at": expiry.isoformat(),
+        "access_status": router_access_status,
+        "access_error": router_access_error,
+        "auto_reconnect": True,
+    }
+    ref(f"tenants/{tenant_id}/payments/{payment_id}").update(payment_access_updates)
+    try:
+        pg_payment = pg_payment or (Payment.objects.filter(tenant_id=tenant_id, pk=pg_payment_id).first() if pg_payment_id else None)
+        if pg_payment:
+            pg_payment.status = "success"
+            pg_payment.payment_code = payment_code or pg_payment.payment_code
+            pg_payment.phone = phone or pg_payment.phone
+            pg_payment.package_name = package_for_access or pg_payment.package_name
+            pg_payment.service_type = service_type or pg_payment.service_type
+            pg_payment.access_username = username
+            pg_payment.access_password = password
+            pg_payment.access_expires_at = expiry.isoformat()
+            pg_payment.access_status = router_access_status
+            if sql_customer:
+                pg_payment.customer = sql_customer
+            extra = dict(pg_payment.extra or {})
+            extra.update(
+                {
+                    "access_mac_address": mac_address,
+                    "access_error": router_access_error,
+                    "auto_reconnect": True,
+                    "last_activation_at": iso_now(),
+                }
+            )
+            pg_payment.extra = extra
+            pg_payment.save()
+    except Exception as exc:
+        logger.warning("Paid access SQL payment sync failed tenant=%s payment=%s username=%s error=%s", tenant_id, payment_id, username, exc, exc_info=True)
     access = {"username": username, "password": password, "mac_address": mac_address, "expiry_date": expiry.isoformat()}
     try:
         notify_result = notify_payment_access(tenant, {**payment, "phone": phone, "package_name": package_for_access}, access)
