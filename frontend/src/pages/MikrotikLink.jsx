@@ -241,7 +241,7 @@ export default function MikrotikSettings() {
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <h2 className="text-sm font-bold text-slate-950">Provisioning command</h2>
-              <p className="mt-1 text-sm text-slate-600">Run this command in the MikroTik terminal. The router links itself to this system and reports its configuration without requiring API host, username, or password.</p>
+              <p className="mt-1 text-sm text-slate-600">Run this command in the MikroTik terminal. Use the Copy button so the URL stays plain RouterOS text.</p>
             </div>
             <button type="button" className="btn-secondary" onClick={loadProvisionCommand}>
               <RefreshCw size={16} />
@@ -295,6 +295,11 @@ export default function MikrotikSettings() {
               </button>
             </div>
             <pre className="mx-4 mb-4 mt-3 max-h-44 overflow-auto whitespace-pre-wrap break-all rounded-md bg-slate-800 p-4 text-xs leading-6 text-slate-100">{provision?.command || 'Generating command...'}</pre>
+            {provision?.script_host && (
+              <p className="px-4 pb-4 text-xs text-slate-300">
+                If fetch reports resolving error, run <span className="font-semibold text-slate-100">{provision.dns_test_command}</span> on the router to confirm DNS.
+              </p>
+            )}
             {provision?.mode === 'migration' && (
               <p className="px-4 pb-4 text-xs font-semibold text-amber-200">This command only saves the current router data into Expressnet. Turn migration off afterward to generate the normal provisioning command.</p>
             )}
